@@ -56,7 +56,7 @@ async def pump(conn: str, url: str, q: asyncio.Queue, stop: asyncio.Event) -> No
                     msg = json.loads(raw)
                     await q.put({"v": 1, "kind": "frame", "conn": conn, "ts_ingest_ns": ts,
                                  "stream": msg.get("stream"), "data": msg.get("data")})
-        except Exception as e:  # noqa: BLE001 — рекордер мусить пережити будь-який розрив
+        except Exception as e:  # рекордер мусить пережити будь-який розрив
             await q.put({"v": 1, "kind": "control", "conn": conn, "ts_ingest_ns": time.time_ns(),
                          "event": "disconnected", "detail": f"{type(e).__name__}: {e}"})
             await asyncio.sleep(backoff)

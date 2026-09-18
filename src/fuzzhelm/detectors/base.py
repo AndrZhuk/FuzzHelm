@@ -40,6 +40,9 @@ class DetectorOutput:
             raise ValueError(f"{self.name}: s={self.s} outside [-1,1]")
         if not (0.0 <= self.c <= 1.0) or self.c != self.c:
             raise ValueError(f"{self.name}: c={self.c} outside [0,1]")
+        # від'ємна чи нескінченна ω зламала б опуклість консенсусу (DEC-04)
+        if not (0.0 <= self.weight < float("inf")):
+            raise ValueError(f"{self.name}: weight={self.weight} must be finite and >= 0")
 
 
 @runtime_checkable

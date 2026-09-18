@@ -19,6 +19,14 @@ class SystemClock:
         return time.time_ns()
 
 
+class MonotonicClock:
+    """Монотонний годинник для сторожа тиші live-клієнта: не реагує на стрибки NTP (WS-07).
+    Не є часом епохи — лише для вимірювання інтервалів."""
+
+    def now_ns(self) -> int:
+        return time.monotonic_ns()
+
+
 class RandomIdGenerator:
     def next_uuid(self) -> UUID:
         return uuid.uuid4()

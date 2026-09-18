@@ -1,0 +1,70 @@
+# База правил Мамдані нечіткого ядра FuzzHelm (брифінг §5.6, §7; Додаток А звіту).
+# Правила — дані, а не код: 5(T) × 3(R) × 3(V) = 45 правил, кожна комбінація антецедента рівно раз,
+# усі w = 1.0 (w != 1 лише в тесті-контрприкладі; load_rulebase(production=True) відкидає w != 1).
+#
+# Індекси термів: T: STRONG_DOWN=-2, WEAK_DOWN=-1, NEUTRAL=0, WEAK_UP=+1, STRONG_UP=+2
+#                 R: SELL_PRESSURE=-1, NO_PRESSURE=0, BUY_PRESSURE=+1   (R > 0 — тиск купівлі → long)
+#                 U: STRONG_SHORT=-2, SHORT=-1, HOLD=0, LONG=+1, STRONG_LONG=+2
+#
+# Політика LO:  домінує реверсія (R переважує T)
+#               c = clip(2·r + trunc(t/2), -2, 2)
+# Політика MID: тренд перемагає реверсію у конфлікті
+#               c = t, якщо t != 0, інакше r;  підсилення при згоді: c = t + r, якщо sign(r) = sign(t) і |t| = 1
+# Політика HI:  все притягується до HOLD; ненульовий вихід лише при узгоджених T і R
+#               c = sign(t), якщо sign(t) = sign(r) != 0, інакше 0
+#
+# Обмеження, які таблиця задовольняє (перевіряє tests/unit/test_fuzzy.py):
+#   * c не спадає за індексом T при фіксованих (R, V);
+#   * c не спадає за індексом R при фіксованих (T, V);
+#   * непарна симетрія c(-t, -r, V) = -c(t, r, V)  ⇒  u(-T, -R, V) = -u(T, R, V), бо МФ U симетричні.
+# Нумерація: V (LO, MID, HI) → R (SELL, NO, BUY) → T (STRONG_DOWN … STRONG_UP).
+version: 3
+rules:
+  # --- V = LO: домінує реверсія
+  - {id: R01, if: {T: STRONG_DOWN, R: SELL_PRESSURE, V: LO},    then: STRONG_SHORT, w: 1.0}
+  - {id: R02, if: {T: WEAK_DOWN,   R: SELL_PRESSURE, V: LO},    then: STRONG_SHORT, w: 1.0}
+  - {id: R03, if: {T: NEUTRAL,     R: SELL_PRESSURE, V: LO},    then: STRONG_SHORT, w: 1.0}
+  - {id: R04, if: {T: WEAK_UP,     R: SELL_PRESSURE, V: LO},    then: STRONG_SHORT, w: 1.0}
+  - {id: R05, if: {T: STRONG_UP,   R: SELL_PRESSURE, V: LO},    then: SHORT,        w: 1.0}
+  - {id: R06, if: {T: STRONG_DOWN, R: NO_PRESSURE,   V: LO},    then: SHORT,        w: 1.0}
+  - {id: R07, if: {T: WEAK_DOWN,   R: NO_PRESSURE,   V: LO},    then: HOLD,         w: 1.0}
+  - {id: R08, if: {T: NEUTRAL,     R: NO_PRESSURE,   V: LO},    then: HOLD,         w: 1.0}
+  - {id: R09, if: {T: WEAK_UP,     R: NO_PRESSURE,   V: LO},    then: HOLD,         w: 1.0}
+  - {id: R10, if: {T: STRONG_UP,   R: NO_PRESSURE,   V: LO},    then: LONG,         w: 1.0}
+  - {id: R11, if: {T: STRONG_DOWN, R: BUY_PRESSURE,  V: LO},    then: LONG,         w: 1.0}
+  - {id: R12, if: {T: WEAK_DOWN,   R: BUY_PRESSURE,  V: LO},    then: STRONG_LONG,  w: 1.0}
+  - {id: R13, if: {T: NEUTRAL,     R: BUY_PRESSURE,  V: LO},    then: STRONG_LONG,  w: 1.0}
+  - {id: R14, if: {T: WEAK_UP,     R: BUY_PRESSURE,  V: LO},    then: STRONG_LONG,  w: 1.0}
+  - {id: R15, if: {T: STRONG_UP,   R: BUY_PRESSURE,  V: LO},    then: STRONG_LONG,  w: 1.0}
+  # --- V = MID: тренд перемагає у конфлікті
+  - {id: R16, if: {T: STRONG_DOWN, R: SELL_PRESSURE, V: MID},   then: STRONG_SHORT, w: 1.0}
+  - {id: R17, if: {T: WEAK_DOWN,   R: SELL_PRESSURE, V: MID},   then: STRONG_SHORT, w: 1.0}
+  - {id: R18, if: {T: NEUTRAL,     R: SELL_PRESSURE, V: MID},   then: SHORT,        w: 1.0}
+  - {id: R19, if: {T: WEAK_UP,     R: SELL_PRESSURE, V: MID},   then: LONG,         w: 1.0}
+  - {id: R20, if: {T: STRONG_UP,   R: SELL_PRESSURE, V: MID},   then: STRONG_LONG,  w: 1.0}
+  - {id: R21, if: {T: STRONG_DOWN, R: NO_PRESSURE,   V: MID},   then: STRONG_SHORT, w: 1.0}
+  - {id: R22, if: {T: WEAK_DOWN,   R: NO_PRESSURE,   V: MID},   then: SHORT,        w: 1.0}
+  - {id: R23, if: {T: NEUTRAL,     R: NO_PRESSURE,   V: MID},   then: HOLD,         w: 1.0}
+  - {id: R24, if: {T: WEAK_UP,     R: NO_PRESSURE,   V: MID},   then: LONG,         w: 1.0}
+  - {id: R25, if: {T: STRONG_UP,   R: NO_PRESSURE,   V: MID},   then: STRONG_LONG,  w: 1.0}
+  - {id: R26, if: {T: STRONG_DOWN, R: BUY_PRESSURE,  V: MID},   then: STRONG_SHORT, w: 1.0}
+  - {id: R27, if: {T: WEAK_DOWN,   R: BUY_PRESSURE,  V: MID},   then: SHORT,        w: 1.0}
+  - {id: R28, if: {T: NEUTRAL,     R: BUY_PRESSURE,  V: MID},   then: LONG,         w: 1.0}
+  - {id: R29, if: {T: WEAK_UP,     R: BUY_PRESSURE,  V: MID},   then: STRONG_LONG,  w: 1.0}
+  - {id: R30, if: {T: STRONG_UP,   R: BUY_PRESSURE,  V: MID},   then: STRONG_LONG,  w: 1.0}
+  # --- V = HI: усе до HOLD, крім узгоджених T і R
+  - {id: R31, if: {T: STRONG_DOWN, R: SELL_PRESSURE, V: HI},    then: SHORT,        w: 1.0}
+  - {id: R32, if: {T: WEAK_DOWN,   R: SELL_PRESSURE, V: HI},    then: SHORT,        w: 1.0}
+  - {id: R33, if: {T: NEUTRAL,     R: SELL_PRESSURE, V: HI},    then: HOLD,         w: 1.0}
+  - {id: R34, if: {T: WEAK_UP,     R: SELL_PRESSURE, V: HI},    then: HOLD,         w: 1.0}
+  - {id: R35, if: {T: STRONG_UP,   R: SELL_PRESSURE, V: HI},    then: HOLD,         w: 1.0}
+  - {id: R36, if: {T: STRONG_DOWN, R: NO_PRESSURE,   V: HI},    then: HOLD,         w: 1.0}
+  - {id: R37, if: {T: WEAK_DOWN,   R: NO_PRESSURE,   V: HI},    then: HOLD,         w: 1.0}
+  - {id: R38, if: {T: NEUTRAL,     R: NO_PRESSURE,   V: HI},    then: HOLD,         w: 1.0}
+  - {id: R39, if: {T: WEAK_UP,     R: NO_PRESSURE,   V: HI},    then: HOLD,         w: 1.0}
+  - {id: R40, if: {T: STRONG_UP,   R: NO_PRESSURE,   V: HI},    then: HOLD,         w: 1.0}
+  - {id: R41, if: {T: STRONG_DOWN, R: BUY_PRESSURE,  V: HI},    then: HOLD,         w: 1.0}
+  - {id: R42, if: {T: WEAK_DOWN,   R: BUY_PRESSURE,  V: HI},    then: HOLD,         w: 1.0}
+  - {id: R43, if: {T: NEUTRAL,     R: BUY_PRESSURE,  V: HI},    then: HOLD,         w: 1.0}
+  - {id: R44, if: {T: WEAK_UP,     R: BUY_PRESSURE,  V: HI},    then: LONG,         w: 1.0}
+  - {id: R45, if: {T: STRONG_UP,   R: BUY_PRESSURE,  V: HI},    then: LONG,         w: 1.0}

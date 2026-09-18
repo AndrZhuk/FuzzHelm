@@ -1,0 +1,105 @@
+{
+ "captured_at_local_ns": 1789759537405472000,
+ "files": {
+  "server_time.json": {
+   "local_send_ns": 1789759537426667000,
+   "local_recv_ns": 1789759537724500000
+  },
+  "exchange_info.json": {
+   "trimmed_to": [
+    "BTCUSDT",
+    "ETHUSDT"
+   ],
+   "assets_trimmed_to": [
+    "USDT",
+    "BTC",
+    "ETH"
+   ]
+  },
+  "binance_error_invalid_symbol.json": {
+   "http_status": 400
+  },
+  "binance_klines.json.gz": {
+   "symbol": "BTCUSDT",
+   "interval": "1m",
+   "rows": 3000,
+   "first_open_ms": 1789579500000,
+   "last_open_ms": 1789759440000,
+   "pages": [
+    {
+     "startTime": 1789579500000,
+     "limit": 1500,
+     "rows": 1500,
+     "overlap_identical": null,
+     "used_weight_1m": 24
+    },
+    {
+     "startTime": 1789669440000,
+     "limit": 1500,
+     "rows": 1500,
+     "overlap_identical": true,
+     "used_weight_1m": 34
+    },
+    {
+     "startTime": 1789759380000,
+     "limit": 2,
+     "rows": 2,
+     "overlap_identical": true,
+     "used_weight_1m": 35
+    }
+   ]
+  }
+ },
+ "kline_weight_measurements": [
+  {
+   "limit": 1,
+   "rows": 1,
+   "weight": 1
+  },
+  {
+   "limit": 99,
+   "rows": 99,
+   "weight": 1
+  },
+  {
+   "limit": 100,
+   "rows": 100,
+   "weight": 1
+  },
+  {
+   "limit": 101,
+   "rows": 101,
+   "weight": 2
+  },
+  {
+   "limit": 499,
+   "rows": 499,
+   "weight": 2
+  },
+  {
+   "limit": 500,
+   "rows": 500,
+   "weight": 2
+  },
+  {
+   "limit": 501,
+   "rows": 501,
+   "weight": 5
+  },
+  {
+   "limit": 1000,
+   "rows": 1000,
+   "weight": 5
+  },
+  {
+   "limit": 1001,
+   "rows": 1001,
+   "weight": 10
+  },
+  {
+   "limit": 1500,
+   "rows": 1500,
+   "weight": 10
+  }
+ ]
+}

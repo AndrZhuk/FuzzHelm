@@ -20,7 +20,8 @@ def to_decimal(x: float, step: Decimal, rounding: str = ROUND_DOWN) -> Decimal:
     точне десяткове представлення float, тому 0.1 → Decimal('0.1'), а не 0.1000000000000000055…"""
     if not math.isfinite(x):
         raise ValueError(f"cannot convert non-finite float {x!r} to Decimal")
-    return quantize_step(Decimal(repr(x)), step, rounding)
+    # float(x): numpy-2 скаляри мають repr "np.float64(0.1)" — спершу зводимо до вбудованого float
+    return quantize_step(Decimal(repr(float(x))), step, rounding)
 
 
 def price_to_decimal(x: float, tick: Decimal) -> Decimal:
@@ -31,4 +32,4 @@ def float_to_decimal_exact(x: float) -> Decimal:
     """Без квантування (для звітних метрик, що зберігаються як Decimal)."""
     if not math.isfinite(x):
         raise ValueError(f"cannot convert non-finite float {x!r} to Decimal")
-    return Decimal(repr(x))
+    return Decimal(repr(float(x)))

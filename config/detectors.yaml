@@ -1,13 +1,14 @@
 # Ансамбль детекторів патернів (брифінг §5.2, §7). weight = ω_k у консенсусі.
 detectors:
-  ema_slope:       {weight: 1.0, n_ema: 21, horizon: 5, scale: 0.15}
+  ema_slope:       {weight: 1.0, n_ema: 21, horizon: 5, scale: 0.15, r2_points: 5}           # r2_points: expert
   donchian:        {weight: 1.0, n: 20, decay: 0.3}
-  rsi_exhaustion:  {weight: 0.8, n: 14, power: 1.6}
+  rsi_exhaustion:  {weight: 0.8, n: 14, power: 1.6, div_lookback: 14}                        # div_lookback: expert
   bollinger_z:     {weight: 0.8, n: 20, k: 2.0, z_scale: 2.0, bw_rank_window: 200}
-  candle_geometry: {weight: 0.6}
+  candle_geometry: {weight: 0.6, w_pin: 1.0, w_engulf: 1.0}                                 # w_*: expert
   vol_regime:      {weight: 1.0, window: 24, rank_window: 500}
 features:
   n_atr: 14
+  volume_window: 60        # v̄ для z-score обсягу та MLP-ознак: expert
 agreement:
   kappa_min: 0.35
   nu: 1.0

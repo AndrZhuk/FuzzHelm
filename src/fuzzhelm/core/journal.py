@@ -33,7 +33,7 @@ class JournalEntry:
     hash: bytes
 
 
-def entry_hash(prev_hash: bytes, seq: int, ts_event_ns: int, ts_ingest_ns: int, kind: str,
+def entry_hash(prev_hash: bytes, seq: int, ts_event_ns: int, ts_ingest_ns: int, kind: str,  # noqa: PLR0917
                payload: dict[str, Any]) -> bytes:
     h = hashlib.blake2b(digest_size=32)
     h.update(prev_hash)

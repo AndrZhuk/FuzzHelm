@@ -7,7 +7,8 @@
 Правила:
   * ціни квантуються до tick_size з ROUND_HALF_EVEN (банківське округлення, без систематичного зсуву);
   * кількості — до step_size з ROUND_DOWN (ніколи не округляти вгору: ризик не може зрости від округлення);
-  * серіалізація — лише format(d, "f") (без експоненти: Decimal('1E+2') → '100', після quantize_money → '100.00').
+  * серіалізація — лише format(d, "f") без експоненти: Decimal('1E+2') → '100',
+    після quantize_money → '100.00'; від'ємний нуль → '0' (ING-06).
 """
 
 from __future__ import annotations
@@ -57,14 +58,16 @@ def quantize_internal(x: Decimal) -> Decimal:
 
 
 def dec_str(x: Decimal) -> str:
-    """Канонічний рядок Decimal без експоненти."""
+    """Канонічний рядок Decimal без експоненти; -0 (напр. Decimal(0) * -1) зводиться до 0 (ING-06)."""
+    if x.is_zero() and x.is_signed():
+        x = x.copy_abs()
     return format(x, "f")
 
 
 def dec(x: int | str | Decimal) -> Decimal:
     """Єдиний дозволений конструктор Decimal з рантайм-значення поза sizing/convert.py.
     float відкидається: float → Decimal лише через sizing.convert.to_decimal (з квантуванням)."""
-    if isinstance(x, bool) or isinstance(x, float):
+    if isinstance(x, bool | float):
         raise TypeError(f"dec() refuses {type(x).__name__}; use sizing.convert.to_decimal for floats")
     if isinstance(x, Decimal):
         return x

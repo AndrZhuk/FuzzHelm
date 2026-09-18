@@ -1,3 +1,4 @@
+name: fuzzhelm
 # 4 сервіси за брифінгом: db, api, worker, ui (ui — хвиля Vue, поки профіль "ui").
 services:
   db:
@@ -16,7 +17,9 @@ services:
   api:
     build: .
     command: ["uvicorn", "fuzzhelm.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
-    env_file: [.env]
+    env_file:
+      - path: .env
+        required: false
     environment:
       FUZZHELM_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@db:5432/fuzzhelm
     ports: ["8000:8000"]
@@ -24,7 +27,9 @@ services:
   worker:
     build: .
     command: ["python", "-m", "fuzzhelm.workers.trading_worker", "--profile", "replay"]
-    env_file: [.env]
+    env_file:
+      - path: .env
+        required: false
     environment:
       FUZZHELM_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@db:5432/fuzzhelm
     depends_on: {db: {condition: service_healthy}}
