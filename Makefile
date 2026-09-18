@@ -12,7 +12,7 @@ backtest:    ; $(PY) python scripts/run_backtest.py
 grid:        ; $(PY) python scripts/run_grid.py
 verify:      ; $(PY) python -m fuzzhelm.cli verify-journal
 test:        ; $(PY) pytest -q
-test-int:    ; docker compose -f docker-compose.test.yml up -d --wait && FUZZHELM_TEST_DATABASE_URL=postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5433/fuzzhelm_test $(PY) pytest -q -m integration -p no:randomly; docker compose -f docker-compose.test.yml down
+test-int:    ; docker compose -f docker-compose.test.yml up -d --wait && FUZZHELM_TEST_DATABASE_URL=postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5443/fuzzhelm_test $(PY) pytest -q -m integration -p no:randomly; docker compose -f docker-compose.test.yml down
 cov:         ; $(PY) pytest -q --cov --cov-report=term-missing
 lint:        ; $(PY) ruff check src tests scripts && $(PY) mypy src/fuzzhelm/core src/fuzzhelm/fuzzy src/fuzzhelm/risk
 report:      ; $(PY) python scripts/export_report_tables.py

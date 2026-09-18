@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FUZZHELM_", env_file=".env", extra="ignore")
 
     # --- сховище
-    database_url: str = "postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5432/fuzzhelm"
+    database_url: str = "postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5442/fuzzhelm"
 
     # --- виконання: ЛИШЕ testnet
     venue_base_url: str = "https://testnet.binancefuture.com"

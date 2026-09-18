@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: fuzzhelm
       POSTGRES_PASSWORD: fuzzhelm
       POSTGRES_DB: fuzzhelm
-    ports: ["5432:5432"]
+    ports: ["5442:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fuzzhelm -d fuzzhelm"]
