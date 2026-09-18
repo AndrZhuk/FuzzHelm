@@ -1,0 +1,39 @@
+# 4 сервіси за брифінгом: db, api, worker, ui (ui — хвиля Vue, поки профіль "ui").
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fuzzhelm
+      POSTGRES_PASSWORD: fuzzhelm
+      POSTGRES_DB: fuzzhelm
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fuzzhelm -d fuzzhelm"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  api:
+    build: .
+    command: ["uvicorn", "fuzzhelm.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: [.env]
+    environment:
+      FUZZHELM_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@db:5432/fuzzhelm
+    ports: ["8000:8000"]
+    depends_on: {db: {condition: service_healthy}}
+  worker:
+    build: .
+    command: ["python", "-m", "fuzzhelm.workers.trading_worker", "--profile", "replay"]
+    env_file: [.env]
+    environment:
+      FUZZHELM_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@db:5432/fuzzhelm
+    depends_on: {db: {condition: service_healthy}}
+  ui:
+    profiles: ["ui"]
+    image: node:22-alpine
+    working_dir: /ui
+    volumes: ["./ui:/ui"]
+    command: ["sh", "-c", "npm ci && npm run dev -- --host 0.0.0.0"]
+    ports: ["5173:5173"]
+volumes:
+  pgdata:

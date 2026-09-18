@@ -1,0 +1,33 @@
+# Ліміти ризик-контуру і автомат станів (брифінг §5.8–5.12, §7).
+limits:
+  max_position_notional: {value: 0.30, unit: equity_fraction, action: shrink}
+  max_gross_leverage:    {value: 3.0,  action: shrink}
+  max_daily_loss:        {value: 0.02, unit: equity_fraction, action: veto, reset: utc_midnight}
+  max_drawdown_halt:     {value: 0.12, action: halt}
+  liquidation_buffer:    {min_dtl_atr: 6.0, action: reduce_leverage, b: 0.20}
+  stale_data:            {max_lag_s: 5.0, min_dq: 0.90, action: veto}
+state_machine:
+  warn_enter: 0.04
+  warn_exit: 0.025
+  warn_dwell: 15
+  warn_vol_ratio: 1.6
+  cool_enter: 0.08
+  cool_exit: 0.05
+  cool_dwell: 30
+  cool_daily_loss: 0.02
+  halt_enter: 0.12
+  halt_daily_loss: 0.03
+  kappa_mode: {NORMAL: 1.0, WARNING: 0.5, COOLDOWN: 0.25, HALTED: 0.0}
+sizing:
+  ewma_lambda: 0.94
+  annualization_bars: 525600      # 1m, 24/7
+  sigma_target: 0.20
+  scale_min: 0.25
+  scale_max: 3.0
+  filter_gamma: 0.2
+  rho_base: 0.005
+  chi_atr: 2.0
+  max_leverage: 3.0
+hysteresis:
+  enter: 0.25
+  exit: 0.12

@@ -1,0 +1,7 @@
+# Профіль запуску: replay
+kind: replay
+instrument: BTC-USDT-PERP
+tf: 1m
+engine: mamdani
+seed: 20260918
+initial_equity: "10000"

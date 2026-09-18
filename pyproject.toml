@@ -1,0 +1,101 @@
+[project]
+name = "fuzzhelm"
+version = "0.1.0"
+description = "FuzzHelm: сервіс агрегації біржових даних з нечітко-логічним ядром рішень і детермінованим ризик-контуром (paper/testnet only)"
+authors = [
+    { name = "AndriiZhuk", email = "andri195595@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "apscheduler<4",
+    "asyncpg>=0.31.0",
+    "bcrypt<4.1",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "matplotlib>=3.11.2",
+    "numpy>=2.1",
+    "orjson>=3.12.0",
+    "passlib[bcrypt]>=1.7.4",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.15.0",
+    "python-jose[cryptography]>=3.5.0",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "scikit-learn>=1.5",
+    "sqlalchemy[asyncio]>=2.0",
+    "uvicorn[standard]>=0.53.0",
+    "websockets>=13",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.7,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.168.0",
+    "mypy>=2.3.1",
+    "pip-audit>=2.10.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "respx>=0.23.1",
+    "ruff>=0.16.8",
+    "time-machine>=3.5.1",
+    "types-pyyaml>=6.0.12.20260906",
+]
+
+[project.scripts]
+fuzzhelm = "fuzzhelm.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers -m 'not integration and not live'"
+markers = [
+  "integration: потребує PostgreSQL з docker-compose (make test-int)",
+  "live: ходить у мережу (ніколи в make test)",
+  "property: property-based тест (hypothesis)",
+  "slow: довгий тест (>2 с)",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning:passlib.*",
+  "ignore:.*crypt.*:DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src/fuzzhelm"]
+branch = true
+omit = ["src/fuzzhelm/cli.py", "src/fuzzhelm/workers/*", "src/fuzzhelm/infra/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "N", "PL"]
+ignore = ["PLR0913", "PLR2004", "PLR0911", "PLR0912", "PLR0915", "RUF001", "RUF002", "RUF003", "N802", "N803", "N806", "N815", "N816", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR", "S", "N"]
+"scripts/**" = ["T20", "PLR"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["fuzzhelm.core.*", "fuzzhelm.fuzzy.*", "fuzzhelm.risk.*"]
+strict = true
+

@@ -1,0 +1,42 @@
+# Функції належності лінгвістичних змінних нечіткого ядра (брифінг §5.5).
+# Кожне число має джерело: percentile | kmeans | expert.
+version: 3
+variables:
+  T:
+    range: [-1.0, 1.0]
+    source: percentile          # точки зламу = перцентилі {8,25,50,75,92} емпіричного T на IS-вікні
+    source_run_id: null         # заповнює scripts/calibrate_mf.py
+    terms:
+      STRONG_DOWN: {type: trap, points: [-1.0, -1.0, -0.70, -0.35]}
+      WEAK_DOWN:   {type: tri,  points: [-0.70, -0.35, 0.0]}
+      NEUTRAL:     {type: tri,  points: [-0.35, 0.0, 0.35]}
+      WEAK_UP:     {type: tri,  points: [0.0, 0.35, 0.70]}
+      STRONG_UP:   {type: trap, points: [0.35, 0.70, 1.0, 1.0]}
+  R:
+    range: [-1.0, 1.0]
+    source: expert
+    terms:
+      SELL_PRESSURE: {type: trap, points: [-1.0, -1.0, -0.45, 0.0]}
+      NO_PRESSURE:   {type: tri,  points: [-0.45, 0.0, 0.45]}
+      BUY_PRESSURE:  {type: trap, points: [0.0, 0.45, 1.0, 1.0]}
+  V:
+    range: [0.0, 1.0]
+    source: kmeans              # центри = центроїди KMeans(k=3); σ_i = 0.5·d(m_i, m_{i±1})
+    provisional: true           # ТИМЧАСОВІ значення зі спеки; перезаписує scripts/calibrate_mf.py
+    source_run_id: null
+    silhouette: null
+    terms:
+      LO:  {type: gauss, m: 0.17, sigma: 0.17}
+      MID: {type: gauss, m: 0.51, sigma: 0.17}
+      HI:  {type: gauss, m: 0.88, sigma: 0.185}
+  U:
+    range: [-1.0, 1.0]
+    terms:
+      STRONG_SHORT: {type: trap, points: [-1.0, -1.0, -0.80, -0.45]}
+      SHORT:        {type: tri,  points: [-0.80, -0.40, 0.0]}
+      HOLD:         {type: tri,  points: [-0.40, 0.0, 0.40]}
+      LONG:         {type: tri,  points: [0.0, 0.40, 0.80]}
+      STRONG_LONG:  {type: trap, points: [0.45, 0.80, 1.0, 1.0]}
+defuzz:
+  scheme: trapezoid             # rect | trapezoid | simpson
+  grid_nodes: 201

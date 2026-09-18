@@ -1,0 +1,13 @@
+# Профіль запуску: backtest
+kind: backtest
+instrument: BTC-USDT-PERP
+tf: 1m
+engine: mamdani
+seed: 20260918
+initial_equity: "10000"
+walkforward:            # масштабовано під 45 днів даних (docs/deviations.md D-03)
+  is_days: 15
+  oos_days: 5
+  step_days: 5
+  folds: 6
+  embargo_bars: null    # null → 2·max_lookback

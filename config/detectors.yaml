@@ -1,0 +1,13 @@
+# Ансамбль детекторів патернів (брифінг §5.2, §7). weight = ω_k у консенсусі.
+detectors:
+  ema_slope:       {weight: 1.0, n_ema: 21, horizon: 5, scale: 0.15}
+  donchian:        {weight: 1.0, n: 20, decay: 0.3}
+  rsi_exhaustion:  {weight: 0.8, n: 14, power: 1.6}
+  bollinger_z:     {weight: 0.8, n: 20, k: 2.0, z_scale: 2.0, bw_rank_window: 200}
+  candle_geometry: {weight: 0.6}
+  vol_regime:      {weight: 1.0, window: 24, rank_window: 500}
+features:
+  n_atr: 14
+agreement:
+  kappa_min: 0.35
+  nu: 1.0

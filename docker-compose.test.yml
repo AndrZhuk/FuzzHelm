@@ -1,0 +1,15 @@
+# Окрема БД для інтеграційних тестів (порт 5433, tmpfs — нічого не зберігається).
+services:
+  db-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fuzzhelm
+      POSTGRES_PASSWORD: fuzzhelm
+      POSTGRES_DB: fuzzhelm_test
+    ports: ["5433:5432"]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fuzzhelm -d fuzzhelm_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30

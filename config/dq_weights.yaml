@@ -1,0 +1,10 @@
+# Ваги скору якості даних Q за AHP (шкала Сааті) — брифінг §5.17.
+# Порядок критеріїв: completeness, validity, timeliness, continuity.
+ahp_matrix:
+  - [1,     2,   3, 3]
+  - [0.5,   1,   2, 2]
+  - [0.333, 0.5, 1, 1]
+  - [0.333, 0.5, 1, 1]
+weights: null              # головний власний вектор — рахує quality/ahp.py (скрипт записує фактичні)
+consistency_ratio: null    # мусить бути < 0.1
+tau0_ms: 1000
