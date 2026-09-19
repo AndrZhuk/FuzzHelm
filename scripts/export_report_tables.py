@@ -484,7 +484,8 @@ def section_tests(rep: Report, no_collect: bool, collect_file: Path | None) -> d
         default_ids: list[str] | None = None
         tail_all, tail_int, tail_def = f"з файлу `{collect_file}`", "—", "—"
     elif no_collect:
-        rep.write("test_groups_summary", "Тести за групами A–N брифінгу (§10), зведення", f"{ea.tbd('pytest_collect')}")
+        rep.write("test_groups_summary", "Тести за групами A–N брифінгу (§10), зведення",
+                  f"{ea.tbd('pytest_collect')}")
         return {"total": None}
     else:
         all_ids, tail_all = collect("")

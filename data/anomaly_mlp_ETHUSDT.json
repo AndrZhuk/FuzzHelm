@@ -37,7 +37,7 @@
     "holdout_dataset_hash": "9e92d163e74aa04b5f9f1aa7bda0d7c4bf0fbc40be5eedea0d2b802ca790b025",
     "per_kind_injections": 144,
     "procedure": "fuzzhelm.quality.anomaly_eval.evaluate_injections",
-    "report": "docs/figures/quality_mlp_rocauc.md",
+    "report": "docs/figures/quality_mlp_rocauc_ETHUSDT.md",
     "same_threshold_as_evaluated_model": true,
     "seed": 20260918,
     "seeds": [
@@ -158,12 +158,10 @@
   "params_sha256": "182bf3705c2a9b9a7dae763257eea6f182148fa00d1a3c5b7d83987897b60799",
   "provenance": {
     "command": "uv run python scripts/train_anomaly_mlp.py --seed 20260918 --rate 0.02 --extra-seeds 1,2,3,4,5 --symbol ETHUSDT --is-days 15 --holdout-days 5 --out docs/figures/quality_mlp_rocauc_ETHUSDT.md",
-    "created_utc": "2026-09-19T17:52:06Z",
-    "git_dirty": true,
-    "git_dirty_paths": [
-      " M data/anomaly_mlp_BTCUSDT.json"
-    ],
-    "git_sha": "2f77c8272e6f7e587cf851db5966ea875fbba94f"
+    "created_utc": "2026-09-19T18:45:02Z",
+    "git_dirty": false,
+    "git_dirty_paths": [],
+    "git_sha": "b0c0396ad615cbce7cc52a30026199f8a9e30cfa"
   },
   "symbol": "ETHUSDT",
   "symbol_canon": "ETH-USDT-PERP",

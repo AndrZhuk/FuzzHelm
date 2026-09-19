@@ -26,7 +26,9 @@ cov:         ; $(PY) pytest -q -n 6 --cov --cov-report=term-missing && $(PY) pyt
 lint:        ; $(PY) ruff check src tests scripts && $(PY) mypy src/fuzzhelm/core src/fuzzhelm/fuzzy src/fuzzhelm/risk
 audit:       ; $(PY) pip-audit --skip-editable --progress-spinner off
 # таблиці звіту з виводів експериментів і фактів БД (лише читання); відсутнє → <<TBD:…>>
-report:      ; $(PY) python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw --out docs/report_tables   # raw/ уже містить exp_search (FIN-02)
+# прогони звіту: чистий прогін фази 6 (BTC) і робочі точки сітки BTC/ETH (docs/results.md); raw/ уже містить exp_search (FIN-02)
+REPORT_RUNS ?= 4e5be0de-a4b7-4ef1-b84e-4a563b248be3 b0638bf7-56a2-4ad7-8d62-11bad97cb2d6 2c9344ad-726e-400a-80fc-cb8f98371099
+report:      ; $(PY) python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw $(foreach r,$(REPORT_RUNS),--run-id $(r)) --cov-file docs/report_tables/raw/coverage_combined.txt --out docs/report_tables
 # MLP-автокодувальник: ROC-AUC на ін'єкціях (docs/figures/quality_mlp_rocauc.md) + артефакт data/anomaly_mlp_$(SYMBOL).json
 anomaly:     ; $(PY) python scripts/train_anomaly_mlp.py --symbol $(SYMBOL)
 # користувачів API створює людина: пароль вводиться інтерактивно (getpass), ніколи не в argv [ЛЮДИНА]

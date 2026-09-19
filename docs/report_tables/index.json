@@ -2,10 +2,14 @@
  "passport": {
   "experiment": "export_report_tables",
   "command": "uv run python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw --run-id 4e5be0de-a4b7-4ef1-b84e-4a563b248be3 --run-id b0638bf7-56a2-4ad7-8d62-11bad97cb2d6 --run-id 2c9344ad-726e-400a-80fc-cb8f98371099 --cov-file docs/report_tables/raw/coverage_combined.txt --out docs/report_tables",
-  "git_sha": "415acbd2d9137655d90a48476170ac1d0dab21e8",
-  "git_dirty": false,
+  "git_sha": "b0c0396ad615cbce7cc52a30026199f8a9e30cfa",
+  "git_dirty": true,
   "git_dirty_any": true,
-  "git_dirty_paths": [],
+  "git_dirty_paths": [
+   " M Makefile",
+   " M data/anomaly_mlp_ETHUSDT.json",
+   " M scripts/export_report_tables.py"
+  ],
   "seed": 20260918,
   "results_dirs": [
    "docs/report_tables/raw"
@@ -74,8 +78,8 @@
    0
   ],
   [
-   "test_groups.md",
-   "Тести за групами A–N брифінгу (§10): поіменний перелік (tests/helpers/brief_test_groups.py, FIN-03)",
+   "test_groups_summary.md",
+   "Тести за групами A–N брифінгу (§10), зведення",
    0
   ],
   [
@@ -92,18 +96,7 @@
    "index.md",
    "Таблиці звіту: зміст і походження",
    0
-  ],
-  [
-   "test_groups_summary.md",
-   "Тести за групами A–N брифінгу (§10): короткий підсумок експорту (перейменовано вручну, FIN-03)",
-   0
   ]
  ],
- "tbd_total": 3,
- "post_edits": [
-  "traceability.md/.csv: 3 жорстко закодовані маркери TBD (рядки 2, 9, 10) переписано вручну — statechart docs/diagrams/risk_fsm.puml, решта «не виконано: …» (docs/deviations.d/final_docs.md FIN-04)",
-  "test_groups.md: вихід експорту перейменовано на test_groups_summary.md; test_groups.md — поіменний перелік `uv run python -m tests.helpers.brief_test_groups` на HEAD 415acbd (FIN-03)",
-  "один --results-dir docs/report_tables/raw: вкладений raw/exp_search дублював таблиці (FIN-02)",
-  "deviations.md/.csv: перегенеровано тією самою командою 2026-09-19 після появи docs/deviations.d/final_docs.md — 227 ідентифікаторів (було 218, додано FIN-01…FIN-09); інші числові таблиці повторного експорту побайтово збіглися з наявними (фінальний аудит)"
- ]
+ "tbd_total": 0
 }
