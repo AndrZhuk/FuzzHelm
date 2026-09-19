@@ -23,9 +23,13 @@ from uuid import UUID
 import httpx
 import numpy as np
 import pytest
+import respx
 import yaml
 from jose import jwt
+from pydantic import SecretStr
+from sqlalchemy.exc import DBAPIError
 from tests.helpers.api_fakes import JWT_SECRET, NS_PER_MIN, T0_NS, MemoryDb, memory_services
+from tests.helpers.api_traces import make_trace
 
 from fuzzhelm.api import backtests as backtests_mod
 from fuzzhelm.api.auth import ACCESS_MATRIX, Permission, issue_token
@@ -46,15 +50,11 @@ from fuzzhelm.api.services import ApiServices
 from fuzzhelm.core.clock import ManualClock
 from fuzzhelm.core.enums import Role, RunKind, RunStatus, VerdictKind
 from fuzzhelm.core.errors import ConfigValidationError
-from fuzzhelm.decision.aggregator import consensus
-from fuzzhelm.decision.agreement import agreement
-from fuzzhelm.decision.core import clip_unit
 from fuzzhelm.decision.trace import DecisionTrace
-from fuzzhelm.detectors.base import DetectorGroup, DetectorOutput
+from fuzzhelm.detectors.base import DetectorGroup
 from fuzzhelm.fuzzy.defuzz import centroid
-from fuzzhelm.fuzzy.mamdani import default_engine
+from fuzzhelm.notify.telegram import TelegramNotifier
 from fuzzhelm.risk.config import load_risk_config
-from fuzzhelm.sizing.sizer import PositionSizer, SizingInput
 from fuzzhelm.storage.repositories import CandleRow, DecisionRecord, EquityRow, InstrumentRow, RunRow
 
 CONFIG = Path(__file__).resolve().parents[2] / "config"
@@ -110,58 +110,6 @@ async def env(tmp_path: Path) -> AsyncIterator[Env]:
                 uid=user.id, login=role.value, role=role, secret=JWT_SECRET, ttl_hours=8, clock=clock
             ).token
         yield e
-
-
-def make_outputs() -> tuple[DetectorOutput, ...]:
-    trend, rev, ctx = DetectorGroup.TREND, DetectorGroup.REVERSION, DetectorGroup.CONTEXT
-    return (
-        DetectorOutput("ema_slope", s=0.55, c=0.8, features={"slope": 0.0012}, group=trend, weight=1.0),
-        DetectorOutput("donchian", s=0.4, c=0.6, features={"stale": 3.0}, group=trend, weight=1.0),
-        DetectorOutput("rsi_exhaustion", s=-0.2, c=0.5, features={"rsi": 61.0}, group=rev, weight=0.8),
-        DetectorOutput("bollinger_z", s=-0.1, c=0.7, features={"z": 0.4}, group=rev, weight=0.8),
-        DetectorOutput("candle_geometry", s=0.05, c=0.3, group=rev, weight=0.6),
-        DetectorOutput("vol_regime", s=0.0, c=1.0, features={"V": 0.42, "warm": 1.0}, group=ctx, weight=1.0),
-    )
-
-
-def make_trace() -> DecisionTrace:
-    """Справжній ланцюжок ядра: консенсус → Мамдані → κ → u_final → сайзер (без мока)."""
-    outputs = make_outputs()
-    cons = consensus(outputs)
-    fz = default_engine().infer(cons.T, cons.R, cons.V)
-    agr = agreement(outputs)
-    u_final = clip_unit(agr.kappa * fz.u_raw)
-    trace = DecisionTrace(
-        open_time_ns=T0_NS,
-        detector_outputs=outputs,
-        consensus=cons,
-        fuzzy=fz,
-        agreement=agr,
-        u_raw=fz.u_raw,
-        kappa=agr.kappa,
-        u_final=u_final,
-        engine="mamdani",
-    )
-    sizing = PositionSizer().size(
-        SizingInput(
-            u_final=u_final,
-            equity=Decimal("10000"),
-            price=Decimal("60000.1"),
-            atr=35.0,
-            s_t=1.2,
-            kappa_mode=1.0,
-            step_size=Decimal("0.001"),
-            min_notional=Decimal("5"),
-        )
-    )
-    risk = {
-        "state": "NORMAL",
-        "kappa_mode": 1.0,
-        "verdict": {"kind": "SHRINK", "factor": "0.5"},
-        "vetoes": [],
-        "approved_qty": format(sizing.qty / 2, "f"),
-    }
-    return trace.with_sizing(sizing.to_dict()).with_risk(risk)
 
 
 def add_run(
@@ -660,6 +608,105 @@ async def test_strategy_yaml_aliases_and_path_like_text_rejected(env: Env) -> No
     assert r2.status_code == 422 and r2.json()["detail"][0]["msg"] == "top-level YAML must be a mapping"
 
 
+class DriverError(Exception):
+    """Виняток драйвера з SQLSTATE (як asyncpg): текст — «деталь драйвера», що не має потрапити клієнту."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__("driver detail that must not leak")
+        self.sqlstate = code
+
+
+async def test_strategy_compute_budget_is_bounded(env: Env) -> None:
+    """DoS через дані: grid_nodes завантажувач fuzzy обмежує лише знизу; 10⁹ вузлів пройшли б валідацію й
+    вичерпали пам'ять на першому /explain чи бектесті. Межі — 2001 вузол і 15 термів на змінну."""
+    rules, membership = strategy_texts()
+    tree = yaml.safe_load(membership)
+    tree["defuzz"] = {"scheme": "trapezoid", "grid_nodes": 10**9}
+    r = await env.client.post(
+        "/strategies",
+        headers=env.h(Role.OPERATOR),
+        json={"name": "huge", "rules_yaml": rules, "membership_yaml": yaml.safe_dump(tree)},
+    )
+    assert r.status_code == 422 and r.json()["detail"][0]["path"] == "defuzz.grid_nodes"
+    wide = yaml.safe_load(membership)
+    for i in range(11):  # 5 термів U + 11 = 16 > 15
+        wide["variables"]["U"]["terms"][f"X{i}"] = {"type": "tri", "points": [-0.1, 0.0, 0.1]}
+    r_u = await env.client.post(
+        "/strategies",
+        headers=env.h(Role.OPERATOR),
+        json={"name": "wide", "rules_yaml": rules, "membership_yaml": yaml.safe_dump(wide)},
+    )
+    assert r_u.status_code == 422 and r_u.json()["detail"][0]["path"] == "variables.U.terms"
+    # межа включна: найдрібніша сітка дослідження збіжності (Δ = 0.001) приймається
+    tree["defuzz"] = {"scheme": "trapezoid", "grid_nodes": 2001}
+    ok = await env.client.post(
+        "/strategies",
+        headers=env.h(Role.OPERATOR),
+        json={"name": "fine", "rules_yaml": rules, "membership_yaml": yaml.safe_dump(tree)},
+    )
+    assert ok.status_code == 201, ok.text
+    assert [s.name for s in env.db.state.strategies] == ["fine"]
+
+
+async def test_out_of_range_integers_are_422_not_500(env: Env) -> None:
+    """Цілі поза типами колонок (INT/BIGINT) і поза діапазоном datetime відсікаються схемою (422), а не
+    доходять до драйвера (503 «database error») чи datetime (500); межові значення приймаються."""
+    add_instrument(env.db)
+    run_id = add_run(env.db)
+    h = env.h(Role.ADMIN)
+    big, i64, i32 = 10**30, 2**63, 2**31
+    for url in (
+        f"/market/candles?from_ns={big}",
+        f"/market/candles?after_ns={i64}",
+        f"/market/candles?instrument_id={i32}",
+        f"/dq/score?to_ns={big}",
+        f"/dq/score?instrument_id={i32}",
+        f"/runs/{run_id}/equity?from_ns={big}",
+        f"/risk/events?since_ns={big}",
+        f"/decisions/{i64}/explain",
+        f"/strategies/demo/versions/{i32}",
+        f"/audit?user_id={i32}",
+    ):
+        r = await env.client.get(url, headers=h)
+        assert r.status_code == 422, (url, r.status_code, r.text)
+    act = await env.client.post("/strategies/demo/activate", params={"version": i32}, headers=h)
+    assert act.status_code == 422
+    base = {"symbol": "BTC-USDT-PERP", "ts_from_ns": T0_NS, "ts_to_ns": T0_NS + 60 * NS_PER_MIN}
+    out_of_range: list[dict[str, int]] = [
+        {"seed": 2**70},
+        {"seed": -1},
+        {"strategy_id": i32},
+        {"ts_from_ns": i64, "ts_to_ns": i64 + 60},
+    ]
+    for extra in out_of_range:
+        r = await env.client.post("/backtests", json={**base, **extra}, headers=h)
+        assert r.status_code == 422, (extra, r.status_code, r.text)
+    assert not [a for a in env.db.state.audit if a.action == "backtest.submit"]
+    # межові значення типів — валідний ввід
+    edge = await env.client.get(f"/market/candles?to_ns={i64 - 1}", headers=h)
+    assert edge.status_code == 200
+    ok = await env.client.post("/backtests", json={**base, "seed": i64 - 1}, headers=h)
+    assert ok.status_code == 202, ok.text
+
+
+async def test_database_data_exception_maps_to_422_not_503() -> None:
+    """Страховка для параметрів без меж: SQLSTATE класу 22 (data exception) — помилка вводу (422);
+    справжня недоступність БД (інші DBAPIError) лишається 503 без деталей драйвера."""
+
+    app = create_app(build_default=False)
+
+    @app.get("/boom/{code}")
+    async def boom(code: str) -> None:
+        raise DBAPIError("SELECT $1", None, DriverError(code))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://api.test") as client:
+        r22 = await client.get("/boom/22003")
+        r08 = await client.get("/boom/08006")
+    assert r22.status_code == 422 and "driver detail" not in r22.text
+    assert r08.status_code == 503 and r08.json() == {"detail": "database error"}
+
+
 async def test_explain_flags_inconsistency_when_strategy_config_differs(env: Env) -> None:
     rules, membership = strategy_texts()
     tree = yaml.safe_load(rules)
@@ -765,6 +812,14 @@ async def test_health_reports_lag_gaps_and_pipeline_snapshot(env: Env) -> None:
     inst = h["instruments"][0]
     assert inst["data_lag_s"] == pytest.approx(120.0) and inst["open_gaps"] == 1 and h["open_gaps_total"] == 1
     assert h["pipeline"]["frames"] == 1200 and h["pipeline"]["q"] == 0.97
+    # два видавці health (ingest- і торговий воркер) не затирають один одного: pipelines — за `source`
+    env.services.live.publish("health", {"source": "trading_worker", "header": "MODE: PAPER · FEED: REPLAY"})
+    env.services.live.publish("health", {"source": "ingest_worker", "frames": 1300})
+    h = (await env.client.get("/market/health", headers=env.h(Role.AUDITOR))).json()
+    assert h["pipeline"]["source"] == "ingest_worker"                     # останній знімок будь-якого видавця
+    assert set(h["pipelines"]) == {"ingest_worker", "trading_worker"}
+    assert h["pipelines"]["trading_worker"]["header"].startswith("MODE: PAPER")
+    assert h["pipelines"]["ingest_worker"]["frames"] == 1300
 
 
 async def test_runs_metrics_and_equity_decimation(env: Env) -> None:
@@ -850,6 +905,29 @@ async def test_killswitch_release_admin_only_writes_audit_and_command(env: Env) 
     state = (await env.client.get("/risk/state", headers=env.h(Role.ANALYST))).json()
     assert state["state"] == "HALTED" and state["kappa_mode"] == 0.0
     assert state["last_release_request"]["audit_id"] == row.id
+
+
+async def test_killswitch_release_sends_ukrainian_telegram_in_background(env: Env) -> None:
+    """Запит на зняття kill-switch → Telegram оператору (respx, без мережі); без токена — не шлеться."""
+    token = "123456789:AAH-e2e_token_value_0123456789abcdef"
+    body = {"reason": "drawdown investigated, manual restart"}
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(f"https://api.telegram.org/bot{token}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+        )
+        async with httpx.AsyncClient() as http:
+            env.services.notifier = TelegramNotifier(SecretStr(token), "-100200300", http=http)
+            r = await env.client.post("/risk/killswitch/release", json=body, headers=env.h(Role.ADMIN))
+            assert r.status_code == 202, r.text
+            await env.services.drain()
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["chat_id"] == "-100200300" and "parse_mode" not in sent
+    assert sent["text"].startswith("Запит на зняття kill-switch; адміністратор admin")
+    assert body["reason"] in sent["text"] and token not in sent["text"]
+    # без токена нотифікатор вимкнений: запит проходить, фонових задач немає
+    env.services.notifier = TelegramNotifier(None, None)
+    r2 = await env.client.post("/risk/killswitch/release", json=body, headers=env.h(Role.ADMIN))
+    assert r2.status_code == 202 and not env.services._background
 
 
 async def test_risk_events_keep_exact_shrink_factor(env: Env) -> None:
@@ -1049,6 +1127,20 @@ async def test_engine_backtest_service_runs_in_background_and_reports_failures(
     assert j3.status is JobStatus.FAILED and "not available" in (j3.error or "")
     await svc.aclose()
     await svc2.aclose()
+
+
+async def test_backtest_failure_text_hides_driver_details() -> None:
+    """job.error і run.error бачить користувач (GET /runs/{id}); str(DBAPIError) містить SQL і параметри."""
+
+    async def runner(run_id: UUID, spec: Mapping[str, Any]) -> None:
+        raise DBAPIError("INSERT INTO run VALUES ($1)", {"p": "param-value"}, DriverError("23505"))
+
+    svc = EngineBacktestService(runner)
+    job = await svc.submit(UUID(int=9), {}, actor="analyst")
+    await svc.wait(UUID(int=9))
+    assert job.status is JobStatus.FAILED and job.error == "DBAPIError: database error (sqlstate 23505)"
+    assert backtests_mod.public_error(ValueError("no closed candles")) == "ValueError: no closed candles"
+    await svc.aclose()
 
 
 def test_detector_outputs_parser_rejects_incomplete_rows() -> None:

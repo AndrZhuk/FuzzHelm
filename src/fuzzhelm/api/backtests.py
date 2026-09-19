@@ -7,10 +7,11 @@
 ліниво в момент виконання і запускає його в окремому потоці.
 Автор: Андрій Жук, 2026.
 
-Очікуваний контракт рушія (docs/api/api.md, «Бектести»): синхронна функція
-`run_backtest(*, run_id: UUID, symbol, tf, ts_from_ns, ts_to_ns, engine, seed, strategy_id, params)`,
-яка сама пише паспорт `run` (RunRepo), рішення, капітал і метрики. Поки рушія немає, задача переходить у
-FAILED з поясненням — GET /runs/{id} показує це чесно, а не «вічний RUNNING».
+Контракт рушія (docs/api/api.md, «Бектести»): модуль `fuzzhelm.backtest.engine` з `BacktestConfig` і
+синхронною `run_backtest(dataset, cfg, seed, *, run_id, git, kind) -> BacktestResult`; рушій чистий, а
+читання свічок і запис результатів робить `api.backtest_runner.DbBacktestRunner`. Якщо рушія немає
+(модуль не імпортується), задача переходить у FAILED з поясненням — GET /runs/{id} показує це чесно,
+а не «вічний RUNNING».
 """
 
 from __future__ import annotations
@@ -23,15 +24,21 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import ModuleType
 from typing import Any, Protocol
 from uuid import UUID
 
+from sqlalchemy.exc import DBAPIError
+
 from fuzzhelm.core.errors import FuzzHelmError
+from fuzzhelm.storage.repositories.common import sqlstate
 
 log = logging.getLogger(__name__)
 
+ERROR_MAX_CHARS = 500
 ENGINE_MODULE = "fuzzhelm.backtest.engine"
 ENGINE_FUNCTION = "run_backtest"
+ENGINE_API: tuple[str, ...] = (ENGINE_FUNCTION, "BacktestConfig")
 
 
 class JobStatus(StrEnum):
@@ -43,6 +50,17 @@ class JobStatus(StrEnum):
 
 class BacktestQueueFull(FuzzHelmError):
     """Забагато незавершених задач (захист від DoS) → HTTP 429."""
+
+
+def public_error(exc: BaseException, limit: int = ERROR_MAX_CHARS) -> str:
+    """Текст помилки прогону для користувача (GET /runs/{id} → job.error, run.error).
+
+    str(DBAPIError) містить SQL і параметри запиту, тож для помилок СУБД віддаємо лише клас і SQLSTATE —
+    як і обробники помилок API (main._install_error_handlers); повне трасування — лише в журнал сервера.
+    """
+    if isinstance(exc, DBAPIError):
+        return f"{type(exc).__name__}: database error (sqlstate {sqlstate(exc)})"[:limit]
+    return f"{type(exc).__name__}: {exc}"[:limit]
 
 
 @dataclass
@@ -76,22 +94,26 @@ class BacktestService(Protocol):
 Runner = Callable[[UUID, Mapping[str, Any]], Awaitable[Any]]
 
 
-def load_engine_function() -> Callable[..., Any]:
-    """Лінивий імпорт рушію; відсутність модуля/функції → FuzzHelmError із зрозумілим текстом."""
+def load_engine_module() -> ModuleType:
+    """Лінивий імпорт рушію; відсутність модуля чи його API → FuzzHelmError із зрозумілим текстом."""
     try:
         module = importlib.import_module(ENGINE_MODULE)
     except ImportError as e:
         raise FuzzHelmError(f"backtest engine is not available: {ENGINE_MODULE} cannot be imported") from e
-    fn = getattr(module, ENGINE_FUNCTION, None)
-    if not callable(fn):
-        raise FuzzHelmError(f"backtest engine is not available: {ENGINE_MODULE}.{ENGINE_FUNCTION} missing")
-    return fn  # type: ignore[no-any-return]
+    missing = [name for name in ENGINE_API if not hasattr(module, name)]
+    if missing or not callable(getattr(module, ENGINE_FUNCTION)):
+        raise FuzzHelmError(f"backtest engine is not available: {ENGINE_MODULE} lacks {missing}")
+    return module
 
 
-async def engine_runner(run_id: UUID, spec: Mapping[str, Any]) -> Any:
-    """Типовий виконавець: рушій — CPU-робота, тож окремий потік, event loop API не блокується."""
-    fn = load_engine_function()
-    return await asyncio.to_thread(fn, run_id=run_id, **dict(spec))
+def default_runner() -> Runner:
+    """Типовий виконавець: PostgreSQL процесу (роль fuzzhelm_app) + рушій (api.backtest_runner)."""
+    from fuzzhelm.api.backtest_runner import DbBacktestRunner  # noqa: PLC0415 — уникнути циклу імпорту
+    from fuzzhelm.config import get_settings  # noqa: PLC0415
+    from fuzzhelm.storage.session import get_default_factory  # noqa: PLC0415
+
+    settings = get_settings()
+    return DbBacktestRunner(get_default_factory(), data_dir=settings.config_dir.parent / "data")
 
 
 class EngineBacktestService:
@@ -109,7 +131,7 @@ class EngineBacktestService:
         max_pending: int = 8,
         max_jobs: int = 256,
     ) -> None:
-        self._runner: Runner = runner or engine_runner
+        self._runner: Runner = runner or default_runner()
         self._sem = asyncio.Semaphore(max_concurrent)
         self.max_pending = max_pending
         self.max_jobs = max_jobs
@@ -145,8 +167,8 @@ class EngineBacktestService:
                 job.status, job.error = JobStatus.FAILED, "cancelled on shutdown"
                 raise
             except Exception as e:
-                # текст помилки рушія — для користувача; трасування — лише в журнал сервера
-                job.status, job.error = JobStatus.FAILED, f"{type(e).__name__}: {e}"[:500]
+                # текст помилки рушія — для користувача (без деталей драйвера); трасування — лише в журнал
+                job.status, job.error = JobStatus.FAILED, public_error(e)
                 log.exception("backtest %s failed", job.run_id)
             else:
                 job.status = JobStatus.DONE

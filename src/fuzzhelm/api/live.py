@@ -90,7 +90,11 @@ class LiveHub:
     _subs: list[_Subscriber] = field(default_factory=list)
     _ring: deque[LiveEvent] = field(default_factory=deque)
     _last_by_kind: dict[str, LiveEvent] = field(default_factory=dict)
+    # останній знімок кожного видавця (`source` у payload): health ingest- і торгового воркерів не затирають
+    # один одного в GET /market/health (W-20)
+    _last_by_source: dict[tuple[str, str], LiveEvent] = field(default_factory=dict)
     _closed: bool = False
+    _subs_changed: asyncio.Condition = field(default_factory=asyncio.Condition, repr=False)
 
     def publish(self, kind: str, payload: Mapping[str, Any]) -> LiveEvent:
         self._seq += 1
@@ -99,6 +103,9 @@ class LiveHub:
         while len(self._ring) > self.replay_size:
             self._ring.popleft()
         self._last_by_kind[kind] = ev
+        source = ev.payload.get("source")
+        if isinstance(source, str) and source:
+            self._last_by_source[(kind, source[:64])] = ev
         for sub in self._subs:
             if sub.kinds is not None and kind not in sub.kinds:
                 continue
@@ -112,9 +119,22 @@ class LiveHub:
     def last(self, kind: str) -> LiveEvent | None:
         return self._last_by_kind.get(kind)
 
+    def last_by_source(self, kind: str) -> dict[str, LiveEvent]:
+        """Останні події `kind` кожного видавця (payload.source): health ingest- і торгового воркерів."""
+        return {src: ev for (k, src), ev in self._last_by_source.items() if k == kind}
+
     @property
     def subscribers(self) -> int:
         return len(self._subs)
+
+    async def wait_subscribers(self, n: int = 1) -> None:
+        """Дочекатися ≥ n підписників (подія, а не опитування — для тестів і діагностики)."""
+        async with self._subs_changed:
+            await self._subs_changed.wait_for(lambda: len(self._subs) >= n)
+
+    async def _notify_subs_changed(self) -> None:
+        async with self._subs_changed:
+            self._subs_changed.notify_all()
 
     @property
     def closed(self) -> bool:
@@ -134,6 +154,7 @@ class LiveHub:
         backlog = self.replay_after(last_event_id, kset) if last_event_id is not None else []
         closed_at_start = self._closed
         self._subs.append(sub)
+        await self._notify_subs_changed()
 
         async def events() -> AsyncIterator[LiveEvent]:
             for ev in backlog:
@@ -195,8 +216,13 @@ class PgLiveSource:
         self.max_backoff_s = max_backoff_s
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        self._ready = asyncio.Event()  # встановлена, поки LISTEN активний
         self.connected = False
         self.errors = 0
+
+    async def wait_connected(self) -> None:
+        """Дочекатися активного LISTEN (подія, а не опитування)."""
+        await self._ready.wait()
 
     def _on_notify(self, _conn: Any, _pid: int, _channel: str, payload: str) -> None:
         decoded = decode_notify_payload(payload)
@@ -214,6 +240,7 @@ class PgLiveSource:
                 conn = await asyncpg.connect(self.dsn, server_settings=settings, timeout=5)
                 await conn.add_listener(self.channel, self._on_notify)
                 self.connected = True
+                self._ready.set()
                 backoff = 0.5
                 closed = asyncio.Event()
                 conn.add_termination_listener(lambda _c, ev=closed: ev.set())
@@ -227,6 +254,7 @@ class PgLiveSource:
                 log.warning("LISTEN %s failed: %s", self.channel, type(e).__name__)
             finally:
                 self.connected = False
+                self._ready.clear()
                 if conn is not None:
                     with contextlib.suppress(Exception):
                         await conn.close()

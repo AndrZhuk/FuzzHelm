@@ -433,3 +433,182 @@ async def test_http_log_records_used_weight_header() -> None:
     await log.on_response(httpx.Response(429, request=req))
     assert log.by_path() == {"/fapi/v1/time": 3} and log.statuses() == {200: 2, 429: 1}
     assert log.max_used_weight() == 22
+
+
+# ================================================================== хвиля 2: добір → ingest_gap, звіти, хеш
+
+
+class _FakeKlines:
+    """KlineSource без мережі: віддає рядки fixtures/rest (справжні klines Binance) за [start, end]."""
+
+    def __init__(self, rows: list[list[Any]]) -> None:
+        self.rows = rows
+        self.clock = ManualClock(rows[-1][6] * 1_000_000)
+        self.calls = 0
+
+    async def klines(self, symbol: str, interval: str = "1m", start_ms: int | None = None,
+                     end_ms: int | None = None, limit: int = 1500) -> list[list[Any]]:
+        self.calls += 1
+        lo = -1 if start_ms is None else start_ms
+        hi = 2**62 if end_ms is None else end_ms
+        return [r for r in self.rows if lo <= r[0] <= hi][:limit]
+
+
+async def test_backfill_gaps_become_ingest_gap_rows_and_end_filled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Шлях, якого справжній 45-денний прогін не пройшов (біржа віддала все): прогалина добору → рядок
+    ingest_gap OPEN → FILLING → кінцевий статус, добрані бари — upsert у той самий instrument_id."""
+    from contextlib import asynccontextmanager  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    import fuzzhelm.storage.repositories as repos  # noqa: PLC0415
+    import fuzzhelm.storage.session as sess  # noqa: PLC0415
+    from fuzzhelm.core.enums import GapStatus  # noqa: PLC0415
+    from fuzzhelm.ingest.backfill import backfill_klines, fill_gaps  # noqa: PLC0415
+
+    rows = orjson.loads(gzip.decompress((REST / "binance_klines.json.gz").read_bytes()))[:300]
+    hole = [r[0] for r in rows[100:103]]
+    now_ms = rows[-1][6] + 1
+    res = await backfill_klines(_FakeKlines([r for r in rows if r[0] not in hole]), "BTCUSDT", rows[0][0],
+                                rows[-1][0], limit=100, instrument=BTC_USDT_PERP, now_ms=now_ms)
+    assert [(g.ts_lo_ns // 1_000_000, g.ts_hi_ns // 1_000_000, g.expected_count) for g in res.gaps] == \
+        [(hole[0], hole[-1], 3)]
+    events: list[tuple[Any, ...]] = []
+
+    class FakeGapRepo:
+        def __init__(self, _: Any) -> None: ...
+
+        async def open(self, iid: int, stream: Any, lo: int, hi: int, **kw: Any) -> int:
+            events.append(("open", iid, stream, lo, hi, kw["expected_count"], kw["detected_at_ns"]))
+            return 41
+
+        async def update_status(self, gid: int, status: GapStatus, **kw: Any) -> Any:
+            events.append(("status", gid, GapStatus(status).value, kw.get("filled_rows"),
+                           kw.get("count_attempt")))
+            return SimpleNamespace(status=GapStatus(status).value)
+
+    class FakeCandleRepo:
+        def __init__(self, _: Any) -> None: ...
+
+        async def upsert(self, candles: list[Any], iid: int) -> None:
+            events.append(("upsert", iid, [c.open_time_ns // 1_000_000 for c in candles]))
+
+    @asynccontextmanager
+    async def fake_scope(_: Any) -> Any:
+        yield object()
+
+    monkeypatch.setattr(repos, "GapRepo", FakeGapRepo)
+    monkeypatch.setattr(repos, "CandleRepo", FakeCandleRepo)
+    monkeypatch.setattr(sess, "session_scope", fake_scope)
+    full = _FakeKlines(rows)
+    out = await cli._record_backfill_gaps(factory=None, fill_gaps=fill_gaps, client=full,  # type: ignore[arg-type]
+                                          symbol="BTCUSDT", instrument=BTC_USDT_PERP,  # type: ignore[arg-type]
+                                          instrument_id=7, result=res, now_ms=now_ms, now_ns=123)
+    assert out == [{"id": 41, "status": "FILLED", "expected_count": 3, "filled_rows": 3,
+                    "ts_lo_utc": cli.utc_iso(hole[0]), "ts_hi_utc": cli.utc_iso(hole[-1])}]
+    assert events == [
+        ("open", 7, res.gaps[0].stream, res.gaps[0].ts_lo_ns, res.gaps[0].ts_hi_ns, 3, 123),
+        ("status", 41, "FILLING", None, True),
+        ("upsert", 7, hole),
+        ("status", 41, "FILLED", 3, False),
+    ]
+    # без прогалин — жодного звернення до БД
+    events.clear()
+    clean = await backfill_klines(full, "BTCUSDT", rows[0][0], rows[-1][0], limit=100,
+                                  instrument=BTC_USDT_PERP, now_ms=now_ms)
+    assert await cli._record_backfill_gaps(factory=None, fill_gaps=fill_gaps, client=full,  # type: ignore[arg-type]
+                                           symbol="BTCUSDT", instrument=BTC_USDT_PERP,  # type: ignore[arg-type]
+                                           instrument_id=7, result=clean, now_ms=now_ms, now_ns=1) == []
+    assert events == []
+
+
+def _stats(*, mismatches: int = 0, gaps: list[dict[str, Any]] | None = None,
+           explicit: bool = False) -> dict[str, Any]:
+    w = cli.DatasetWindow.ending_at(cli.utc_date_ms(date(2026, 9, 18)), 45, ("BTCUSDT",))
+    sym = {"symbol_canon": "BTC-USDT-PERP", "rows_fetched": 64800, "inserted": 64800, "updated": 0,
+           "skipped": 0, "requests": 44, "weight_charged": 440, "elapsed_s": 19.4,
+           "seams": {"first": 1, "OK": 43},
+           "overlap_mismatches": mismatches, "gaps_detected": [], "gap_rows": gaps or [],
+           "rows_in_db_window": 64800, "db_gaps_in_window": 0, "first_open_utc": "2026-08-04T00:00:00Z",
+           "last_open_utc": "2026-09-17T23:59:00Z", "dataset_hash": "ab" * 32,
+           "dataset_hash_columns": ["c", "h", "l", "o", "t_ns", "v"], "tick_size": "0.10",
+           "step_size": "0.001",
+           "min_notional": "50"}
+    return {"window": w.to_dict(), "clock_offset_ms": 84, "exchange_now_utc": "2026-09-18T21:14:26.747000Z",
+            "run_started_utc": "2026-09-18T21:14:26Z", "run_finished_utc": "2026-09-18T21:15:06Z",
+            "end_date_explicit": explicit, "elapsed_total_s": 40.8,
+            "plan": {"requests": 48, "weight": 444, "pages_per_symbol": 44, "limit": 1500},
+            "http": {"by_path": {"/fapi/v1/klines": 44}, "statuses": {"200": 44},
+                     "max_used_weight_1m_header": 441,
+                     "weight_charged_total": 444, "bucket_wait_s": 0.0, "retry_sleeps": 0},
+            "symbols": {"BTCUSDT": sym}, "db": {"candle_total": 64800, "ingest_gap_by_status": {}},
+            "command": "uv run fuzzhelm backfill"}
+
+
+def test_backfill_report_states_seams_gaps_and_times_honestly() -> None:
+    md = cli.backfill_report_md(_stats())
+    assert "запуск 2026-09-18T21:14:26Z, завершення 2026-09-18T21:15:06Z" in md
+    assert "MISMATCH = 0" in md and "останнім повним UTC-днем перед запуском" in md and "**виконано**" in md
+    md = cli.backfill_report_md(_stats(mismatches=2, explicit=True))
+    assert "MISMATCH = 0" not in md and "2 розбіжностей вмісту" in md and "заданою `--end-date`" in md
+    gap = {"id": 5, "status": "PARTIAL", "expected_count": 3, "filled_rows": 1,
+           "ts_lo_utc": "2026-08-05T00:00:00Z", "ts_hi_utc": "2026-08-05T00:02:00Z"}
+    md = cli.backfill_report_md(_stats(gaps=[gap]))
+    assert "| BTCUSDT | 5 | 2026-08-05T00:00:00Z | 2026-08-05T00:02:00Z | 3 | 1 | PARTIAL |" in md
+    doc = cli.window_document(cli.DatasetWindow.from_dict(_stats()["window"]), _stats(explicit=True))
+    assert "explicit --end-date" in doc["definition"] and doc["created_utc"] == "2026-09-18T21:15:06Z"
+    assert doc["first_is_window"]["days"] == [1, 15]
+    assert doc["first_is_window"]["end_ms"] - doc["first_is_window"]["start_ms"] == 15 * DAY
+
+
+def test_replay_report_marks_gap_timestamps_as_replay_time() -> None:
+    """detected_at = closed_at у ingest_gap після реплею — віртуальний час кадрів; звіт мусить це казати,
+    а не створювати враження «добір за 0 мс» у настінному часі."""
+    gap = {"id": 1, "stream": "klines", "detector": "time", "status": "FILLED",
+           "ts_lo_utc": "2026-09-18T19:09:00Z", "ts_hi_utc": "2026-09-18T19:09:00Z", "expected_count": 1,
+           "filled_rows": 1, "attempts": 1, "detected_utc": "2026-09-18T19:10:02.121000Z",
+           "closed_utc": "2026-09-18T19:10:02.121000Z"}
+    res = {"session": "s.jsonl.gz", "session_sha256": "ab" * 32, "reference": "r.jsonl.gz", "run_id": "x",
+           "journal_entries": 3, "journal_head": "cd" * 32, "journal_verify_bad_seq": None, "elapsed_s": 2.3,
+           "candles_released": 3, "trades_emitted": 5, "candle_upsert": {}, "backfill_requests": 1,
+           "backfill_errors": [], "http": {"by_path": {"/fapi/v1/klines": 1}, "statuses": {"200": 1},
+                                           "used_weight_headers": []},
+           "gap_rows": [gap], "transitions": [(1, "OPEN"), (1, "FILLED")], "gap_stats_db": {"FILLED": 1},
+           "recovery": {"lost_candles": 0, "expected_candles": 3, "lost_trades": 0, "expected_trades": 5,
+                        "duplicated_candles": 0, "duplicated_trades": 0, "mismatched_candles": 0,
+                        "zero_loss": True},
+           "invalid": 0, "disconnects": 0, "run_utc": "2026-09-18T21:16:48Z"}
+    md = cli.replay_report_md(res)
+    assert "| виявлено (відтвор. час) | закрито (відтвор. час) | статус |" in md
+    assert "віртуальний час кадрів реплею" in md and "(2026-09-18T21:16:48Z)" in md
+
+
+def test_calibrate_trim_end_bars_shrinks_the_is_window(offline: None, tmp_path: Path,
+                                                       capsys: pytest.CaptureFixture[str]) -> None:
+    win = _window_json(tmp_path)
+    assert cli.main(["calibrate", "--dry-run", "--window-json", str(win), "--trim-end-bars", "1046"]) == 0
+    out = capsys.readouterr().out
+    assert f"= {21600 - 1046} bars" in out and "2026-08-18T06:34:00Z" in out
+    assert cli.main(["calibrate", "--dry-run", "--window-json", str(win), "--trim-end-bars", "21600"]) == 2
+    assert "leaves no bars" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["calibrate", "--trim-end-bars", "-1"])
+    capsys.readouterr()
+
+
+def test_funding_columns_enter_the_backtest_dataset_hash() -> None:
+    """data/funding_*.json → ingest.funding.funding_columns → backtest.dataset.Dataset: інша ставка — інший
+    dataset_hash (так рушій бектесту фіксує фандинг у паспорті прогону)."""
+    from fuzzhelm.backtest.dataset import load_fixture_dataset  # noqa: PLC0415
+
+    ds = load_fixture_dataset()
+    base = {k: getattr(ds, k) for k in ("t_ns", "o", "h", "l", "c", "v", "qv", "n")}
+    cols = funding_columns(_rates())
+    with_f = type(ds).from_arrays(ds.instrument, **base, funding_t_ns=cols["funding_t_ns"],
+                                  funding_rate=cols["funding_rate"])
+    assert set(with_f.columns()) == set(ds.columns()) | {"funding_t_ns", "funding_rate"}
+    assert with_f.dataset_hash == dataset_hash({**ds.columns(), **cols}) != ds.dataset_hash
+    last = FundingRate(**{**_asdict(_rates()[-1]), "funding_rate": Decimal("0.0005")})
+    cols2 = funding_columns([*_rates()[:-1], last])
+    other = type(ds).from_arrays(ds.instrument, **base, funding_t_ns=cols2["funding_t_ns"],
+                                 funding_rate=cols2["funding_rate"])
+    assert other.dataset_hash != with_f.dataset_hash

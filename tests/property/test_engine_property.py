@@ -48,8 +48,13 @@ def test_engine_invariants_hold_for_any_signal_sequence(us: list[float], bad_dq:
         if trip_at is not None and j == trip_at:
             loop.fsm.killswitch.trip("property", close_ns)
         before = abs(loop.portfolio.position_qty(sym))
+        # засувка перед баром (HALTED або kill-switch, спрацьований між барами): жодних приростів на ньому
+        latched = loop.fsm.state is RiskState.HALTED or loop.fsm.killswitch.is_tripped
         sr = loop.step(bar, close_ns, dbar=dbar, dq_score=Decimal("0.5") if j in bad_dq else Decimal(1))
         after = abs(sr.position_qty)
+        if latched:
+            assert after <= before and not [f for f in sr.fills if f.client_order_id in {
+                o.request.client_order_id for o in loop.orders if o.role in ("enter", "flip")}]
         if after > before:
             # приріст можливий лише як виконання рішення попереднього бару, що пройшло ризик-ланцюг
             assert prev is not None and prev.decision is not None

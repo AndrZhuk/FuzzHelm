@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import math
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -67,6 +67,51 @@ def iter_records(path: str | Path) -> Iterator[dict[str, Any]]:
 def iter_frames(path: str | Path) -> Iterator[dict[str, Any]]:
     """Лише записи kind="frame" (сирий доступ для інструментів і тестів)."""
     return (r for r in iter_records(path) if r["kind"] == "frame")
+
+
+STREAM_KINDS: Final = ("kline", "aggTrade", "markPrice", "depth")
+_STREAM_KEY: Final = b'"stream":"'
+
+
+def stream_kind(stream: str) -> str:
+    """Тип потоку за іменем Binance: `btcusdt@kline_1m` → kline; aggTrade, markPrice, depth — так само."""
+    name = stream.split("@", 1)[1] if "@" in stream else stream
+    for kind in STREAM_KINDS:
+        if name.startswith(kind):
+            return kind
+    return name
+
+
+def _line_stream(line: bytes) -> str | None:
+    """Ім'я потоку кадру з сирого рядка без розбору JSON (None — не кадр або ключа немає)."""
+    i = line.find(_STREAM_KEY)
+    if i < 0:
+        return None
+    j = line.find(b'"', i + len(_STREAM_KEY))
+    return None if j < 0 else line[i + len(_STREAM_KEY):j].decode("ascii", "replace")
+
+
+def iter_items(path: str | Path, streams: Collection[str] | None = None) -> Iterator[SessionItem]:
+    """Кадри й записи керування у порядку файлу; `streams` (типи з STREAM_KINDS) — лише ці потоки.
+
+    Фільтр працює ДО розбору JSON (ім'я потоку береться з сирого рядка): для торгового воркера, якому
+    потрібні лише свічки, 45-хвилинна сесія читається без 26 тис. снапшотів книги. Записи керування
+    (connected/disconnected) лишаються завжди.
+    """
+    keep = None if streams is None else frozenset(streams)
+    for line in _open_lines(Path(path)):
+        if keep is not None:
+            name = _line_stream(line)
+            if name is not None and stream_kind(name) not in keep:
+                continue
+        rec = orjson.loads(line)
+        if not isinstance(rec, dict) or rec.get("v") != 1 or "kind" not in rec:
+            raise ValueError(f"{path}: not a v1 session record: {line[:80]!r}")
+        if keep is not None and rec["kind"] == "frame" and stream_kind(str(rec["stream"])) not in keep:
+            continue
+        it = to_item(rec)
+        if it is not None:
+            yield it
 
 
 def to_item(rec: Mapping[str, Any]) -> SessionItem | None:
@@ -159,7 +204,8 @@ class ReplayFeed:
     def __init__(self, path: str | Path, speed: float = math.inf, clock: Clock | None = None, *,
                  sleep: SleepFn | None = None, instrument: InstrumentLike | None = None,
                  src: Src = Src.REPLAY, on_error: Literal["raise", "skip"] = "raise",
-                 order: Literal["arrival", "ingest_ts"] = "arrival") -> None:
+                 order: Literal["arrival", "ingest_ts"] = "arrival",
+                 streams: Collection[str] | None = None) -> None:
         if not speed > 0:
             raise ValueError(f"speed must be > 0 (inf = no pacing), got {speed}")
         self.path = Path(path)
@@ -169,6 +215,7 @@ class ReplayFeed:
         self.src = src
         self.on_error = on_error
         self.order = order
+        self.streams = None if streams is None else frozenset(streams)   # None — усі потоки файлу
         self.header = read_header(self.path)
         self.instrument: InstrumentLike = instrument if instrument is not None else symbol_ref(
             Venue(self.header.get("venue", "BINANCE_USDM")), str(self.header["symbol"]))
@@ -183,7 +230,7 @@ class ReplayFeed:
         return self._clock
 
     def _source(self) -> Iterator[SessionItem]:
-        items = (it for rec in iter_records(self.path) if (it := to_item(rec)) is not None)
+        items = iter_items(self.path, self.streams)
         if self.order == "ingest_ts":
             return iter(sorted(items, key=lambda i: i.ts_ingest_ns))     # стабільне сортування
         return items

@@ -33,7 +33,7 @@ import json
 import math
 import sys
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -335,6 +335,7 @@ async def cmd_backfill(args: argparse.Namespace) -> int:
     engine = _engine(_db_url(args, settings))
     factory = _factory(engine)
     t_all = time.perf_counter()
+    started_utc = _now_utc_iso()
     per_symbol: dict[str, dict[str, Any]] = {}
     try:
         async with _http(args.timeout, log) as http:
@@ -414,7 +415,9 @@ async def cmd_backfill(args: argparse.Namespace) -> int:
 
     stats = {
         "window": window.to_dict(), "clock_offset_ms": offset_ms, "exchange_now_utc": utc_iso(now_ms),
-        "run_started_utc": _now_utc_iso(), "elapsed_total_s": round(time.perf_counter() - t_all, 3),
+        "run_started_utc": started_utc, "run_finished_utc": _now_utc_iso(),
+        "end_date_explicit": args.end_date is not None,
+        "elapsed_total_s": round(time.perf_counter() - t_all, 3),
         "plan": {"requests": plan.total_requests, "weight": plan.total_weight,
                  "pages_per_symbol": plan.pages_per_symbol, "limit": plan.limit},
         "http": {"by_path": log.by_path(), "statuses": {str(k): v for k, v in log.statuses().items()},
@@ -471,10 +474,12 @@ def window_document(window: DatasetWindow, stats: Mapping[str, Any]) -> dict[str
     wf = (load_yaml("profiles/backtest").get("walkforward") or {})
     is_days = int(wf.get("is_days", 15))
     lo, hi = window.sub_window(1, is_days)
+    ending = ("at the explicit --end-date" if stats.get("end_date_explicit")
+              else "at the last full UTC day before the backfill run")
     return {
         "v": 1,
-        "definition": (f"{window.days} full UTC days ending at the last full UTC day before the backfill run "
-                       "(end exclusive); bars are Binance USD-M 1m klines, closed only"),
+        "definition": (f"{window.days} full UTC days ending {ending} (end exclusive); "
+                       "bars are Binance USD-M 1m klines, closed only"),
         "window": window.to_dict(),
         "first_is_window": {"days": [1, is_days], "start_ms": lo, "end_ms": hi, "start_utc": utc_iso(lo),
                             "end_utc_exclusive": utc_iso(hi),
@@ -484,7 +489,7 @@ def window_document(window: DatasetWindow, stats: Mapping[str, Any]) -> dict[str
                                               "last_open_utc", "dataset_hash", "dataset_hash_columns")}
                     for sym, st in stats["symbols"].items()},
         "dataset_hash_method": "backtest.manifest.dataset_hash(CandleRepo.load_arrays(...).columns())",
-        "created_utc": stats["run_started_utc"],
+        "created_utc": stats.get("run_finished_utc", stats["run_started_utc"]),
         "command": stats["command"],
     }
 
@@ -494,14 +499,16 @@ def backfill_report_md(st: Mapping[str, Any]) -> str:
     lines = [
         "# Добір історії: 45 днів 1m-свічок Binance USDⓈ-M у PostgreSQL",
         "",
-        f"Згенеровано `{st['command'].strip()}` (запуск {st['run_started_utc']}, час біржі "
-        f"{st['exchange_now_utc']}, зсув локального годинника {st['clock_offset_ms']} мс). Автор: Андрій "
-        "Жук, 2026.",
+        f"Згенеровано `{st['command'].strip()}` (запуск {st['run_started_utc']}, завершення "
+        f"{st.get('run_finished_utc', '—')}, час біржі на початку {st['exchange_now_utc']}, зсув локального "
+        f"годинника {st['clock_offset_ms']} мс). Автор: Андрій Жук, 2026.",
         "",
         "## Зафіксоване вікно датасету",
         "",
         f"* `[{w['start_utc']}, {w['end_utc_exclusive']})` — {w['days']} повних UTC-днів, що закінчуються "
-        f"останнім повним UTC-днем перед запуском; tf = {w['tf']}; {w['bars_per_symbol']} барів на символ.",
+        + ("заданою `--end-date`" if st.get("end_date_explicit") else
+           "останнім повним UTC-днем перед запуском")
+        + f"; tf = {w['tf']}; {w['bars_per_symbol']} барів на символ.",
         f"* Останній бар: open_time = {w['last_open_utc']}. Машиночитна копія — `data/dataset_window.json`.",
         "",
         "## Результат за символами",
@@ -532,12 +539,12 @@ def backfill_report_md(st: Mapping[str, Any]) -> str:
                            [[sym, g["id"], g["ts_lo_utc"], g["ts_hi_utc"], g["expected_count"],
                              g["filled_rows"], g["status"]] for sym, g in gaps])
     else:
+        mism = sum(s["overlap_mismatches"] for s in st["symbols"].values())
+        seams = ("стики всіх сторінок збіглися дослівно (MISMATCH = 0)" if mism == 0 else
+                 f"на стиках сторінок {mism} розбіжностей вмісту (MISMATCH; збережено новішу версію бару)")
         lines.append("Біржа віддала всі бари вікна: прогалин за неперервністю open_time не виявлено, "
-                     "стики всіх "
-                     "сторінок збіглися дослівно (MISMATCH = 0), тому рядків `ingest_gap` цей прогін не "
-                     "створив. "
-                     "Реальні рядки FILLED — з реплею `gap.jsonl.gz` "
-                     "(`docs/figures/backfill_gap_replay.md`).")
+                     f"{seams}, тому рядків `ingest_gap` цей прогін не створив. Реальні рядки FILLED — з "
+                     "реплею `gap.jsonl.gz` (`docs/figures/backfill_gap_replay.md`).")
     h = st["http"]
     lines += [
         "",
@@ -820,7 +827,7 @@ def plot_crosscheck(a: CrosscheckAnalysis, out: Path) -> Path:
                   color=INK)
     ax2.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), frameon=False, fontsize=8, ncols=3,
                labelcolor=INK_2, borderaxespad=0.2)
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))  # type: ignore[no-untyped-call]
     ax2.set_xlabel("час, UTC", color=INK_2)
     for ax in (ax1, ax2):
         _style_axes(ax)
@@ -1066,6 +1073,44 @@ def cluster_labels(series: CalibrationSeries, centroids: Sequence[Sequence[float
     return X, np.argmin(d2, axis=1).astype(np.int64)
 
 
+FEATURE_LABELS: Final = ("vol_pct", "нахил EMA", "z обсягу")
+
+
+def standardized_centroids(series: CalibrationSeries, centroids: Sequence[Sequence[float]]
+                           ) -> npt.NDArray[np.float64]:
+    """Центроїди в стандартизованих одиницях (x − μ)/σ по колонках IS-вибірки — як їх бачить KMeans."""
+    X, _ = cluster_labels(series, centroids)
+    mu, sd = X.mean(axis=0), X.std(axis=0)
+    sd = np.where(sd > 0.0, sd, 1.0)
+    return (np.asarray(centroids, dtype=np.float64) - mu) / sd
+
+
+def cluster_interpretation_md(series: CalibrationSeries, centroids: Sequence[Sequence[float]]) -> list[str]:
+    """Яка ознака «тримає» кожен кластер: найбільша |координата| стандартизованого центроїда.
+
+    V-терм бере лише координату vol_pct, тож якщо кластер виділено іншою ознакою (напр. сплеском обсягу),
+    його центр на осі V — це середній перцентиль волатильності ЦИХ барів, а не «проміжний режим» за побудовою.
+    """
+    z = standardized_centroids(series, centroids)
+    rows, notes = [], []
+    for name, zc in zip(("LO", "MID", "HI"), z, strict=True):
+        j = int(np.argmax(np.abs(zc)))
+        rows.append([name, *[f"{x:+.3f}" for x in zc], FEATURE_LABELS[j]])
+        if j != 0:
+            notes.append(f"{name} (домінує «{FEATURE_LABELS[j]}», {zc[j]:+.2f} σ; по vol_pct лише "
+                         f"{zc[0]:+.2f} σ)")
+    out = ["Центроїди в стандартизованих одиницях (так їх розділяє KMeans) і ознака, що домінує:", ""]
+    out += _md_table(["терм V", "vol_pct, σ", "нахил EMA, σ", "z обсягу, σ", "домінантна ознака"], rows)
+    if notes:
+        out += ["", "**Інтерпретація.** Не кожен кластер відрізняється саме волатильністю: "
+                + "; ".join(notes) + ". Терм V бере з центроїда лише координату vol_pct (брифінг §5.5), "
+                "тож центр такого терму на осі V — середній перцентиль волатильності барів цього кластера, "
+                "а не окремий «проміжний режим» волатильності; на осі V терми все одно впорядковані й "
+                "покривають [0, 1] без мертвих зон (див. нижче). Обмеження зафіксовано в "
+                "docs/deviations.d/data.md (DATA-09)."]
+    return out
+
+
 def calibration_report_md(run: CalibrationRun, *, window_doc: Mapping[str, Any] | None, command: str,
                           membership_path: str) -> str:
     r, m, s = run.result, run.manifest, run.series
@@ -1126,7 +1171,9 @@ def calibration_report_md(run: CalibrationRun, *, window_doc: Mapping[str, Any] 
     mu_near = np.exp(-((vv[None, :] - np.asarray(V["centres"])[:, None]) ** 2)
                      / (2.0 * np.asarray(V["sigmas_nearest"])[:, None] ** 2)).max(axis=0)
     lines += ["", f"Для порівняння — приклад зі спеки m ≈ ({', '.join(f'{x:.2f}' for x in spec_V)}). "
-              f"Записані в membership.yaml числа округлено до 6 знаків.", "",
+              f"Записані в membership.yaml числа округлено до 6 знаків.", ""]
+    lines += cluster_interpretation_md(s, r["centroids_k3"])
+    lines += ["",
               "**Ширини σ і покриття (мертві зони).** Брифінг вимагає МФ без мертвих зон (тест "
               "`test_mf_coverage_no_dead_zones`: max μ ≥ 0.5 на реальному конфігу). Перевірено обидва "
               "правила σ "
@@ -1276,10 +1323,35 @@ def load_fixture_bars(path: Path) -> tuple[list[Bar], dict[str, Any]]:
     return bars, meta
 
 
+CAL_OUTPUTS: Final = ("membership", "manifest", "report", "figure")
+
+
+def resolve_calibration_outputs(args: argparse.Namespace) -> set[str]:
+    """Підставити шляхи за замовчуванням і повернути, які з CAL_OUTPUTS цей запуск має право писати.
+
+    Робочі артефакти (config/membership.yaml, data/calibration_manifest.json, docs/figures/calibration_*,
+    regimes_clusters.png) — одне узгоджене ціле: source_run_id у YAML = id маніфесту (gate фази 3). Тому за
+    замовчуванням їх пише лише справжнє калібрування з БД без --no-write; --from-fixture і --no-write
+    пишуть тільки явно задані шляхи, а --no-write ніколи не пише membership.yaml.
+    """
+    defaults = {"membership": CONFIG_DIR / "membership.yaml", "manifest": CAL_MANIFEST_JSON,
+                "report": FIG_DIR / "calibration_report.md", "figure": FIG_DIR / "regimes_clusters.png"}
+    explicit = {k for k in CAL_OUTPUTS if getattr(args, k) is not None}
+    for k in CAL_OUTPUTS:
+        if getattr(args, k) is None:
+            setattr(args, k, defaults[k])
+    production = args.from_fixture is None and not args.no_write
+    writes = {k for k in CAL_OUTPUTS if k in explicit or production}
+    if args.no_write:
+        writes.discard("membership")
+    return writes
+
+
 async def cmd_calibrate(args: argparse.Namespace) -> int:
     settings = get_settings()
     seed = args.seed if args.seed is not None else settings.seed
     cfg = load_yaml("detectors")
+    writes = resolve_calibration_outputs(args)
     window_doc: dict[str, Any] | None = None
     if args.from_fixture is not None:
         bars, dataset = load_fixture_bars(args.from_fixture)
@@ -1291,10 +1363,15 @@ async def cmd_calibrate(args: argparse.Namespace) -> int:
     else:
         window, window_doc = load_window(args.window_json)
         lo, hi = window.sub_window(1, args.is_days)
+        if args.trim_end_bars:
+            # перевірка чутливості: без останніх N барів IS (напр. embargo walk-forward, EXE-08) — DATA-10
+            if args.trim_end_bars >= (hi - lo) // MIN_MS:
+                raise CliError(f"--trim-end-bars {args.trim_end_bars} leaves no bars in the IS window")
+            hi -= args.trim_end_bars * MIN_MS
         if args.dry_run:
+            targets = ", ".join(_rel(getattr(args, k)) for k in CAL_OUTPUTS if k in writes) or "no files"
             print("DRY RUN (no DB): would load", args.symbol, f"[{utc_iso(lo)}, {utc_iso(hi)}) = "
-                  f"{(hi - lo) // MIN_MS} bars (days 1–{args.is_days}), seed={seed}, then write "
-                  f"{_rel(args.membership)}, {_rel(args.manifest)}, {_rel(args.report)}, {_rel(args.figure)}")
+                  f"{(hi - lo) // MIN_MS} bars (days 1–{args.is_days}), seed={seed}, then write {targets}")
             return 0
         bars, dataset = await _load_is_bars(args, settings, window, lo, hi)
     run = run_calibration(bars, seed=seed, detectors_cfg=cfg, dataset=dataset)
@@ -1314,16 +1391,27 @@ async def cmd_calibrate(args: argparse.Namespace) -> int:
         command = f"uv run fuzzhelm calibrate --from-fixture {_rel(args.from_fixture)}"
     else:
         command = f"uv run fuzzhelm calibrate --symbol {args.symbol} --is-days {args.is_days} --seed {seed}"
-    manifest_doc = {"id": run.run_id, **run.manifest, "result": _jsonable(r), "command": command,
-                    "created_utc": _now_utc_iso()}
-    _write_json(args.manifest, manifest_doc)
-    if not args.no_write:
+        if args.trim_end_bars:
+            command += f" --trim-end-bars {args.trim_end_bars}"
+    if not writes:
+        print("no files written: --from-fixture / --no-write never touch the committed calibration "
+              "artifacts; pass --membership/--manifest/--report/--figure explicitly to save outputs")
+        return 0
+    if "manifest" in writes:
+        manifest_doc = {"id": run.run_id, **run.manifest, "result": _jsonable(r), "command": command,
+                        "created_utc": _now_utc_iso()}
+        _write_json(args.manifest, manifest_doc)
+    if "membership" in writes:
         write_membership_yaml(r, args.membership, source_run_id=run.run_id)
         print(f"wrote {_rel(args.membership)} (source_run_id={run.run_id})")
-    _write_text(args.report, calibration_report_md(run, window_doc=window_doc, command=command,
-                                                   membership_path=_rel(args.membership)))
-    plot_calibration(run, args.figure)
-    print(f"wrote {_rel(args.manifest)}, {_rel(args.report)}, {_rel(args.figure)}")
+    if "report" in writes:
+        _write_text(args.report, calibration_report_md(run, window_doc=window_doc, command=command,
+                                                       membership_path=_rel(args.membership)))
+    if "figure" in writes:
+        plot_calibration(run, args.figure)
+    written = [_rel(getattr(args, k)) for k in ("manifest", "report", "figure") if k in writes]
+    if written:
+        print(f"wrote {', '.join(written)}")
     return 0
 
 
@@ -1360,7 +1448,9 @@ async def _load_is_bars(args: argparse.Namespace, settings: Settings, window: Da
                        f"expected {expected} — backfill the window first")
     cols = arrays.columns()
     dataset = {"symbol": args.symbol, "symbol_canon": row.symbol_canon, "tf": window.tf, "from_ms": lo,
-               "to_ms": hi, "from_utc": utc_iso(lo), "to_utc": utc_iso(hi), "days": f"1–{args.is_days}",
+               "to_ms": hi, "from_utc": utc_iso(lo), "to_utc": utc_iso(hi),
+               "days": f"1–{args.is_days}"
+               + (f" без останніх {args.trim_end_bars} барів" if args.trim_end_bars else ""),
                "n_bars": len(arrays), "dataset_hash": dataset_hash(cols),
                "dataset_hash_columns": sorted(cols)}
     return arrays.bars(), dataset
@@ -1525,12 +1615,16 @@ def replay_report_md(res: Mapping[str, Any]) -> str:
         "",
     ]
     lines += _md_table(["id", "stream", "detector", "перший відсутній", "останній відсутній", "очікувано",
-                        "добрано", "спроб", "виявлено (відтвор. час)", "закрито", "статус"],
+                        "добрано", "спроб", "виявлено (відтвор. час)", "закрито (відтвор. час)", "статус"],
                        [[g["id"], g["stream"], g["detector"], g["ts_lo_utc"], g["ts_hi_utc"],
                          g["expected_count"], g["filled_rows"], g["attempts"], g["detected_utc"],
                          g["closed_utc"], f"**{g['status']}**"] for g in res["gap_rows"]])
     h = res["http"]
     lines += [
+        "",
+        "Мітки `detected_at`/`closed_at` у `ingest_gap` — віртуальний час кадрів реплею (`FrameClock`), а "
+        "не настінний: у віртуальному часі добір миттєвий, тож вони збігаються. Справжні REST-запити "
+        f"пішли під час прогону ({res['run_utc']}).",
         "",
         f"Переходи станів (gap_id → статус): {', '.join(f'{i}→{s}' for i, s in res['transitions'])}.",
         "",
@@ -1676,6 +1770,16 @@ def _positive_int(text: str) -> int:
     return v
 
 
+def _non_negative_int(text: str) -> int:
+    try:
+        v = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer, got {text!r}") from None
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer, got {text!r}")
+    return v
+
+
 def _limit(text: str) -> int:
     v = _positive_int(text)
     if not 2 <= v <= MAX_KLINES_LIMIT:
@@ -1750,14 +1854,23 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--symbol", default="BTCUSDT")
     k.add_argument("--window-json", type=Path, default=WINDOW_JSON)
     k.add_argument("--is-days", type=_positive_int, default=_default_is_days())
+    k.add_argument("--trim-end-bars", type=_non_negative_int, default=0,
+                   help="sensitivity check: drop the last N bars of the IS window "
+                        "(e.g. the walk-forward embargo)")
     k.add_argument("--seed", type=int, default=None, help="default: FUZZHELM_SEED (20260918)")
-    k.add_argument("--membership", type=Path, default=CONFIG_DIR / "membership.yaml")
-    k.add_argument("--manifest", type=Path, default=CAL_MANIFEST_JSON)
-    k.add_argument("--report", type=Path, default=FIG_DIR / "calibration_report.md")
-    k.add_argument("--figure", type=Path, default=FIG_DIR / "regimes_clusters.png")
-    k.add_argument("--from-fixture", type=Path, default=None, help="offline bars from a golden klines JSON")
-    k.add_argument("--no-write", action="store_true", help="do not rewrite membership.yaml")
-    k.add_argument("--dry-run", action="store_true", help="compute and print only (no files)")
+    # None = робочий артефакт за замовчуванням; його пише лише справжнє калібрування з БД без --no-write
+    k.add_argument("--membership", type=Path, default=None, help="default: config/membership.yaml")
+    k.add_argument("--manifest", type=Path, default=None, help="default: data/calibration_manifest.json")
+    k.add_argument("--report", type=Path, default=None, help="default: docs/figures/calibration_report.md")
+    k.add_argument("--figure", type=Path, default=None, help="default: docs/figures/regimes_clusters.png")
+    k.add_argument("--from-fixture", type=Path, default=None,
+                   help="offline bars from a golden klines JSON; writes ONLY the paths given explicitly")
+    k.add_argument("--no-write", action="store_true",
+                   help="never rewrite membership.yaml; manifest/report/figure are written only to paths "
+                        "given explicitly (the committed artifacts stay untouched)")
+    k.add_argument("--dry-run", action="store_true",
+                   help="DB mode: print the plan, touch no DB; "
+                        "--from-fixture: compute and print, write no files")
 
     r = sub.add_parser("replay-gap", help="replay the gap scenario into the DB with the real REST backfill")
     r.add_argument("--session", type=Path, default=GAP_SESSION)
@@ -1774,7 +1887,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-HANDLERS: Final[dict[str, Callable[[argparse.Namespace], Awaitable[int]]]] = {
+HANDLERS: Final[dict[str, Callable[[argparse.Namespace], Coroutine[Any, Any, int]]]] = {
     "backfill": cmd_backfill,
     "crosscheck": cmd_crosscheck,
     "fetch-funding": cmd_fetch_funding,

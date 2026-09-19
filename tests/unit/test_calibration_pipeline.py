@@ -35,6 +35,7 @@ from fuzzhelm.regimes.calibrate_mf import (
     calibrate,
     coverage_min,
     t_symmetric_breakpoints,
+    t_terms,
     v_sigmas,
     v_sigmas_cover,
     write_membership_yaml,
@@ -98,7 +99,9 @@ def test_series_is_causal_future_bars_do_not_change_the_past(bars: list[Bar], cf
     full = cli.calibration_series(bars, cfg)
     part = cli.calibration_series(bars[:1500], cfg)
     np.testing.assert_array_equal(full.T[:1500], part.T)
-    np.testing.assert_array_equal(full.vol_pct[:1500], part.vol_pct)
+    # усі три ознаки кластеризації режимів (не лише V) — причинні
+    for name in ("vol_pct", "ema_slope_norm", "volume_z", "R", "V"):
+        np.testing.assert_array_equal(getattr(full, name)[:1500], getattr(part, name))
     with pytest.raises(ValueError, match="strictly increasing"):
         cli.calibration_series([bars[1], bars[0]], cfg)
 
@@ -220,3 +223,110 @@ def test_cli_calibrate_from_fixture_writes_all_artifacts(tmp_path: Path, capsys:
     report = paths["--report"].read_text(encoding="utf-8")
     assert manifest["id"] in report and "Силует обирає" in report and "мертві зони" in report
     assert paths["--figure"].stat().st_size > 10_000
+
+
+def test_fixture_and_no_write_calibrations_never_touch_the_committed_artifacts(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Регресія рецензії: `--no-write` раніше все одно переписував data/calibration_manifest.json, звіт і
+    рисунок за замовчуванням (id маніфесту розходився б із source_run_id у membership.yaml — gate фази 3), а
+    `--from-fixture` без шляхів переписував робочий config/membership.yaml калібруванням на фікстурі."""
+    prod = tmp_path / "prod"                                     # «робочі» шляхи за замовчуванням
+    monkeypatch.setattr(cli, "CONFIG_DIR", prod / "config")
+    monkeypatch.setattr(cli, "CAL_MANIFEST_JSON", prod / "data" / "calibration_manifest.json")
+    monkeypatch.setattr(cli, "FIG_DIR", prod / "figures")
+    base = ["calibrate", "--from-fixture", str(FIXTURE), "--seed", str(SEED)]
+    assert cli.resolve_calibration_outputs(cli.build_parser().parse_args(base)) == set()   # «no files»
+    rep, mem = tmp_path / "r.md", tmp_path / "m.yaml"
+    shutil.copy(ROOT / "config" / "membership.yaml", mem)
+    before = mem.read_bytes()
+    assert cli.main([*base, "--no-write", "--report", str(rep), "--membership", str(mem)]) == 0
+    capsys.readouterr()
+    assert rep.exists() and not prod.exists()                    # лише явно заданий звіт
+    assert mem.read_bytes() == before                            # --no-write: YAML ніколи, навіть явний
+    # справжнє калібрування з БД без --no-write пише всі чотири робочі артефакти
+    args = cli.build_parser().parse_args(["calibrate"])
+    assert cli.resolve_calibration_outputs(args) == set(cli.CAL_OUTPUTS)
+    assert args.membership == prod / "config" / "membership.yaml"
+    args = cli.build_parser().parse_args(["calibrate", "--no-write", "--manifest", str(tmp_path / "x.json")])
+    assert cli.resolve_calibration_outputs(args) == {"manifest"}
+
+
+def test_committed_membership_is_the_recorded_calibration_phase3_gate() -> None:
+    """Gate фази 3: у config/membership.yaml немає <<TBD>>/provisional у V, а числа T/V — саме ті, що
+    записав прогін калібрування з data/calibration_manifest.json (округлені до 6 знаків), з тим самим
+    source_run_id."""
+    mpath, cpath = ROOT / "data" / "calibration_manifest.json", ROOT / "config" / "membership.yaml"
+    if not mpath.exists():
+        pytest.skip("data/calibration_manifest.json is produced by `fuzzhelm calibrate`")
+    text = cpath.read_text(encoding="utf-8")
+    assert "<<TBD" not in text
+    man = orjson.loads(mpath.read_bytes())
+    doc = yaml.safe_load(text)["variables"]
+    V, T = doc["V"], doc["T"]
+    assert V["provisional"] is False and V["source"] == "kmeans" and T["source"] == "percentile"
+    assert V["source_run_id"] == T["source_run_id"] == man["id"] == man["result"]["source_run_id"]
+    keys = ("kind", "v", "dataset", "n_bars", "warmup_bars", "seed", "detectors_config_hash",
+            "feature_params", "method")
+    assert man["id"] == cli.manifest_id({k: man[k] for k in keys})
+    res = man["result"]
+    assert V["silhouette"] == round(res["V"]["silhouette"], 6)
+    for name, m, s in zip(("LO", "MID", "HI"), res["V"]["centres"], res["V"]["sigmas"], strict=True):
+        assert V["terms"][name] == {"type": "gauss", "m": round(m, 6), "sigma": round(s, 6)}
+    bp = [round(x, 6) for x in res["T"]["breakpoints"]]
+    assert T["terms"]["STRONG_DOWN"]["points"] == [-1.0, -1.0, bp[0], bp[1]]
+    assert T["terms"]["NEUTRAL"]["points"] == [bp[1], bp[2], bp[3]]
+    assert T["terms"]["STRONG_UP"]["points"] == [bp[3], bp[4], 1.0, 1.0]
+    # калібрування — лише на першому IS-вікні (дні 1–15), до будь-якого OOS
+    win = orjson.loads((ROOT / "data" / "dataset_window.json").read_bytes())
+    assert man["dataset"]["from_ms"] == win["first_is_window"]["start_ms"]
+    assert man["dataset"]["to_ms"] == win["first_is_window"]["end_ms"] and man["dataset"]["n_bars"] == 21600
+
+
+def test_cluster_interpretation_names_the_dominant_standardized_feature(run: cli.CalibrationRun) -> None:
+    s, cents = run.series, run.result["centroids_k3"]
+    z = cli.standardized_centroids(s, cents)
+    X, labels = cli.cluster_labels(s, cents)
+    # стандартизований центроїд = (центроїд − μ)/σ колонок; мітки — найближчий центроїд у тих самих
+    # координатах
+    np.testing.assert_allclose(z * X.std(axis=0) + X.mean(axis=0), cents, rtol=1e-12, atol=1e-12)
+    lines = cli.cluster_interpretation_md(s, cents)
+    rows = [ln for ln in lines if ln.startswith("| LO") or ln.startswith("| MID") or ln.startswith("| HI")]
+    assert len(rows) == 3
+    for row, zc in zip(rows, z, strict=True):
+        assert row.rstrip(" |").endswith(cli.FEATURE_LABELS[int(np.argmax(np.abs(zc)))])
+    assert set(np.unique(labels)) <= {0, 1, 2}
+    # на синтетичних даних зі «сплесковим» кластером інтерпретація це називає
+    rng = np.random.default_rng(1)
+    n = 3000
+    vol = rng.uniform(0, 1, n)
+    vz = np.where(rng.uniform(size=n) < 0.1, rng.normal(4.0, 0.5, n), rng.normal(0.0, 0.5, n))
+    slope = rng.normal(0, 0.01, n)
+    syn = cli.CalibrationSeries(np.arange(n, dtype=np.int64), vol, vol, vol, vol, slope, vz, 0)
+    cents_syn = [[0.2, 0.0, 0.0], [0.5, 0.0, 4.0], [0.8, 0.0, 0.0]]
+    text = "\n".join(cli.cluster_interpretation_md(syn, cents_syn))
+    assert "MID (домінує «z обсягу»" in text and "DATA-09" in text
+
+
+def test_raw_t_percentiles_would_break_the_engine_odd_symmetry() -> None:
+    """Обґрунтування DATA-06 на справжньому калібруванні: сирі (несиметричні) перцентилі T зламали б
+    u(−T, −R, V) = −u(T, R, V) і тест брифінгу G13 (u(0, 0, V) = 0), а записані симетризовані — ні."""
+    mpath = ROOT / "data" / "calibration_manifest.json"
+    if not mpath.exists():
+        pytest.skip("data/calibration_manifest.json is produced by `fuzzhelm calibrate`")
+    res = orjson.loads(mpath.read_bytes())["result"]
+    base = yaml.safe_load((ROOT / "config" / "membership.yaml").read_text(encoding="utf-8"))
+
+    def engine(bp: list[float]) -> MamdaniEngine:
+        doc = {**base, "variables": {**base["variables"],
+                                     "T": {**base["variables"]["T"], "terms": t_terms(bp)}}}
+        mc = load_membership(doc)
+        return MamdaniEngine(mc, load_rulebase(None, mc))
+
+    sym, raw = engine(res["T"]["breakpoints"]), engine(res["T"]["raw_breakpoints"])
+    for v in (0.0, 0.2, 0.5, 0.88, 1.0):
+        assert abs(sym.infer_u(0.0, 0.0, v)) <= 1e-12
+    assert max(abs(raw.infer_u(0.0, 0.0, v)) for v in (0.0, 0.2, 0.5, 0.88, 1.0)) > 0.03
+    # найгірша точка сітки 201×41×21 (T, R, V), знайдена при розслідуванні DATA-06
+    t, r, v = 0.03, -1.0, 0.2
+    assert abs(raw.infer_u(t, r, v) + raw.infer_u(-t, -r, v)) > 0.16
+    assert abs(sym.infer_u(t, r, v) + sym.infer_u(-t, -r, v)) <= 1e-12

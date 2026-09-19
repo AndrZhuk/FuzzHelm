@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fuzzhelm.api.auth import Permission, Principal
 from fuzzhelm.api.deps import ServicesDep, require
 from fuzzhelm.api.explain import ExplainError, explain_decision
-from fuzzhelm.api.schemas import ErrorResponse
+from fuzzhelm.api.schemas import INT64_MAX, ErrorResponse
 from fuzzhelm.config import load_yaml
 
 router = APIRouter(prefix="/decisions", tags=["decisions"])
@@ -62,7 +62,7 @@ EXPLAIN_EXAMPLE: dict[str, Any] = {
     },
 )
 async def explain(
-    decision_id: Annotated[int, Path(ge=1)],
+    decision_id: Annotated[int, Path(ge=1, le=INT64_MAX)],
     services: ServicesDep,
     _: Annotated[Principal, Depends(require(Permission.DECISION_READ))],
     mf_points: Annotated[int, Query(ge=11, le=1001, description="Samples per membership curve.")] = 101,

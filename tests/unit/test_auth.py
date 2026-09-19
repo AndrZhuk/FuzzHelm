@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from jose import jwt
+from passlib.context import CryptContext
 
 from fuzzhelm.api.auth import (
     ACCESS_MATRIX,
@@ -21,8 +22,12 @@ from fuzzhelm.api.auth import (
     decode_token,
     issue_token,
 )
+from fuzzhelm.api.main import weak_jwt_secret
+from fuzzhelm.api.routers.auth import check_password
 from fuzzhelm.core.clock import FixedClock, ManualClock
 from fuzzhelm.core.enums import Role
+from fuzzhelm.storage.repositories import UserRow
+from fuzzhelm.storage.repositories.user import hash_password
 
 SECRET = "unit-test-secret-" + "k" * 32
 NS = 1_000_000_000
@@ -132,3 +137,22 @@ def test_login_rate_limiter_memory_is_bounded() -> None:
     for i in range(1_000):
         lim.record_failure(f"ip:{i}")
     assert len(lim._fails) <= 100
+
+
+def test_check_password_same_semantics_as_repo_authenticate() -> None:
+    """Перевірка пароля для /auth/login (виконується в потоці): невідомий логін, хибний пароль і пароль
+    довший за 72 байти bcrypt — однаково False; правильний — True."""
+    ctx = CryptContext(schemes=["bcrypt"], bcrypt__rounds=4)
+    pwd_hash = hash_password("s3cret-pass", ctx)
+    user = UserRow(id=1, login="admin", pwd_hash=pwd_hash, role="admin", created_at_ns=0)
+    assert check_password(user, "s3cret-pass", ctx) is True
+    assert check_password(user, "wrong", ctx) is False
+    assert check_password(user, "s3cret-pass" + "x" * 80, ctx) is False  # bcrypt обрізав би хвіст
+    assert check_password(None, "s3cret-pass", ctx) is False  # dummy_verify, без винятку
+    assert check_password(UserRow(1, "admin", None, "admin", 0), "s3cret-pass", ctx) is False
+
+
+def test_weak_jwt_secret_detects_dev_defaults_and_short_keys() -> None:
+    assert weak_jwt_secret("dev-only-change-me") and weak_jwt_secret("change-me") and weak_jwt_secret("")
+    assert weak_jwt_secret("x" * 31)  # < 256 біт для HS256
+    assert not weak_jwt_secret(SECRET) and len(SECRET) >= 32

@@ -10,12 +10,17 @@
 уточнюються оптимізатором (Нелдер–Мід з найкращих точок сітки), а поріг кроку «грубої» монотонності
 шукається бісекцією — сіткові оцінки занижують реверс і завищують запас (FZ-01).
 
-Запуск:  uv run python scripts/plot_control_surface.py [--n 201] [--skip-scan] [--no-refine]
+Незалежна перехресна перевірка (хвиля 2, data): глобальна диференціальна еволюція (scipy, `--de-seeds`
+сідів) + полірування Нелдером–Мідом для тих самих величин і для кроків навколо g* — локальний оптимізатор
+із сіткових стартів міг би пропустити гірший мінімум.
+
+Запуск:  uv run python scripts/plot_control_surface.py [--n 201] [--skip-scan] [--no-refine] [--de-seeds 6]
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -26,7 +31,7 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-from scipy.optimize import minimize
+from scipy.optimize import differential_evolution, minimize
 
 from fuzzhelm.fuzzy.linear import LinearVoteEngine
 from fuzzhelm.fuzzy.mamdani import MamdaniEngine
@@ -207,6 +212,57 @@ def gap_threshold(engine: MamdaniEngine, U: np.ndarray, ts: np.ndarray, rs: np.n
     return hi, refine_margin(engine, U, ts, rs, vs, hi)[0]
 
 
+def _polish(fun: Callable[[np.ndarray], float], x0: np.ndarray) -> tuple[float, np.ndarray]:
+    res = minimize(fun, x0, method="Nelder-Mead",
+                   options={"xatol": 1e-11, "fatol": 1e-14, "maxiter": 8000, "maxfev": 16000})
+    return float(res.fun), np.asarray(res.x, dtype=np.float64)
+
+
+def de_search(fun: Callable[[np.ndarray], float], bounds: Sequence[tuple[float, float]], seeds: int
+              ) -> tuple[float, np.ndarray]:
+    """min fun: диференціальна еволюція (seed = 0..seeds−1) + полірування Нелдером–Мідом; найкраще з усіх.
+    Обмеження (T₁ ≤ T₂, межі діапазонів) тримає сама параметризація `fun` (abs/clip), тож полірування
+    без меж їх не порушує."""
+    best_f, best_x = np.inf, np.zeros(len(bounds))
+    for sd in range(seeds):
+        r = differential_evolution(fun, bounds, seed=sd, tol=1e-12, maxiter=400, popsize=20, polish=False)
+        f, x = _polish(fun, np.asarray(r.x, dtype=np.float64))
+        if min(f, float(r.fun)) < best_f:
+            best_f, best_x = (f, x) if f <= r.fun else (float(r.fun), np.asarray(r.x, dtype=np.float64))
+    return best_f, best_x
+
+
+def de_crosscheck(engine: MamdaniEngine, seeds: int, gaps: Sequence[float]
+                  ) -> list[tuple[str, float, tuple[float, float, float, float]]]:
+    """Ті самі величини, що й refine_*, але глобальним пошуком: sup реверсу і inf запасу для кожного кроку."""
+    u = engine.infer_u
+
+    def rev_point(x: np.ndarray) -> tuple[float, float, float, float]:
+        t1 = _clip(x[0], -1.0, 1.0)
+        return t1, _clip(t1 + abs(x[1]), -1.0, 1.0), _clip(x[2], -1.0, 1.0), _clip(x[3], 0.0, 1.0)
+
+    def rev(x: np.ndarray) -> float:
+        t1, t2, r, v = rev_point(x)
+        return -(u(t1, r, v) - u(t2, r, v))
+
+    out: list[tuple[str, float, tuple[float, float, float, float]]] = []
+    f, x = de_search(rev, [(-1.0, 1.0), (0.0, 2.0), (-1.0, 1.0), (0.0, 1.0)], seeds)
+    out.append(("sup локального реверсу u(T₁) − u(T₂), T₁ ≤ T₂", -f, rev_point(x)))
+    for gap in gaps:
+        def m_point(x: np.ndarray, g: float = gap) -> tuple[float, float, float, float]:
+            t1 = _clip(x[0], -1.0, 1.0 - g)
+            return t1, _clip(t1 + g + abs(x[1]), -1.0, 1.0), _clip(x[2], -1.0, 1.0), _clip(x[3], 0.0, 1.0)
+
+        def marg(x: np.ndarray, pt: Callable[[np.ndarray], tuple[float, float, float, float]] = m_point
+                 ) -> float:
+            t1, t2, r, v = pt(x)
+            return u(t2, r, v) - u(t1, r, v)
+
+        f, x = de_search(marg, [(-1.0, 1.0 - gap), (0.0, 2.0), (-1.0, 1.0), (0.0, 1.0)], seeds)
+        out.append((f"inf запасу «грубої» монотонності, крок {gap:.4f}", f, m_point(x)))
+    return out
+
+
 def hysteresis_rows(U: np.ndarray, enter: float = ENTER) -> tuple[int, int]:
     """Рядки (V, R), у яких рішення «u ≥ enter» немонотонне за T (1 → 0 при зростанні T)."""
     on = np.greater_equal(U, enter)
@@ -214,7 +270,8 @@ def hysteresis_rows(U: np.ndarray, enter: float = ENTER) -> tuple[int, int]:
     return int(bad.sum()), int(bad.size)
 
 
-def write_monotonicity(engine: MamdaniEngine, out: Path, *, refine: bool = True) -> None:
+def write_monotonicity(engine: MamdaniEngine, out: Path, *, refine: bool = True, de_seeds: int = 0,
+                       command: str = "uv run python scripts/plot_control_surface.py") -> None:
     t0 = time.perf_counter()
     rep = monotonicity_scan(engine, n_T=801, n_R=161, n_V=81, gap=1.0)
     lin = monotonicity_scan(LinearVoteEngine(), n_T=201, n_R=41, n_V=5, gap=1.0)
@@ -229,7 +286,7 @@ def write_monotonicity(engine: MamdaniEngine, out: Path, *, refine: bool = True)
         "",
         f"Конфігурація: `config/membership.yaml` (V-блок: "
         f"{'ТИМЧАСОВИЙ (provisional)' if provisional else f'калібрований, source_run_id = {run_id}'}). "
-        f"Згенеровано `uv run python scripts/plot_control_surface.py`.",
+        f"Згенеровано `{command}`.",
         "",
         f"Сітка T×R×V = {rep.n_T}×{rep.n_R}×{rep.n_V}; час сканування {dt:.1f} с.",
         "",
@@ -288,6 +345,26 @@ def write_monotonicity(engine: MamdaniEngine, out: Path, *, refine: bool = True)
         ]
     else:
         lines += ["Це оцінки на сітці (без уточнення оптимізатором, `--no-refine`).", ""]
+        g_star = float("nan")
+    if de_seeds > 0:
+        t0 = time.perf_counter()
+        gaps = [1.0, *([round(g_star - 0.05, 4), round(g_star, 4)] if np.isfinite(g_star) else [])]
+        rows = de_crosscheck(engine, de_seeds, gaps)
+        dt3 = time.perf_counter() - t0
+        lines += [
+            "## Незалежна перевірка глобальним пошуком (диференціальна еволюція + Нелдер–Мід)",
+            "",
+            f"`scipy.optimize.differential_evolution` (popsize 20, maxiter 400, seed = 0…{de_seeds - 1}) з "
+            f"поліруванням Нелдером–Мідом; найкраще з {de_seeds} запусків; час {dt3:.1f} с. Глобальний пошук "
+            "не залежить від сіткових стартів; розбіжність з таблицею вище означала б, що локальне уточнення "
+            "пропустило гірший мінімум.",
+            "",
+            "| Показник | Значення | Точка |",
+            "|---|---|---|",
+            *[f"| {name} | {val:.5f} | T₁ = {p[0]:.5f}, T₂ = {p[1]:.5f}, R = {p[2]:.5f}, V = {p[3]:.5f} |"
+              for name, val, p in rows],
+            "",
+        ]
     out.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
     print(f"wrote {_rel(out)}")
@@ -298,13 +375,17 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=201, help="точок сітки на вісь поверхні")
     ap.add_argument("--skip-scan", action="store_true", help="не запускати аудит монотонності")
     ap.add_argument("--no-refine", action="store_true", help="лише сітка, без уточнення оптимізатором")
+    ap.add_argument("--de-seeds", type=int, default=6,
+                    help="сідів диференціальної еволюції для перехресної перевірки (0 — пропустити)")
     args = ap.parse_args()
     membership = load_membership()
     engine = MamdaniEngine(membership, load_rulebase(None, membership, production=True))
     plot_surface(engine, args.n, FIG_DIR / "fuzzy_control_surface.png")
     write_rules_table(engine, FIG_DIR / "fuzzy_rules_table.md")
     if not args.skip_scan:
-        write_monotonicity(engine, FIG_DIR / "fuzzy_monotonicity.md", refine=not args.no_refine)
+        command = " ".join(["uv run python scripts/plot_control_surface.py", *sys.argv[1:]])
+        write_monotonicity(engine, FIG_DIR / "fuzzy_monotonicity.md", refine=not args.no_refine,
+                           de_seeds=args.de_seeds, command=command)
 
 
 if __name__ == "__main__":

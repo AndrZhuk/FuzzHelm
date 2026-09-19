@@ -19,6 +19,7 @@ from fuzzhelm.api.auth import Permission, Principal
 from fuzzhelm.api.deps import ServicesDep, client_ip, require
 from fuzzhelm.api.live import LIVE_CHANNEL
 from fuzzhelm.api.schemas import (
+    INT32_MAX,
     ErrorResponse,
     StrategyDetailOut,
     StrategyIn,
@@ -106,7 +107,7 @@ async def list_versions(
 )
 async def get_version(
     name: NamePath,
-    version: Annotated[int, Path(ge=1)],
+    version: Annotated[int, Path(ge=1, le=INT32_MAX)],
     services: ServicesDep,
     _: Annotated[Principal, Depends(require(Permission.STRATEGY_READ))],
 ) -> dict[str, Any]:
@@ -251,7 +252,7 @@ async def activate_version(
     request: Request,
     services: ServicesDep,
     principal: Annotated[Principal, Depends(require(Permission.STRATEGY_WRITE))],
-    version: Annotated[int, Query(ge=1)],
+    version: Annotated[int, Query(ge=1, le=INT32_MAX)],
 ) -> dict[str, Any]:
     async with services.uow() as repos:
         row = await repos.strategies.get_version(name, version)

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from fuzzhelm.api.auth import Permission, Principal
 from fuzzhelm.api.deps import ServicesDep, require
-from fuzzhelm.api.schemas import EquityOut, ErrorResponse, MetricsOut, RunOut
+from fuzzhelm.api.schemas import INT64_MAX, EquityOut, ErrorResponse, MetricsOut, RunOut
 from fuzzhelm.api.views import equity_out, finite_metrics, run_out
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -110,8 +110,8 @@ async def get_equity(
     run_id: UUID,
     services: ServicesDep,
     _: RunRead,
-    from_ns: Annotated[int | None, Query(ge=0)] = None,
-    to_ns: Annotated[int | None, Query(ge=0)] = None,
+    from_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX)] = None,
+    to_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX)] = None,
     max_points: Annotated[int, Query(ge=2, le=100_000)] = 5_000,
 ) -> dict[str, Any]:
     async with services.uow() as repos:

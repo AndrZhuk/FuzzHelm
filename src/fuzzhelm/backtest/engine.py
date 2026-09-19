@@ -41,10 +41,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from functools import cached_property
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fuzzhelm.backtest.dataset import BARS_PER_YEAR, TF_NS, Dataset, dec_bar_of
 from fuzzhelm.backtest.manifest import RunManifest, build_manifest, canonicalize_config, config_hash
@@ -54,7 +55,8 @@ from fuzzhelm.core.clock import NS_PER_MIN, ManualClock, SeededIdGenerator
 from fuzzhelm.core.digest import canonical_json
 from fuzzhelm.core.dto import Candle, Fill, Instrument, OrderAck, OrderRequest
 from fuzzhelm.core.enums import ExitReason, OrderStatus, OrderType, RejectCode, RiskState, Role, RunKind, Side
-from fuzzhelm.core.journal import EventJournal
+from fuzzhelm.core.errors import ConfigValidationError
+from fuzzhelm.core.journal import EventJournal, JournalEntry
 from fuzzhelm.core.money import D0, D1, dec, floor_qty, quantize_price
 from fuzzhelm.core.ports import IdGenerator
 from fuzzhelm.decision.core import DecisionCore
@@ -92,6 +94,7 @@ TREE_FILES: dict[str, str] = {
     "cost_model": "cost_model", "membership": "membership", "rules": "rules_mamdani",
 }
 _NON_IDENTITY = ("record_traces", "check_invariants", "invariant_tolerance")
+_FINAL_STATUSES = frozenset({OrderStatus.FILLED, OrderStatus.REJECTED, OrderStatus.CANCELED})
 
 
 class EngineInvariantError(AssertionError):
@@ -117,6 +120,57 @@ def _f(x: Any) -> float:
 
 
 # ====================================================================== конфігурація
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _TakeProfitCfg(_Strict):
+    multiple_of_stop: float = Field(2.0, gt=0)
+
+
+class _SigmaBaseCfg(_Strict):
+    method: Literal["warmup_median"] = "warmup_median"     # єдиний реалізований спосіб (ENG-02)
+
+
+class _WarmupCfg(_Strict):
+    bars: int | None = Field(None, ge=1)
+
+
+class _FundingCfg(_Strict):
+    fallback_rate: float | str = 0.0001
+    match_window_s: float = Field(60, gt=0)
+
+
+class _LinearCfg(_Strict):
+    weights: dict[str, float]
+
+
+class EngineTreeCfg(_Strict):
+    """Схема config/engine.yaml (невідомий ключ або значення поза доменом → ConfigValidationError)."""
+
+    version: int = 1
+    engine: Literal["mamdani", "linear"] = "mamdani"
+    cost_mode: Literal["zero", "sqrt_impact", "full"] | None = None
+    initial_equity: float | str = "10000"
+    take_profit: _TakeProfitCfg = _TakeProfitCfg()
+    sigma_base: _SigmaBaseCfg = _SigmaBaseCfg()
+    warmup: _WarmupCfg = _WarmupCfg()
+    funding: _FundingCfg = _FundingCfg()
+    linear: _LinearCfg | None = None
+    record_traces: Literal["all", "trades", "none"] = "trades"
+    check_invariants: bool = False
+    invariant_tolerance: float | str = "1E-9"
+
+
+def validate_engine_tree(tree: Mapping[str, Any]) -> EngineTreeCfg:
+    try:
+        return EngineTreeCfg.model_validate(dict(tree))
+    except ValidationError as e:
+        err = e.errors()[0]
+        path = "engine." + ".".join(str(x) for x in err["loc"]) if err["loc"] else "engine"
+        raise ConfigValidationError(err["msg"], path=path) from e
 
 
 @dataclass(frozen=True)
@@ -159,6 +213,7 @@ class BacktestConfig:
         s = object.__setattr__
         s(self, "trees", trees)
         eng = trees["engine"]
+        validate_engine_tree(eng)
         risk = trees["risk_limits"]
         sizing = risk.get("sizing", {})
         hyst = risk.get("hysteresis", {})
@@ -306,14 +361,20 @@ class BacktestConfig:
 
 
 _ENGINE_CACHE: dict[bytes, MamdaniEngine] = {}
+_ENGINE_CACHE_SIZE = 16     # різних баз правил у процесі (API з CRUD стратегій живе довго)
 
 
 def _mamdani(key: bytes, membership: Mapping[str, Any], rules: Mapping[str, Any]) -> MamdaniEngine:
-    """Рушій Мамдані за вмістом дерев (кеш у процесі: 45 правил компілюються раз на воркер)."""
+    """Рушій Мамдані за вмістом дерев (кеш у процесі: 45 правил компілюються раз на воркер).
+
+    MamdaniEngine не має стану між викликами, тож спільний екземпляр не зв'язує прогони між собою.
+    """
     eng = _ENGINE_CACHE.get(key)
     if eng is None:
         mem = load_membership(dict(membership))
         eng = MamdaniEngine(mem, load_rulebase(dict(rules), mem, production=True))
+        if len(_ENGINE_CACHE) >= _ENGINE_CACHE_SIZE:
+            _ENGINE_CACHE.pop(next(iter(_ENGINE_CACHE)))
         _ENGINE_CACHE[key] = eng
     return eng
 
@@ -428,6 +489,9 @@ class StepResult:
     risk_events: tuple[RiskEventRecord, ...]
     transition: Transition | None
     equity_point: EquityPointRecord | None
+    # заявки попередніх кроків, стан яких змінився на цьому барі (виконання, скасування стопа OCO/«сироти»);
+    # нові заявки цього кроку — в `orders` (уже з поточним станом)
+    order_updates: tuple[OrderRecord, ...] = ()
 
 
 # ====================================================================== цикл
@@ -488,6 +552,7 @@ class TradingLoop:
 
         risk_cfg = load_risk_config(trees["risk_limits"])
         self.risk_cfg = risk_cfg
+        self._risk_tree: dict[str, Any] = copy.deepcopy(dict(trees["risk_limits"]))
         self._vt = VolTarget.from_config(risk_cfg.sizing)
         self._sizer = PositionSizer(SizingParams.from_config(risk_cfg.sizing))
         self._gate = HysteresisGate(risk_cfg.hysteresis.enter, risk_cfg.hysteresis.exit)
@@ -517,11 +582,12 @@ class TradingLoop:
         self._funding_ptr = 0
         self._last_open: int | None = None
         self._orders: dict[UUID, OrderRecord] = {}
+        self._open_orders: dict[UUID, OrderRecord] = {}    # ще не фінальні (NEW/PARTIAL) — для order_updates
+        self._touched: set[UUID] = set()                    # заявки, які виконувались на цьому барі
         self._reason: dict[UUID, ExitReason] = {}
         self._entries: dict[UUID, _Entry] = {}
         self._open_pos: PositionRecord | None = None
         self._halt_index: int | None = None
-        self._halt_exposure = D0
 
         # накопичувачі (бектест)
         self.equity: list[Decimal] = []
@@ -553,6 +619,11 @@ class TradingLoop:
         return self._open_pos
 
     @property
+    def window(self) -> BarWindow:
+        """Вікно барів і ознак, на якому приймається рішення (лише читання: для /explain і перевірок)."""
+        return self._window
+
+    @property
     def halted_at(self) -> int | None:
         """Індекс бару, на якому автомат уперше увійшов у HALTED (None — не входив)."""
         return self._halt_index
@@ -582,8 +653,41 @@ class TradingLoop:
                          dq_score=dq_score, last_data_ns=last_data_ns)
 
     def release_halt(self, actor_role: Role | str, *, actor: str | None = None) -> Transition | None:
-        """Ручне зняття HALTED (лише admin; інакше PermissionDeniedError) — делегується автомату."""
-        return self.fsm.release(actor_role, actor=actor)
+        """Ручне зняття HALTED (лише admin; інакше PermissionDeniedError) — делегується автомату.
+
+        Зняття відбувається МІЖ барами (команда адміністратора через API → воркер), тож його запис
+        risk_event (HALTED → COOLDOWN) не губиться: він лишається «позакроковим» і потрапляє або в
+        `take_pending_risk_events()` (воркер пише його одразу), або в StepResult наступного бару.
+        """
+        tr = self.fsm.release(actor_role, actor=actor)
+        if tr is not None and self._keep:
+            self.transitions.append(tr)
+        return tr
+
+    def take_pending_risk_events(self) -> tuple[RiskEventRecord, ...]:
+        """Забрати записи risk_event, що з'явились поза кроком (зняття HALTED між барами)."""
+        out = tuple(self._step_risk)
+        self._step_risk.clear()
+        if self._keep:
+            self.risk_events.extend(out)
+        return out
+
+    def apply_risk_limits(self, tree: Mapping[str, Any]) -> RiskConfig:
+        """Гаряча заміна лімітів (`limits`) і порогів автомата (`state_machine`) з config/risk_limits.yaml.
+
+        PUT /risk/limits → NOTIFY fuzzhelm_control → воркер. Секції `sizing` і `hysteresis` — параметри
+        стратегії прогону (входять у config_hash, їх перекривають поля BacktestConfig) і посеред прогону
+        не змінюються: для них потрібен новий прогін. Стан автомата (режим, пік, dwell) і kill-switch
+        зберігаються; нові пороги діють з наступного бару. Невалідне дерево → ConfigValidationError, стан
+        циклу при цьому не змінюється.
+        """
+        merged = {**self._risk_tree, "limits": tree["limits"], "state_machine": tree["state_machine"]}
+        new = load_risk_config(merged)
+        self._risk_tree = copy.deepcopy(merged)
+        self.risk_cfg = new
+        self.guard = RiskGuard.from_config(new, self.journal, killswitch=self.fsm.killswitch)
+        self.fsm.cfg = new.state_machine
+        return new
 
     # ------------------------------------------------------------------ крок
 
@@ -598,9 +702,16 @@ class TradingLoop:
             dbar = dec_bar_of(bar, self.instrument)
         self._clock.set(t_open)
         if self._funding_t and self._last_open is not None:
-            self._apply_funding_rate(t_open)
-        self._step_risk.clear()
+            self._apply_funding_rate(t_open, close_ns)
+        # записи ризику, що з'явились між барами (зняття HALTED) і не забрані take_pending_risk_events(),
+        # ідуть у StepResult цього бару; крокові записи накопичуються далі в тому самому списку
         self._step_transition = None
+        # засувка (HALTED або kill-switch, зокрема спрацьований між барами оператором чи API): заявки на
+        # вхід/розворот, що чекають open_t, не виконуються — HALTED ⇒ жодної нової експозиції (ENG-20)
+        latched = self.fsm.state is RiskState.HALTED or self.fsm.killswitch.is_tripped
+        if latched and self._open_orders:
+            self._cancel_pending_increases()
+        exposure_before = abs(pf.position_qty(sym))
 
         # 1) виконання: MARKET t−1 → open_t; стопи/TP/ліквідація в межах бару; фандинг
         fills = self.router.on_bar(dbar)  # type: ignore[arg-type]  # DecBar — BarLike брокера
@@ -610,8 +721,10 @@ class TradingLoop:
         opened: list[PositionRecord] = []
         closed: list[PositionRecord] = []
         new_orders: list[OrderRecord] = []
+        self._touched.clear()
         for f in fills:
             self._apply_fill(f, opened, closed, new_orders)
+        order_updates = self._sync_open_orders() if self._open_orders else ()
         if (fills or charges) and pf.position_qty(sym) != 0:
             self._refresh_liquidation()
 
@@ -619,7 +732,7 @@ class TradingLoop:
         self._clock.set(close_ns)
         equity = pf.mark({sym: dbar.c})
         if self._check:
-            self._check_accounting()
+            self._check_accounting(latched=latched, exposure_before=exposure_before)
 
         # 3) ознаки (лише бари ≤ t), σ-оцінка, автомат ризику
         self._window.append(bar, self._pipe.update(bar))
@@ -664,6 +777,7 @@ class TradingLoop:
                 position_qty=pos_qty,
             )
         risk_events = tuple(self._step_risk)
+        self._step_risk.clear()
         if self._keep:
             self.equity.append(equity)
             self.equity_ts.append(close_ns)
@@ -685,20 +799,21 @@ class TradingLoop:
             funding=tuple(charges), decision=decision, orders=tuple(new_orders),
             opened_positions=tuple(opened),
             closed_positions=tuple(closed), risk_events=risk_events, transition=self._step_transition,
-            equity_point=point,
+            equity_point=point, order_updates=order_updates,
         )
 
     # ------------------------------------------------------------------ виконання й облік
 
-    def _apply_funding_rate(self, t_open: int) -> None:
+    def _apply_funding_rate(self, t_open: int, close_ns: int) -> None:
         """Ставка для моментів фандингу в (попередній open, open_t]: запис біржі, зафіксований у межах
-        match-вікна від моменту (fundingTime Binance має мілісекундний «хвіст»); інакше — fallback."""
+        match-вікна від моменту (fundingTime Binance має мілісекундний «хвіст»); інакше — fallback.
+        Запис пізніший за close_t не береться: на кроці t відомі лише дані до закриття бару t."""
         assert self._last_open is not None
         moments = self.cost_model.funding_times(self._last_open, t_open)
         if not moments:
             return
         m = moments[-1]
-        horizon = m + (self.cfg.funding_match_ns or NS_PER_MIN)
+        horizon = min(m + (self.cfg.funding_match_ns or NS_PER_MIN), close_ns)
         ts, rs = self._funding_t, self._funding_r
         p = self._funding_ptr
         while p < len(ts) and ts[p] <= horizon:
@@ -733,6 +848,7 @@ class TradingLoop:
         sym = self._sym
         known = f.client_order_id in self._orders
         rec = self._order_record_for_fill(f)
+        self._touched.add(f.client_order_id)
         if not known:
             new_orders.append(rec)
         # sim_order: накопичення виконань (як OrderRepo.apply_fill)
@@ -789,6 +905,25 @@ class TradingLoop:
         self._open_pos = None
         return rec
 
+    def _sync_open_orders(self) -> tuple[OrderRecord, ...]:
+        """Стан заявок попередніх кроків після виконань бару: виконані (оновлені в _apply_fill) і ті, що
+        брокер скасував сам (стоп закритої позиції — OCO, стоп-«сирота»). Фінальні — з нагляду геть."""
+        out: list[OrderRecord] = []
+        touched = self._touched
+        for coid, rec in list(self._open_orders.items()):
+            changed = coid in touched
+            if rec.status not in _FINAL_STATUSES:
+                ack = self.broker.order_ack(coid)
+                if ack is not None and ack.status is not rec.status:
+                    rec.status = ack.status
+                    rec.reject_code = None if ack.reject_code is None else str(ack.reject_code)
+                    changed = True
+            if rec.status in _FINAL_STATUSES:
+                del self._open_orders[coid]
+            if changed:
+                out.append(rec)
+        return tuple(out)
+
     def _refresh_liquidation(self) -> None:
         """P_liq з умови Equity = MM для фактичної позиції: W — баланс гаманця, P_e — середня ціна входу
         (margin.py: на крос-маржі це тотожно розрахунку від поточних E і P). Лонг з P_liq ≤ 0 — недосяжна."""
@@ -805,7 +940,7 @@ class TradingLoop:
         if self._open_pos is not None and self._open_pos.liq_price is None:
             self._open_pos.liq_price = lp
 
-    def _check_accounting(self) -> None:
+    def _check_accounting(self, *, latched: bool, exposure_before: Decimal) -> None:
         pf = self.portfolio
         res = pf.identity_residual()
         if abs(res) > self._tol:
@@ -814,13 +949,28 @@ class TradingLoop:
             raise EngineInvariantError(
                 f"broker position {self.broker.position(self._sym)} != "
                 f"portfolio {pf.position_qty(self._sym)}")
-        if self._halt_index is not None and self.fsm.state is RiskState.HALTED:
-            pos = abs(pf.position_qty(self._sym))
-            if pos > self._halt_exposure:
-                raise EngineInvariantError(f"new exposure {pos} while HALTED (bar {self._index + 1})")
-            self._halt_exposure = pos
-        else:
-            self._halt_exposure = abs(pf.position_qty(self._sym))
+        pos = abs(pf.position_qty(self._sym))
+        if latched and pos > exposure_before:
+            raise EngineInvariantError(
+                f"new exposure {exposure_before} -> {pos} while HALTED / kill-switch latched "
+                f"(bar {self._index + 1})")
+
+    def _cancel_pending_increases(self) -> None:
+        """Засувка: зняти заявки, що збільшили б |позицію| (вхід/розворот), і стопи, подані разом із ними
+        (вони захищали б позицію, якої не буде). Стоп і рівень ліквідації відкритої позиції лишаються;
+        TP нової позиції знімається — flatten-all подається на закритті цього ж бару."""
+        cancelled: set[int | None] = set()
+        for coid, rec in list(self._open_orders.items()):
+            req = rec.request
+            if req.otype is OrderType.MARKET and not req.reduce_only and self.broker.cancel(coid):
+                cancelled.add(rec.decision_ns)
+                self._entries.pop(coid, None)
+        if not cancelled:
+            return
+        for coid, rec in list(self._open_orders.items()):
+            if rec.role == "stop" and rec.decision_ns in cancelled:
+                self.broker.cancel(coid)
+        self.broker.set_take_profit(self._sym, None)
 
     def _on_transition(self, tr: Transition) -> None:
         self.journal.record_transition(tr, self._sym)
@@ -858,13 +1008,17 @@ class TradingLoop:
                 s_t=self._vt.s_t, kappa_mode=fsm.kappa_mode_float, step_size=self._step_size,
                 min_notional=self._min_notional, gross_notional=D0, sigma_ann=self._sigma_ann,
             ))
-        if not intent:
+        requested = D0 if sizing is None or desired == 0 else sizing.qty * desired
+        if not intent or requested == cur:
+            # немає наміру змінювати позицію — або сайзер сам відмовив у вході (BELOW_MIN_NOTIONAL /
+            # ZERO_QTY: requested = 0 = cur): ризик-ланцюг не оцінюється, заявок немає
             action = "hold" if cur_side != 0 else "none"
             if trace is not None:
-                trace = trace.with_sizing(None if sizing is None else sizing.to_dict()).with_risk({
-                    "state": fsm.state.value, "kappa_mode": str(fsm.kappa_mode), "evaluated": False,
-                    "approved_qty": str(cur), "vetoes": [],
-                })
+                risk: dict[str, Any] = {"state": fsm.state.value, "kappa_mode": str(fsm.kappa_mode),
+                                        "evaluated": False, "approved_qty": str(cur), "vetoes": []}
+                if intent and sizing is not None and sizing.reject_code is not None:
+                    risk["note"] = sizing.reject_code.value
+                trace = trace.with_sizing(None if sizing is None else sizing.to_dict()).with_risk(risk)
             return DecisionEntry(
                 open_time_ns=bar.t_ns, decided_at_ns=close_ns, u_raw=u_raw, kappa=kappa, u_final=u_final,
                 gate_side=gate_side, current_qty=cur, requested_qty=None, target_side=cur_side,
@@ -874,11 +1028,13 @@ class TradingLoop:
                 trace=trace,
             )
         assert sizing is not None
-        requested = D0 if desired == 0 else sizing.qty * desired
+        snap = fsm.snapshot
+        if snap is None:  # pragma: no cover — автомат оновлено вище на цьому ж барі
+            raise EngineInvariantError("risk state machine has no equity snapshot at decision time")
         stop_dist = sizing.stop_distance
         atr_f = self._window.feats(0).atr
         ctx = RiskContext.from_snapshot(
-            fsm.snapshot, instrument=sym, price=price, current_qty=cur, target_qty=requested,
+            snap, instrument=sym, price=price, current_qty=cur, target_qty=requested,
             atr=D0 if atr_f is None or not math.isfinite(atr_f) else to_decimal(atr_f, self._tick),
             stop_distance=D0 if not math.isfinite(stop_dist) else to_decimal(stop_dist, self._tick),
             mmr=self.instrument.mmr, maint_amount=self.instrument.maint_amount,
@@ -993,6 +1149,8 @@ class TradingLoop:
                           venue_order_id=ack.venue_order_id, ts_created_ns=req.ts_created_ns,
                           intent_reason=reason)
         self._orders[coid] = rec
+        if ack.status not in _FINAL_STATUSES:
+            self._open_orders[coid] = rec
         if reason is not None and req.otype is OrderType.MARKET:
             self._reason[coid] = reason
         new_orders.append(rec)
@@ -1064,6 +1222,16 @@ def _metrics(equity: Sequence[Decimal], trades: Sequence[ClosedTrade], positions
     return m, extras
 
 
+def run_order_ids(seed: int, run_id: UUID) -> SeededIdGenerator:
+    """Генератор client_order_id прогону, що ЗБЕРІГАЄТЬСЯ (API, скрипти, воркери): простір імен — з run_id.
+
+    client_order_id — UNIQUE у sim_order і ключ ідемпотентності виконавця, тож два збережені прогони з тим
+    самим seed не можуть мати тих самих id (дефолтний SeededIdGenerator(seed) давав однакові — знайдено на
+    робочій БД, W-10). Детермінізм зберігається: той самий (seed, run_id) → ті самі id.
+    """
+    return SeededIdGenerator(seed, b"fuzzhelm.engine" + run_id.bytes)
+
+
 def deterministic_run_id(cfg_hash: str, ds_hash: str, seed: int) -> UUID:
     """Ідентифікатор прогону з його ідентичності (той самий прогін → той самий run_id і хеш журналу)."""
     h = hashlib.blake2b(digest_size=16)
@@ -1076,18 +1244,22 @@ def deterministic_run_id(cfg_hash: str, ds_hash: str, seed: int) -> UUID:
 def run_backtest(dataset: Dataset, cfg: BacktestConfig | None = None, seed: int = 0, *, eval_start: int = 0,
                  git: bool = False, kind: RunKind | str = RunKind.BACKTEST, run_id: UUID | None = None,
                  hash_equity: bool = True,
-                 on_step: Callable[[StepResult], None] | None = None) -> BacktestResult:
+                 on_step: Callable[[StepResult], None] | None = None,
+                 journal_sink: Callable[[JournalEntry], None] | None = None) -> BacktestResult:
     """Подієвий бектест: TradingLoop над барами датасету (через LookaheadGuard), метрики і паспорт.
 
     `eval_start` — перший індекс, з якого дозволено торгувати (≥ прогріву); метрики рахуються з бару
     першого можливого рішення. Хеш кривої (equity_hash) — над (close_ts, E) кожного бару.
+    `journal_sink` отримує кожен запис хеш-ланцюга EventJournal (заявки, виконання, рішення із заявками,
+    risk_event) — для запису event_journal прогону (workers.persist); голова ланцюга = journal_head_hash.
     """
     cfg = cfg or BacktestConfig()
     ds_hash = dataset.dataset_hash
     rid = run_id or deterministic_run_id(cfg.config_hash, ds_hash, seed)
-    ej = EventJournal(rid, keep=False) if cfg.record_traces != "none" else None
+    ej = EventJournal(rid, sink=journal_sink, keep=False) if cfg.record_traces != "none" else None
     loop = TradingLoop(dataset.instrument, cfg, seed=seed, tf=dataset.tf, trade_start=eval_start,
-                       run_id=rid, event_journal=ej)
+                       run_id=rid, event_journal=ej,
+                       ids=None if run_id is None else run_order_ids(seed, run_id))
     loop.set_funding_series(dataset.funding_t_ns, dataset.funding_rate)
     step = loop.step
     for bar, dbar, close_ns in dataset.feed():

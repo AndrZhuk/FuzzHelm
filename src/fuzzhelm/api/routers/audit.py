@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Query
 
 from fuzzhelm.api.auth import Permission, Principal
 from fuzzhelm.api.deps import ServicesDep, require
-from fuzzhelm.api.schemas import AuditOut
+from fuzzhelm.api.schemas import INT32_MAX, AuditOut
 from fuzzhelm.api.views import audit_out
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -33,7 +33,7 @@ async def list_audit(
     _: Annotated[Principal, Depends(require(Permission.AUDIT_READ))],
     action: Annotated[str | None, Query(max_length=64)] = None,
     target: Annotated[str | None, Query(max_length=200)] = None,
-    user_id: Annotated[int | None, Query(ge=1)] = None,
+    user_id: Annotated[int | None, Query(ge=1, le=INT32_MAX)] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
 ) -> list[dict[str, Any]]:
     async with services.uow() as repos:

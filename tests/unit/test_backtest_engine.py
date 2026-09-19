@@ -12,6 +12,7 @@ import json
 from collections import defaultdict
 from decimal import Decimal
 from functools import cache
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -21,14 +22,15 @@ from tests.helpers.engine_scripted import base_config, crash_dataset, fixture
 from fuzzhelm.backtest.dataset import DEFAULT_KLINES, Dataset, load_exchange_instrument, load_klines_json
 from fuzzhelm.backtest.engine import BacktestResult, run_backtest
 from fuzzhelm.backtest.grid import make_grid
-from fuzzhelm.backtest.manifest import equity_hash
+from fuzzhelm.backtest.manifest import dataset_hash, equity_hash
 from fuzzhelm.backtest.metrics import METRIC_NAMES
 from fuzzhelm.backtest.runner import run_grid, run_walkforward
 from fuzzhelm.backtest.walkforward import make_folds
 from fuzzhelm.core.enums import ExitReason, RiskState, Side
 from fuzzhelm.core.errors import LookaheadError
 from fuzzhelm.detectors.registry import DETECTOR_NAMES
-from fuzzhelm.ingest.normalize import normalize_rest_klines
+from fuzzhelm.ingest.funding import funding_columns
+from fuzzhelm.ingest.normalize import FundingRate, normalize_rest_klines
 
 SEED = 20260918
 
@@ -228,6 +230,66 @@ def test_dataset_hash_is_the_same_for_candles_arrays_and_payload() -> None:
     assert with_funding.dataset_hash != b.dataset_hash       # інша ставка фандингу — інший датасет
 
 
+def test_dataset_from_candle_arrays_and_funding_keep_the_hash_contract() -> None:
+    ds = fixture().slice(0, 600)
+    arr = SimpleNamespace(**{k: getattr(ds, k) for k in ("t_ns", "o", "h", "l", "c", "v", "qv", "n")})
+    cols = {k: getattr(ds, k) for k in ("t_ns", "o", "h", "l", "c", "v")}
+    plain = Dataset.from_candle_arrays(arr, ds.instrument)
+    # той самий хеш, що й над CandleRepo.load_arrays().columns() (data/dataset_window.json)
+    assert plain.dataset_hash == dataset_hash(cols) == ds.dataset_hash
+    inst, t0, hour = ds.instrument, int(ds.t_ns[0]), 3_600 * 10**9
+
+    def rate(t: int, r: str) -> FundingRate:
+        return FundingRate(inst.symbol_canon, inst.venue, t, Decimal(r), None)
+    inside = [rate(t0 - 12 * hour, "0.0003"), rate(t0 + 4_000_000, "0.0001"), rate(t0 + 8 * hour, "-0.0002")]
+    outside = [rate(t0 - 30 * hour, "0.9"), rate(int(ds.t_ns[-1]) + 2 * hour, "0.9")]
+    with_f = Dataset.from_candle_arrays(arr, inst, funding=[*outside, *inside[::-1]])
+    assert with_f.funding_t_ns is not None
+    assert with_f.funding_t_ns.tolist() == [r.funding_time_ns for r in inside]
+    assert with_f.dataset_hash == dataset_hash({**cols, **funding_columns(inside)}) != plain.dataset_hash
+    assert with_f.slice(0, 600).dataset_hash == with_f.dataset_hash       # те саме вікно, що й у slice
+
+
+@pytest.mark.parametrize(("patch", "match"), [
+    ({"t_ns": "dup"}, "strictly increasing"),
+    ({"h": "below_close"}, "inconsistent OHLC"),
+    ({"v": "negative"}, ">= 0"),
+    ({"c": "nan"}, "NaN"),
+    ({"tf": "7m"}, "unsupported timeframe"),
+    ({"funding": "mismatch"}, "go together|lengths differ"),
+])
+def test_dataset_rejects_inconsistent_columns(patch: dict[str, str], match: str) -> None:
+    ds = fixture().slice(0, 20)
+    cols: dict[str, Any] = {k: getattr(ds, k).copy() for k in ("t_ns", "o", "h", "l", "c", "v", "qv", "n")}
+    kw: dict[str, Any] = {}
+    if patch.get("t_ns"):
+        cols["t_ns"][5] = cols["t_ns"][4]
+    if patch.get("h"):
+        cols["h"][3] = cols["c"][3] - 1.0
+    if patch.get("v"):
+        cols["v"][2] = -1.0
+    if patch.get("c"):
+        cols["c"][1] = float("nan")
+    if patch.get("tf"):
+        kw["tf"] = "7m"
+    if patch.get("funding"):
+        kw["funding_t_ns"] = [int(ds.t_ns[0])]
+    with pytest.raises(ValueError, match=match):
+        Dataset.from_arrays(ds.instrument, **cols, **kw)
+
+
+def test_dec_bar_cache_is_keyed_by_instrument_spec_not_only_candles() -> None:
+    ds = fixture().slice(0, 50)                               # tick_size з exchangeInfo: '0.10'
+    first = ds.dec_bar(7).c                                   # заповнити кеш процесу першим набором
+    cols = {k: getattr(ds, k) for k in ("t_ns", "o", "h", "l", "c", "v", "qv", "n")}
+    short_tick = Dataset.from_arrays(ds.instrument.model_copy(update={"tick_size": Decimal("0.1")}), **cols)
+    assert short_tick.dataset_hash == ds.dataset_hash and short_tick.dec_bar(7).c == first
+    # масштаб Decimal-ціни — від запису tick; спільний кеш віддав би '…0' і змінив канонічний журнал
+    assert len(str(first).split(".")[1]) == 2 and len(str(short_tick.dec_bar(7).c).split(".")[1]) == 1
+    eth = Dataset.from_arrays(ds.instrument.model_copy(update={"symbol_canon": "ETH-USDT-PERP"}), **cols)
+    assert eth.dec_bar(0).instrument == "ETH-USDT-PERP"
+
+
 # ---------------------------------------------------------------- ризик-контур наскрізно
 
 
@@ -265,8 +327,9 @@ def test_grid_results_independent_of_worker_count() -> None:
     ref = run_grid(ds, cells, seed=SEED, workers=1, config=cfg, equity_hash=True)
     assert len({r["equity_hash"] for r in ref}) == len(cells), "cells must differ, else the check is vacuous"
     assert all(r["n_trades"] > 0 for r in ref)
-    pooled = run_grid(ds, cells, seed=SEED, workers=4, config=cfg, equity_hash=True)
-    assert _canon(pooled) == _canon(ref)
+    for workers in (2, 4):
+        pooled = run_grid(ds, cells, seed=SEED, workers=workers, config=cfg, equity_hash=True)
+        assert _canon(pooled) == _canon(ref), workers
     # порядок задач і послідовний прогін у цьому ж процесі не впливають на результат клітинки
     rev = run_grid(ds, cells[::-1], seed=SEED, workers=0, config=cfg, equity_hash=True)
     assert _canon(rev[::-1]) == _canon(ref)

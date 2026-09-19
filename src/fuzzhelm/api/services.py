@@ -14,17 +14,20 @@ storage поверх PostgreSQL; тести підміняють `ApiServices` (
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
+from passlib.context import CryptContext
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fuzzhelm.api.auth import LoginRateLimiter
+from fuzzhelm.api.backtest_runner import DbBacktestRunner
 from fuzzhelm.api.backtests import BacktestService, EngineBacktestService
 from fuzzhelm.api.limits import FileLimitsStore, LimitsStore
 from fuzzhelm.api.live import (
@@ -39,6 +42,7 @@ from fuzzhelm.config import Settings, get_settings
 from fuzzhelm.core.enums import Role, RunKind, RunStatus
 from fuzzhelm.core.ports import Clock, IdGenerator
 from fuzzhelm.infra.wallclock import RandomIdGenerator, SystemClock
+from fuzzhelm.notify.telegram import TelegramNotifier
 from fuzzhelm.storage.repositories import (
     AuditRepo,
     AuditRow,
@@ -63,13 +67,14 @@ from fuzzhelm.storage.repositories import (
     UserRepo,
     UserRow,
 )
+from fuzzhelm.storage.repositories.user import PWD_CONTEXT
 from fuzzhelm.storage.session import APP_ROLE, get_default_engine, session_factory
 
 # ------------------------------------------------------------------ порти (підмножина методів storage)
 
 
 class UserStore(Protocol):
-    async def authenticate(self, login: str, password: str) -> UserRow | None: ...
+    async def get_by_login(self, login: str) -> UserRow | None: ...
 
     async def get(self, user_id: int) -> UserRow | None: ...
 
@@ -264,17 +269,36 @@ class ApiServices:
     clock: Clock
     ids: IdGenerator
     login_limiter: LoginRateLimiter
+    password_context: CryptContext = PWD_CONTEXT  # bcrypt-12; перевірка — у потоці (api/routers/auth.py)
     detectors_cfg: Mapping[str, Any] | None = None
     live_source: PgLiveSource | None = None
     engine: AsyncEngine | None = None
+    notifier: TelegramNotifier | None = None  # no-op без токена/чату (Settings); див. notify/telegram.py
     extras: dict[str, Any] = field(default_factory=dict)
+    _background: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
 
     def ensure_live(self) -> None:
         """Лінивий старт LISTEN (перший SSE-клієнт / health), щоб API піднімався і без БД."""
         if self.live_source is not None:
             self.live_source.ensure_started()
 
+    def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        """Фонова best-effort задача після відповіді (нотифікація): посилання тримаємо до завершення,
+        щоб задачу не зібрав GC; помилка лише в журнал."""
+        task = asyncio.get_running_loop().create_task(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return task
+
+    async def drain(self) -> None:
+        """Дочекатися фонових задач (shutdown і тести)."""
+        while self._background:
+            await asyncio.gather(*list(self._background), return_exceptions=True)
+
     async def aclose(self) -> None:
+        await self.drain()
+        if self.notifier is not None:
+            await self.notifier.aclose()
         self.live.close()
         if self.live_source is not None:
             await self.live_source.stop()
@@ -300,6 +324,8 @@ def build_db_services(
     """
     s = settings or get_settings()
     eng = engine or get_default_engine()
+    factory = session_factory(eng)
+    clk = clock or SystemClock()
     hub = LiveHub()
     source = (
         PgLiveSource(asyncpg_dsn(eng.url.render_as_string(hide_password=False)), hub, role=APP_ROLE)
@@ -307,16 +333,18 @@ def build_db_services(
         else None
     )
     return ApiServices(
-        uow=DbUnitOfWork(session_factory(eng)),
+        uow=DbUnitOfWork(factory),
         limits=FileLimitsStore(limits_path or (s.config_dir / "risk_limits.yaml")),
-        backtests=backtests or EngineBacktestService(),
+        backtests=backtests
+        or EngineBacktestService(DbBacktestRunner(factory, data_dir=s.config_dir.parent / "data", clock=clk)),
         live=hub,
         settings=s,
-        clock=clock or SystemClock(),
+        clock=clk,
         ids=ids or RandomIdGenerator(),
         login_limiter=LoginRateLimiter(),
         live_source=source,
         engine=eng if own_engine else None,
+        notifier=TelegramNotifier.from_settings(s),
     )
 
 

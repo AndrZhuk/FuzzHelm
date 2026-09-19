@@ -8,3 +8,6 @@ initial_equity: "10000"
 # рушій (config/engine.yaml): кожне рішення — з повним трасуванням (/explain)
 cost_mode: full
 record_traces: all
+# воркер (workers/trading_worker.py): живий публічний WS Binance (read-only), виконання — PaperBroker
+feed:
+  streams: [kline, markPrice]                        # торговому циклу потрібні свічки; книга/угоди — ingest-воркеру

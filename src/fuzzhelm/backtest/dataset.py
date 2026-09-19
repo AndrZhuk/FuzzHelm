@@ -155,6 +155,40 @@ class Dataset:
             funding_t_ns=funding_t_ns, funding_rate=funding_rate, source="candles",
         )
 
+    @classmethod
+    def from_candle_arrays(cls, arrays: Any, instrument: Instrument, *, tf: str = "1m",
+                           funding: Sequence[Any] | None = None, source: str = "db") -> Dataset:
+        """Зі storage.CandleArrays (будь-який об'єкт з атрибутами t_ns, o, h, l, c, v, qv, n) і, опційно,
+        ставок фандингу (`ingest.funding.FundingSeries.rates` — послідовність `FundingRate`).
+
+        Фандинг обрізається до вікна набору так само, як у `slice` (див. `with_funding`), тож хеш
+        набору не залежить від того, скільки зайвих ставок було у файлі.
+        """
+        ds = cls.from_arrays(instrument, tf=tf, t_ns=arrays.t_ns, o=arrays.o, h=arrays.h, l=arrays.l,
+                             c=arrays.c, v=arrays.v, qv=arrays.qv, n=arrays.n, source=source)
+        return ds if funding is None else ds.with_funding(funding)
+
+    def with_funding(self, rates: Sequence[Any]) -> Dataset:
+        """Копія набору з рядом ставок фандингу (`FundingRate` з ingest.funding / ingest.normalize).
+
+        Колонки — `ingest.funding.funding_columns` (та сама форма, що хешує рушій разом зі свічками);
+        лишаються ставки з вікна [t₀ − 1 доба, t_last + 1 хв] — як у `slice`.
+        """
+        from fuzzhelm.ingest.funding import funding_columns  # noqa: PLC0415 — пакет-межа, лише тут
+
+        if len(self) == 0:
+            raise ValueError("empty dataset")
+        cols = funding_columns(list(rates))
+        ft, fr = cols["funding_t_ns"], cols["funding_rate"]
+        order = np.argsort(ft, kind="stable")
+        ft, fr = ft[order], fr[order]
+        lo = self.t_ns[0].item() - 86_400 * NS_PER_SEC
+        hi = self.t_ns[-1].item() + NS_PER_MIN
+        m = (ft >= lo) & (ft <= hi)
+        return Dataset(instrument=self.instrument, tf=self.tf, t_ns=self.t_ns, o=self.o, h=self.h, l=self.l,
+                       c=self.c, v=self.v, qv=self.qv, n=self.n, funding_t_ns=ft[m].copy(),
+                       funding_rate=fr[m].copy(), source=self.source)
+
     # ------------------------------------------------------------------ властивості
 
     def __len__(self) -> int:
@@ -170,7 +204,8 @@ class Dataset:
 
     def close_time_ns(self, i: int) -> int:
         """Час закриття бару за конвенцією Binance: open + tf − 1 мс (так само в Candle.close_time_ns)."""
-        return self.t_ns[i].item() + self.tf_ns - NS_PER_MS
+        t: int = self.t_ns[i].item()
+        return t + self.tf_ns - NS_PER_MS
 
     def columns(self) -> dict[str, npt.NDArray[Any]]:
         """Колонки для backtest.manifest.dataset_hash (свічки + фандинг, якщо є)."""
@@ -198,9 +233,14 @@ class Dataset:
 
     @cached_property
     def dec_bars(self) -> list[DecBar]:
-        """Decimal-бари для брокера (один раз на набір; кеш процесу за dataset_hash — клітинки сітки у
-        воркері діляться ними). Порядок і вміст не залежать від того, хто перший їх побудував."""
-        key = self.dataset_hash
+        """Decimal-бари для брокера (один раз на набір; кеш процесу — клітинки сітки у воркері діляться ними).
+
+        Ключ кешу — хеш свічок + символ + ТОЧНИЙ запис tick_size: DecBar несе символ, а масштаб Decimal-цін
+        залежить від показника tick ('0.1' → 63497.2, '0.10' → 63497.20; числа рівні, але канонічний JSON
+        журналу — ні). Без цього вміст кешу, а з ним journal_head_hash, залежав би від того, який набір
+        першим заповнив кеш у процесі.
+        """
+        key = (self.dataset_hash, self.instrument.symbol_canon, str(self.instrument.tick_size))
         bars = _DEC_CACHE.get(key)
         if bars is None:
             bars = [dec_bar_of(self.bar(i), self.instrument) for i in range(len(self))]
@@ -264,7 +304,7 @@ def dec_bar_of(bar: Bar, instrument: Instrument) -> DecBar:
                   float_to_decimal_exact(bar.v))
 
 
-_DEC_CACHE: dict[str, list[DecBar]] = {}
+_DEC_CACHE: dict[tuple[str, str, str], list[DecBar]] = {}
 _DEC_CACHE_SIZE = 4
 
 

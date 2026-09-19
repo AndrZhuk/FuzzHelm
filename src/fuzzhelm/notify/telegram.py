@@ -350,9 +350,10 @@ class TelegramNotifier:
 
 
 def _ok(resp: httpx.Response) -> bool:
+    # тіло не-об'єкт (список, рядок) → AttributeError; send() за контрактом не кидає винятків
     try:
         return bool(resp.json().get("ok"))
-    except ValueError:
+    except (ValueError, AttributeError):
         return False
 
 

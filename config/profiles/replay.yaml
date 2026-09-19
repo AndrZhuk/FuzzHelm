@@ -8,3 +8,14 @@ initial_equity: "10000"
 # рушій (config/engine.yaml): кожне рішення — з повним трасуванням (/explain)
 cost_mode: full
 record_traces: all
+# воркер (workers/trading_worker.py): джерело потоку і прогрів — офлайн (демо з вимкненим Wi-Fi, §15)
+feed:
+  session: fixtures/ws/btcusdt_2026-09-18.jsonl.gz   # записана 45-хв сесія (фаза 0)
+  history: fixtures/rest/binance_klines.json.gz      # запасне джерело прогріву, якщо в БД бракує історії
+  speed: 30                                          # «Replay ×30» (§15); CLI --speed перекриває, inf — без пауз
+  streams: [kline, markPrice]                        # торговому циклу потрібні свічки; книга/угоди — ingest-воркеру
+  heartbeat_timeout_s: 10
+# перекриття полів BacktestConfig: клітинка сітки backtest.grid (u_enter ∈ {0.20, 0.25, 0.30}).
+# З дефолтним 0.25 записана 45-хв сесія не дає жодного входу (max |u_final| = 0.243) — docs/deviations.d/workers.md W-03
+params:
+  u_enter: 0.20

@@ -226,18 +226,96 @@ def bench_loop(dataset: Dataset, cfg: BacktestConfig | None = None, seed: int = 
             "min_us_per_bar": min(times) / n * 1e6, "max_us_per_bar": max(times) / n * 1e6}
 
 
+async def load_db_window(symbol: str) -> Dataset:  # pragma: no cover — лише CLI заміру, читає БД
+    """45-денне вікно з БД (лише читання) + ставки фандингу з data/ — набір data/dataset_window.json.
+
+    Хеш свічок звіряється з data/dataset_window.json (інакше ValueError) — замір іде саме на тих даних,
+    на яких рахується експеримент. Імпорти сховища — ліниві: воркери сітки БД не торкаються.
+    """
+    import json  # noqa: PLC0415
+
+    from fuzzhelm.backtest.manifest import dataset_hash  # noqa: PLC0415
+    from fuzzhelm.config import ROOT  # noqa: PLC0415
+    from fuzzhelm.ingest.funding import load_funding_json  # noqa: PLC0415
+    from fuzzhelm.storage.repositories.candle import CandleRepo  # noqa: PLC0415
+    from fuzzhelm.storage.repositories.instrument import InstrumentRepo  # noqa: PLC0415
+    from fuzzhelm.storage.session import dispose_default_engine, get_default_factory  # noqa: PLC0415
+
+    win = json.loads((ROOT / "data" / "dataset_window.json").read_text(encoding="utf-8"))
+    meta = win["symbols"][symbol]
+    lo, hi = win["window"]["start_ms"] * 1_000_000, win["window"]["end_ms"] * 1_000_000
+    try:
+        async with get_default_factory()() as s:
+            row = await InstrumentRepo(s).get_by_canon(meta["symbol_canon"])
+            if row is None:
+                raise LookupError(f"instrument {meta['symbol_canon']!r} is not in the database")
+            arr = await CandleRepo(s).load_arrays(row.id, "1m", lo, hi)
+    finally:
+        await dispose_default_engine()
+    if dataset_hash(arr.columns()) != meta["dataset_hash"]:
+        raise ValueError(f"{symbol}: candles in the DB differ from data/dataset_window.json")
+    inst = row.to_dto()
+    fpath = ROOT / "data" / f"funding_{symbol}.json"
+    rates = load_funding_json(fpath, inst).rates if fpath.exists() else None
+    return Dataset.from_candle_arrays(arr, inst, funding=rates, source=f"db:{symbol}")
+
+
+def _report_run(ds: Dataset, seed: int) -> None:  # pragma: no cover — CLI заміру
+    """Повний прогін з трасуванням угод і перевіркою тотожності обліку на кожному барі + шлях автомата."""
+    t0 = time.perf_counter()
+    res = run_backtest(ds, BacktestConfig().with_params(record_traces="trades", check_invariants=True), seed)
+    dt = time.perf_counter() - t0
+    m = res.metrics
+    print(f"full run (trades traces, invariants every bar): {dt:.2f} s; trades {len(res.trades)}, "
+          f"fills {len(res.fills)}, funding charges {len(res.funding)}, final state {res.final_state.value}, "
+          f"halted_at {res.halted_at}")
+    print(f"total_return {m['total_return']:.6f}  max_drawdown {m['max_drawdown']:.6f}  "
+          f"sharpe {m['sharpe']:.3f}  psr {res.extras['psr']:.4f}  equity_hash {res.equity_hash[:16]}…")
+    if res.transitions:
+        last = res.transitions[-1]
+        i_last = int((last.ts_ns - ds.t_ns[0].item()) // ds.tf_ns)
+        vetoes = sum(1 for e in res.risk_events if e.rule == "risk_mode" and e.ts_ns > last.ts_ns
+                     and e.verdict is not None and e.verdict.value == "VETO")
+        print(f"last transition at bar {i_last}: {last.state_from.value} -> {last.state_to.value}, "
+              f"DD {last.drawdown:.4f}; bars after it {len(ds) - 1 - i_last}, "
+              f"risk_mode VETOs after it {vetoes}")
+
+
 def main(argv: Sequence[str] | None = None) -> None:  # pragma: no cover — CLI заміру
-    ap = argparse.ArgumentParser(description="FuzzHelm engine benchmark (fixture klines)")
+    ap = argparse.ArgumentParser(
+        description="FuzzHelm engine benchmark (fixture klines or the 45-day DB window)")
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--engine", choices=("mamdani", "linear"), default="mamdani")
     ap.add_argument("--grid-bars", type=int, default=64_800, help="bars per cell for the 108-cell estimate")
+    ap.add_argument("--db", metavar="SYMBOL",
+                    help="read the 45-day window of SYMBOL (e.g. BTCUSDT) from the DB")
+    ap.add_argument("--grid-workers", type=int, default=0,
+                    help="also time the real 108-cell grid with N workers")
+    ap.add_argument("--report", action="store_true", help="also do one full checked run and print its path")
+    ap.add_argument("--seed", type=int, default=20260918)
     args = ap.parse_args(argv)
-    ds = load_fixture_dataset()
-    r = bench_loop(ds, BacktestConfig(engine=args.engine), seed=20260918, repeats=args.repeats)
+    if args.db:
+        import asyncio  # noqa: PLC0415
+
+        ds = asyncio.run(load_db_window(args.db))
+    else:
+        ds = load_fixture_dataset()
+    print(f"dataset {ds.source}: {len(ds)} bars, dataset_hash {ds.dataset_hash[:16]}…")
+    r = bench_loop(ds, BacktestConfig(engine=args.engine), seed=args.seed, repeats=args.repeats)
     for k, v in r.items():
         print(f"{k}: {v:.3f}")
     est = r["us_per_bar"] * 1e-6 * args.grid_bars * 108
     print(f"108 cells x {args.grid_bars} bars, 1 core (extrapolated from the median): {est:.1f} s")
+    if args.report:
+        _report_run(ds, args.seed)
+    if args.grid_workers > 0:
+        t0 = time.perf_counter()
+        cells = run_grid(ds, None, args.seed, workers=args.grid_workers,
+                         config=BacktestConfig(engine=args.engine))
+        dt = time.perf_counter() - t0
+        trades = sorted(c["n_trades"] for c in cells)
+        print(f"grid {len(cells)} cells x {len(ds)} bars, workers={args.grid_workers}: wall {dt:.1f} s; "
+              f"n_trades min/median/max {trades[0]:.0f}/{statistics.median(trades):.0f}/{trades[-1]:.0f}")
 
 
 if __name__ == "__main__":  # pragma: no cover

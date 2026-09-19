@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from fuzzhelm.api.auth import Permission, Principal
 from fuzzhelm.api.deps import ServicesDep, require
-from fuzzhelm.api.schemas import DqScoreOut, ErrorResponse
+from fuzzhelm.api.schemas import INT32_MAX, INT64_MAX, DqScoreOut, ErrorResponse
 from fuzzhelm.api.services import resolve_instrument
 from fuzzhelm.api.views import dq_out
 from fuzzhelm.quality.ahp import CRITERIA
@@ -38,9 +38,9 @@ async def score(
     services: ServicesDep,
     _: Annotated[Principal, Depends(require(Permission.MARKET_READ))],
     symbol: Annotated[str, Query(max_length=32)] = "BTC-USDT-PERP",
-    instrument_id: Annotated[int | None, Query()] = None,
-    from_ns: Annotated[int | None, Query(ge=0, description="Inclusive, ns UTC.")] = None,
-    to_ns: Annotated[int | None, Query(ge=0, description="Exclusive, ns UTC.")] = None,
+    instrument_id: Annotated[int | None, Query(ge=1, le=INT32_MAX)] = None,
+    from_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX, description="Inclusive, ns UTC.")] = None,
+    to_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX, description="Exclusive, ns UTC.")] = None,
 ) -> DqScoreOut:
     if from_ns is None and to_ns is None:
         now = services.clock.now_ns()

@@ -12,8 +12,10 @@ client_order_id UNIQUE — повторна подача того самого �
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import case, func, insert, select, update
@@ -22,9 +24,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fuzzhelm.core.dto import Fill, OrderAck, OrderRequest
 from fuzzhelm.core.enums import OrderStatus
 from fuzzhelm.storage.models import SimOrderModel, table_of
-from fuzzhelm.storage.repositories.common import enum_value, from_mapping, ns_to_dt, ns_to_dt_opt
+from fuzzhelm.storage.repositories.common import chunks, enum_value, from_mapping, ns_to_dt, ns_to_dt_opt
 
 _T = table_of(SimOrderModel)
+INSERT_CHUNK = 2_000
+
+
+def order_values(req: OrderRequest, *, decision_id: int, run_id: UUID | None = None,
+                 instrument_id: int | None = None, status: OrderStatus | str = OrderStatus.NEW,
+                 reject_code: str | None = None, venue_order_id: str | None = None,
+                 filled_qty: Decimal | None = None, avg_fill_price: Decimal | None = None,
+                 fee: Decimal | None = None, slippage_bps: Decimal | None = None, liquidity: Any = None,
+                 ts_filled_ns: int | None = None) -> dict[str, Any]:
+    """Рядок sim_order з УЖЕ накопиченим станом виконання (пакетний запис готового прогону, insert_many).
+
+    Порожні filled_qty/fee → 0 (як server_default), щоб executemany мав однаковий набір колонок.
+    """
+    return {
+        "run_id": run_id, "decision_id": decision_id, "client_order_id": req.client_order_id,
+        "venue_order_id": venue_order_id, "instrument_id": instrument_id, "side": int(req.side),
+        "otype": req.otype.value, "qty": req.qty,
+        "filled_qty": filled_qty if filled_qty is not None else Decimal(0),
+        "avg_fill_price": avg_fill_price, "fee": fee if fee is not None else Decimal(0),
+        "slippage_bps": slippage_bps, "liquidity": enum_value(liquidity),
+        "status": OrderStatus(status).value, "reject_code": reject_code,
+        "ts_created": ns_to_dt(req.ts_created_ns), "ts_filled": ns_to_dt_opt(ts_filled_ns),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +88,14 @@ class OrderRepo:
             status=OrderStatus(status).value, reject_code=reject_code, ts_created=ns_to_dt(req.ts_created_ns),
         ).returning(_T.c.id))
         return int(res.scalar_one())
+
+    async def insert_many(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Пакетний запис рядків `order_values(...)` (executemany частинами по INSERT_CHUNK).
+
+        decision_id — NOT NULL + FK і тут: рядок без рішення відхилить СУБД (ST-01)."""
+        for part in chunks(rows, INSERT_CHUNK):
+            await self.s.execute(insert(_T), [dict(r) for r in part])
+        return len(rows)
 
     async def apply_ack(self, ack: OrderAck) -> OrderRow:
         values: dict[str, object] = {"status": ack.status.value, "reject_code": ack.reject_code}

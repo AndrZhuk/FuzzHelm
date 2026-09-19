@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -19,6 +20,8 @@ from uuid import UUID
 import httpx
 import pytest
 import respx
+from apscheduler.events import EVENT_SCHEDULER_STARTED
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pydantic import SecretStr
 from tests.helpers.api_fakes import NS_PER_MIN, T0_NS, MemoryDb
 
@@ -39,6 +42,7 @@ from fuzzhelm.scheduler.jobs import (
     hourly_dq,
     next_status,
     retry_gaps,
+    serve,
 )
 from fuzzhelm.storage.repositories import CandleRow, EquityRow, GapRow, InstrumentRow, RunRow, UpsertResult
 
@@ -362,3 +366,19 @@ async def test_scheduled_callables_use_injected_clock() -> None:
     await job.func()  # те, що викличе APScheduler
     assert ctx.runs[JOB_HOURLY_DQ]["hour_start_ns"] == T0_NS
     assert await retry_gaps(replace(ctx, backfill=None)) == []  # без добирача — нічого не робить
+
+
+async def test_serve_runs_scheduler_until_stop_event() -> None:
+    """serve() реєструє три задачі, запускає AsyncIOScheduler і зупиняє його за подією (без очікування часу:
+    старт фіксує слухач EVENT_SCHEDULER_STARTED, зупинку — stop.set())."""
+    ctx = make_ctx(MemoryDb(), ManualClock(T0_NS))
+    stop, started = asyncio.Event(), asyncio.Event()
+    sched = AsyncIOScheduler(timezone=UTC)
+    sched.add_listener(lambda _ev: started.set(), EVENT_SCHEDULER_STARTED)
+    task = asyncio.create_task(serve(ctx, stop, sched))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert sched.running
+    assert {j.id for j in sched.get_jobs()} == {JOB_GAP_BACKFILL, JOB_HOURLY_DQ, JOB_DAILY_REPORT}
+    stop.set()
+    await asyncio.wait_for(task, timeout=5)
+    assert not sched.running

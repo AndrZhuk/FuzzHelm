@@ -134,6 +134,19 @@ async def test_failed_send_is_not_marked_as_duplicate(http: httpx.AsyncClient) -
     assert second.status is SendStatus.SENT and route.call_count == 2
 
 
+async def test_malformed_telegram_reply_is_failed_not_raised(http: httpx.AsyncClient) -> None:
+    """send() за контрактом не кидає: 200 з тілом-не-об'єктом (список, не JSON) — це FAILED, а не виняток."""
+    clock = Clock()
+    n = make(http, clock)
+    with respx.mock() as mock:
+        replies = [httpx.Response(200, json=[1, 2]), httpx.Response(200, text="<html>")]
+        mock.post(SEND_URL).mock(side_effect=replies)
+        first = await n.ws_disconnect(conn="market", cls="network")
+        second = await n.ws_disconnect(conn="market", cls="network")
+    assert first.status is SendStatus.FAILED and second.status is SendStatus.FAILED
+    assert n.counters["FAILED"] == 2 and n.counters["SENT"] == 0
+
+
 async def test_token_bucket_drops_excess_but_not_critical(http: httpx.AsyncClient) -> None:
     clock = Clock()
     n = make(http, clock, rate_capacity=2.0, rate_per_s=1.0 / 3.0)

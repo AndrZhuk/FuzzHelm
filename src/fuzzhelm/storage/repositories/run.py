@@ -100,8 +100,10 @@ class RunRepo:
 
     async def finish(self, run_id: UUID, status: RunStatus | str = RunStatus.DONE, *,
                      journal_head_hash: bytes | str | None = None, equity_hash: bytes | str | None = None,
-                     error: str | None = None, finished_at_ns: int | None = None) -> RunRow:
-        """Завершити прогін: DONE або FAILED (RUNNING тут — помилка викликача)."""
+                     error: str | None = None, finished_at_ns: int | None = None,
+                     ts_to_ns: int | None = None) -> RunRow:
+        """Завершити прогін: DONE або FAILED (RUNNING тут — помилка викликача). `ts_to_ns` — кінець вікна
+        даних, відомий лише наприкінці (live/replay-воркер); None — не змінювати."""
         st = RunStatus(status)
         if st is RunStatus.RUNNING:
             raise ValueError("finish() expects DONE or FAILED")
@@ -113,6 +115,8 @@ class RunRepo:
             values["journal_head_hash"] = as_bytes(journal_head_hash)
         if equity_hash is not None:
             values["equity_hash"] = as_bytes(equity_hash)
+        if ts_to_ns is not None:
+            values["ts_to"] = ns_to_dt_opt(ts_to_ns)
         res = await self.s.execute(update(_T).where(_T.c.id == run_id).values(**values).returning(_T))
         m = res.mappings().one_or_none()
         if m is None:

@@ -17,6 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from fuzzhelm.core.enums import Role
 
 MAX_YAML_CHARS = 256 * 1024  # межа розміру тексту стратегії (DoS через величезний YAML)
+# Межі цілих на HTTP-межі = межі типів колонок DDL §6: без них завелике число доходить до драйвера
+# (asyncpg DataError → «database error» 503) або до datetime (OverflowError → 500), а не дає 422.
+INT32_MAX = 2**31 - 1  # SERIAL / INT: instrument.id, strategy.id, strategy.version, app_user.id
+INT64_MAX = 2**63 - 1  # BIGINT / BIGSERIAL: decision.id, run.seed; час у нс (≤ 2262-04-11 UTC)
 
 DecimalStr = str  # документаційний псевдонім: десятковий рядок без експоненти
 
@@ -139,6 +143,12 @@ class HealthOut(_Out):
         description="Last PipelineHealth snapshot published by the ingest worker on channel "
         "`fuzzhelm_live` (kind `health`); null if none was received by this API process."
     )
+    pipelines: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Last `health` snapshot of each publisher by its `source` (`ingest_worker`, "
+        "`trading_worker`); the trading worker's one carries the LiveView status header "
+        "`MODE: PAPER · FEED: … · NO MAINNET KEYS · SEED … · Q=…`.",
+    )
 
 
 # ------------------------------------------------------------------ strategies
@@ -196,16 +206,46 @@ class StrategySummaryOut(_Out):
 # ------------------------------------------------------------------ backtests / runs
 
 
+class BacktestParams(_Model):
+    """Overrides of the engine parameters (the grid of §5.16 and a few switches); null = config value."""
+
+    n_atr: int | None = Field(default=None, ge=2, le=200, description="ATR period, bars.")
+    chi: float | None = Field(default=None, gt=0, le=20, description="Stop distance in ATRs (χ).")
+    u_enter: float | None = Field(default=None, gt=0, lt=1, description="Schmitt trigger enter threshold.")
+    u_exit: float | None = Field(default=None, ge=0, lt=1, description="Schmitt trigger exit threshold.")
+    rho_base: float | None = Field(default=None, gt=0, le=0.1, description="Risk per trade, equity fraction.")
+    lam: float | None = Field(default=None, gt=0, lt=1, description="EWMA λ of the volatility estimate.")
+    tp_multiple: float | None = Field(
+        default=None, gt=0, le=20, description="Take-profit distance as a multiple of the stop distance."
+    )
+    cost_mode: Literal["zero", "sqrt_impact", "full"] | None = Field(default=None, description="Cost model.")
+    initial_equity: DecimalStr | None = Field(
+        default=None,
+        pattern=r"^[0-9]{1,12}(\.[0-9]{1,8})?$",
+        description="Initial equity, USDT (decimal string).",
+    )
+
+
 class BacktestIn(_Model):
     symbol: str = Field(default="BTC-USDT-PERP", min_length=1, max_length=32, description="Canonical symbol.")
     tf: Literal["1m"] = "1m"
-    ts_from_ns: int = Field(ge=0, description="Start of the window, ns UTC (inclusive).")
-    ts_to_ns: int = Field(ge=0, description="End of the window, ns UTC (exclusive).")
+    ts_from_ns: int = Field(ge=0, le=INT64_MAX, description="Start of the window, ns UTC (inclusive).")
+    ts_to_ns: int = Field(ge=0, le=INT64_MAX, description="End of the window, ns UTC (exclusive).")
     engine: Literal["mamdani", "linear"] = "mamdani"
-    strategy_id: int | None = Field(default=None, description="Strategy version id; null = active/default.")
-    seed: int | None = Field(default=None, description="Seed; null = Settings.seed.")
-    params: dict[str, float | int | str | bool] = Field(
-        default_factory=dict, description="Parameter overrides (e.g. n_atr, chi, u_enter, rho_base, lam)."
+    strategy_id: int | None = Field(
+        default=None,
+        ge=1,
+        le=INT32_MAX,
+        description="Strategy version id (its rule base and MFs are used); null = the rule base and MFs "
+        "of `config/rules_mamdani.yaml` and `config/membership.yaml`.",
+    )
+    seed: int | None = Field(
+        default=None, ge=0, le=INT64_MAX, description="Non-negative seed (BIGINT); null = Settings.seed."
+    )
+    params: BacktestParams = Field(
+        default_factory=BacktestParams,
+        description="Parameter overrides (n_atr, chi, u_enter, u_exit, rho_base, lam, tp_multiple, "
+        "cost_mode, initial_equity); unknown keys are rejected with 422.",
     )
 
 

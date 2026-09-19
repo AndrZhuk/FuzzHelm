@@ -37,7 +37,9 @@ from fuzzhelm.storage.repositories.common import (
 log = logging.getLogger(__name__)
 
 API_VERSION = "0.1.0"
+SQLSTATE_CLASS_DATA_EXCEPTION = "22"  # PostgreSQL: 22003 numeric_value_out_of_range, 22008 datetime overflow…
 DEV_JWT_SECRETS = frozenset({"dev-only-change-me", "change-me", ""})
+MIN_JWT_SECRET_CHARS = 32  # HS256: ключ ≥ 256 біт (RFC 7518 §3.2)
 DEFAULT_CORS_ORIGINS: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
 PUBLIC_PATHS: frozenset[str] = frozenset(
     {"/auth/login", "/healthz", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
@@ -105,6 +107,11 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
+def weak_jwt_secret(secret: str) -> bool:
+    """Типовий секрет розробки або коротший за 32 символи — попередження під час старту."""
+    return secret in DEV_JWT_SECRETS or len(secret) < MIN_JWT_SECRET_CHARS
+
+
 def _error(code: int, detail: str) -> JSONResponse:
     return JSONResponse(status_code=code, content={"detail": detail})
 
@@ -138,9 +145,15 @@ def _install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(DBAPIError)
     async def _db_error(_: Request, exc: DBAPIError) -> JSONResponse:
-        if sqlstate(exc) == SQLSTATE_INSUFFICIENT_PRIVILEGE:
+        code = sqlstate(exc)
+        if code == SQLSTATE_INSUFFICIENT_PRIVILEGE:
             return _error(status.HTTP_403_FORBIDDEN, "operation not permitted by the database role")
-        log.error("database error sqlstate=%s", sqlstate(exc))
+        if code is not None and code.startswith(SQLSTATE_CLASS_DATA_EXCEPTION):
+            # клас 22 (data exception: число поза типом колонки тощо) — помилка вводу, а не збій БД;
+            # межі схем запитів мають відсікати це раніше, тут — страховка для нових параметрів
+            log.warning("rejected input value sqlstate=%s", code)
+            return _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "input value out of range for the database")
+        log.error("database error sqlstate=%s", code)
         return _error(status.HTTP_503_SERVICE_UNAVAILABLE, "database error")
 
     @app.exception_handler(OSError)
@@ -163,8 +176,9 @@ def create_app(
         if getattr(app.state, "services", None) is None and build_default:
             app.state.services = build_db_services()
         svc: ApiServices | None = getattr(app.state, "services", None)
-        if svc is not None and svc.settings.jwt_secret.get_secret_value() in DEV_JWT_SECRETS:
-            log.warning("FUZZHELM_JWT_SECRET is a development default; set a random secret in .env")
+        if svc is not None and weak_jwt_secret(svc.settings.jwt_secret.get_secret_value()):
+            log.warning("FUZZHELM_JWT_SECRET is a development default or shorter than %d chars; "
+                        "set a random secret in .env", MIN_JWT_SECRET_CHARS)
         try:
             yield
         finally:

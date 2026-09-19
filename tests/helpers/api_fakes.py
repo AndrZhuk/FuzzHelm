@@ -47,7 +47,7 @@ from fuzzhelm.storage.repositories import (
 )
 from fuzzhelm.storage.repositories.risk import exact_factor_payload
 from fuzzhelm.storage.repositories.strategy import StrategyConflictError, rules_hash
-from fuzzhelm.storage.repositories.user import hash_password, verify_password
+from fuzzhelm.storage.repositories.user import hash_password
 from fuzzhelm.storage.session import json_dumps
 
 FAST_PWD = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=4)
@@ -115,13 +115,6 @@ class MemUsers:
 
     async def get_by_login(self, login: str) -> UserRow | None:
         return next((u for u in self.st.users.values() if u.login == login), None)
-
-    async def authenticate(self, login: str, password: str) -> UserRow | None:
-        user = await self.get_by_login(login)
-        if user is None:
-            FAST_PWD.dummy_verify()
-            return None
-        return user if verify_password(password, user.pwd_hash, FAST_PWD) else None
 
     async def set_role(self, user_id: int, role: Role | str) -> None:
         self.st.users[user_id] = replace(self.st.users[user_id], role=Role(role).value)
@@ -654,5 +647,6 @@ def memory_services(
         clock=clk,
         ids=SeededIdGenerator(7, b"api-test"),
         login_limiter=LoginRateLimiter(now_s=lambda: clk.now_ns() / 1e9),
+        password_context=FAST_PWD,
     )
     return services, db

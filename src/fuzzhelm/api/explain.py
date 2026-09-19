@@ -8,10 +8,11 @@
 Автор: Андрій Жук, 2026.
 
 Детермінізм: μ_agg не зберігається (201 вузол × кожен бар), а перераховується тим самим MamdaniEngine з
-конфігурації стратегії прогону. Входи T/R/V беруться з точних float-виходів детекторів (JSONB) через
-decision.aggregator.consensus — колонки t_in/r_in/v_in округлені до NUMERIC(8,5). Блок `consistency`
-чесно показує, чи перерахунок збігся зі збереженим (u_raw у межах округлення колонки, α кожного правила
-≤ 1e−9); розбіжність означає, що конфігурацію стратегії змінили після прогону, — її не приховуємо.
+конфігурації прогону (дерева МФ/правил із run.config, інакше версія стратегії, інакше config/).
+Входи T/R/V беруться з точних float-виходів детекторів (JSONB) через decision.aggregator.consensus —
+колонки t_in/r_in/v_in округлені до NUMERIC(8,5). Блок `consistency` чесно показує, чи перерахунок
+збігся зі збереженим (u_raw у межах округлення колонки, α кожного правила ≤ 1e−9); розбіжність означає,
+що конфігурацію стратегії змінили після прогону, — її не приховуємо.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from functools import lru_cache
 from typing import Any
 
 import numpy as np
+import orjson
 
 from fuzzhelm.api.validation import validate_strategy_texts
 from fuzzhelm.config import load_yaml
@@ -38,7 +40,8 @@ from fuzzhelm.features.convert import to_float
 from fuzzhelm.fuzzy.base import FiredRule, FuzzyResult, InferenceEngine
 from fuzzhelm.fuzzy.linear import LinearVoteEngine
 from fuzzhelm.fuzzy.mamdani import MamdaniEngine, default_engine
-from fuzzhelm.fuzzy.membership import LinguisticVariable, MembershipConfig
+from fuzzhelm.fuzzy.membership import LinguisticVariable, MembershipConfig, load_membership
+from fuzzhelm.fuzzy.rules import load_rulebase
 
 # половина одиниці останнього розряду NUMERIC(8,5) + запас на float
 COLUMN_TOL = 5e-6 + 1e-9
@@ -55,7 +58,7 @@ class StrategyRef:
     id: int | None
     name: str | None
     version: int | None
-    source: str  # "strategy" | "default_config"
+    source: str  # "run_config" | "strategy" | "default_config" | "linear"
 
 
 @lru_cache(maxsize=16)
@@ -64,13 +67,45 @@ def _engine_from_texts(rules_yaml: str, membership_yaml: str) -> MamdaniEngine:
     return MamdaniEngine(v.membership, v.rulebase)
 
 
+@lru_cache(maxsize=16)
+def _engine_from_trees_json(key: bytes) -> MamdaniEngine:
+    membership_tree, rules_tree = orjson.loads(key)
+    membership = load_membership(membership_tree)
+    return MamdaniEngine(membership, load_rulebase(rules_tree, membership, production=True))
+
+
 @lru_cache(maxsize=1)
 def _default_mamdani() -> MamdaniEngine:
     return default_engine()
 
 
-def mamdani_for(strategy: Any | None) -> tuple[MamdaniEngine, StrategyRef]:
-    """Рушій із текстів версії стратегії прогону або з робочих конфігів (якщо прогін без стратегії)."""
+def run_trees(run: Any | None) -> Mapping[str, Any]:
+    """Дерева конфігурації, з якими рушій виконав прогін (run.config["trees"], api.backtest_runner)."""
+    cfg = getattr(run, "config", None)
+    trees = cfg.get("trees") if isinstance(cfg, Mapping) else None
+    return trees if isinstance(trees, Mapping) else {}
+
+
+def mamdani_for(strategy: Any | None, run: Any | None = None) -> tuple[MamdaniEngine, StrategyRef]:
+    """Рушій Мамдані, яким було прийнято рішення, у порядку достовірності:
+    1) дерева МФ і правил із паспорта прогону (run.config.trees — саме те, що виконував рушій);
+    2) тексти версії стратегії прогону (run.strategy_id);
+    3) робочі config/membership.yaml + config/rules_mamdani.yaml (прогін без стратегії і без дерев)."""
+    trees = run_trees(run)
+    if isinstance(trees.get("membership"), Mapping) and isinstance(trees.get("rules"), Mapping):
+        key = orjson.dumps([trees["membership"], trees["rules"]], option=orjson.OPT_SORT_KEYS)
+        try:
+            engine = _engine_from_trees_json(key)
+        except Exception as e:  # паспорт прогону записав сам рушій — збій тут означає зміну схеми
+            raise ExplainError(f"run {getattr(run, 'id', None)} config trees are not loadable: {e}") from e
+        sid = getattr(run, "strategy_id", None)
+        ref = StrategyRef(
+            sid,
+            getattr(strategy, "name", None),
+            getattr(strategy, "version", None),
+            "run_config",
+        )
+        return engine, ref
     if strategy is None:
         return _default_mamdani(), StrategyRef(None, None, None, "default_config")
     try:
@@ -78,6 +113,15 @@ def mamdani_for(strategy: Any | None) -> tuple[MamdaniEngine, StrategyRef]:
     except Exception as e:  # збережена версія мала пройти валідацію під час POST/PUT
         raise ExplainError(f"stored strategy {strategy.id} is not loadable: {e}") from e
     return engine, StrategyRef(strategy.id, strategy.name, strategy.version, "strategy")
+
+
+def linear_for(run: Any | None) -> LinearVoteEngine:
+    """Базова лінія з вагами прогону (run.config.linear_weights) або типовими."""
+    cfg = getattr(run, "config", None)
+    weights = cfg.get("linear_weights") if isinstance(cfg, Mapping) else None
+    if isinstance(weights, Mapping) and weights:
+        return LinearVoteEngine({str(k): float(v) for k, v in weights.items()})
+    return LinearVoteEngine()
 
 
 def _f(x: Decimal | float | int | None) -> float | None:
@@ -237,7 +281,11 @@ def explain_decision(
         "u_final": _f(row.u_final),
     }
     outputs = parse_detector_outputs(row.detector_outputs)
-    cfg = detectors_cfg if detectors_cfg is not None else load_yaml("detectors")
+    run_det = run_trees(run).get("detectors")
+    if isinstance(run_det, Mapping):
+        cfg: Mapping[str, Any] = run_det  # κ_min, ν саме того прогону
+    else:
+        cfg = detectors_cfg if detectors_cfg is not None else load_yaml("detectors")
     params = agreement_params_from_config(cfg)
 
     cons: Consensus | None = consensus(outputs) if outputs else None
@@ -254,9 +302,9 @@ def explain_decision(
     engine: InferenceEngine
     membership: MembershipConfig | None
     if engine_kind == "linear":
-        engine, strategy_ref, membership = LinearVoteEngine(), StrategyRef(None, None, None, "linear"), None
+        engine, strategy_ref, membership = linear_for(run), StrategyRef(None, None, None, "linear"), None
     else:
-        mengine, strategy_ref = mamdani_for(strategy)
+        mengine, strategy_ref = mamdani_for(strategy, run)
         engine, membership = mengine, mengine.membership
     fz = engine.infer(T, R, V)
 

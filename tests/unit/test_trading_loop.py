@@ -20,7 +20,7 @@ from fuzzhelm.backtest.dataset import DEFAULT_KLINES, Dataset, load_exchange_ins
 from fuzzhelm.backtest.engine import BacktestConfig, EngineInvariantError, TradingLoop, run_backtest
 from fuzzhelm.core.clock import NS_PER_DAY
 from fuzzhelm.core.enums import ExitReason, OrderType, RiskState, Role, Side
-from fuzzhelm.core.errors import PermissionDeniedError
+from fuzzhelm.core.errors import ConfigValidationError, PermissionDeniedError
 from fuzzhelm.decision.narrative_uk import narrate
 from fuzzhelm.ingest.normalize import normalize_rest_klines
 from fuzzhelm.sizing.vol_target import VolTarget
@@ -104,6 +104,36 @@ def test_hysteresis_exit_and_flip_are_signal_exits() -> None:
     assert all(o.status.value == "CANCELED" for o in loop.orders if o.role == "stop")
 
 
+def test_take_profit_fill_gets_a_sim_order_row_bound_to_the_opening_decision() -> None:
+    # TP — рівень позиції в брокері (EXE-03): його виконання — синтетична заявка, якої рушій не подавав;
+    # для рядка sim_order (decision_id NOT NULL) вона прив'язується до рішення, що відкрило позицію
+    loop = scripted_loop(lambda t: 0.3 if t >= 40 else 0.0, cost_mode="zero", chi=2.5, tp_multiple=0.05)
+    run_loop(loop, fixture(), stop=400)
+    tp_trades = [p for p in loop.positions if p.exit_reason is ExitReason.TP]
+    assert tp_trades, "a TP at 0.05·stop distance must be hit within 360 bars"
+    tp_orders = [o for o in loop.orders if o.role == "tp"]
+    assert len(tp_orders) == len(tp_trades)
+    for o, pos in zip(tp_orders, tp_trades, strict=True):
+        assert o.decision_ns == pos.opening_decision_ns and o.status.value == "FILLED"
+        assert o.request.reduce_only and o.request.qty == o.filled_qty == pos.qty
+        assert o.avg_fill_price == pos.exit_price
+
+
+@pytest.mark.parametrize("engine", ["mamdani", "linear"])
+def test_fast_intent_path_equals_traced_decision(engine: str) -> None:
+    # бектест без трасування йде через DecisionCore.intent (infer_u); числа мусять бути ТІ САМІ
+    loop = TradingLoop(fixture().instrument, base_config().with_params(engine=engine, record_traces="none",
+                                                                       warmup_bars=60), seed=1)
+    compared = 0
+    for i, (bar, dbar, close_ns) in enumerate(fixture().slice(0, 400).feed()):
+        loop.step(bar, close_ns, dbar=dbar)
+        if i >= loop.decide_from:
+            tr = loop.core.decide(loop.window, bar.t_ns)
+            assert loop.core.intent(loop.window) == (tr.u_raw, tr.kappa, tr.u_final)
+            compared += 1
+    assert compared == 400 - loop.decide_from
+
+
 def test_gate_resyncs_after_stop_exit() -> None:
     # тісний стоп (χ = 0.1·ATR) спрацьовує; далі u = 0.2 між порогами — повторного входу бути не може
     script = {i: (0.3 if i == 40 else 0.2) for i in range(40, 120)}
@@ -112,6 +142,42 @@ def test_gate_resyncs_after_stop_exit() -> None:
     assert loop.positions and loop.positions[0].exit_reason is ExitReason.STOP
     assert len(loop.positions) == 1 and loop.open_position is None
     assert sum(1 for o in loop.orders if o.role == "enter") == 1
+
+
+def test_step_reports_order_status_updates_for_live_persistence() -> None:
+    # live-воркер пише sim_order по кроках: нова заявка — у StepResult.orders, її подальші зміни
+    # (виконання, скасування стопа закритої позиції) — у StepResult.order_updates рівно раз
+    loop = scripted_loop({40: 0.3, 41: 0.2, 42: 0.2, 43: 0.0}, cost_mode="zero", chi=2.5, tp_multiple=50.0)
+    created: dict[int, tuple[object, ...]] = {}
+    updated: dict[int, tuple[object, ...]] = {}
+    for i, (bar, dbar, close_ns) in enumerate(fixture().slice(0, 50).feed()):
+        sr = loop.step(bar, close_ns, dbar=dbar)
+        created[i], updated[i] = sr.orders, sr.order_updates
+    entry, stop, exit_ = (next(o for o in loop.orders if o.role == r) for r in ("enter", "stop", "exit"))
+    assert [p.exit_reason for p in loop.positions] == [ExitReason.SIGNAL]
+    assert entry in created[40] and stop in created[40] and exit_ in created[43]
+    assert updated[41] == (entry,) and entry.status.value == "FILLED"
+    assert {id(o) for o in updated[44]} == {id(exit_), id(stop)}
+    assert exit_.status.value == "FILLED" and stop.status.value == "CANCELED"
+    assert sum(len(u) for u in updated.values()) == 3                 # кожна зміна — один раз
+
+
+def test_sizer_rejection_is_not_sent_to_the_risk_chain() -> None:
+    # E = 10 USDT: q·p < minNotional ⇒ сайзер відмовляє (BELOW_MIN_NOTIONAL); оцінювати ризик нічого
+    loop = scripted_loop({40: 0.3}, initial_equity=Decimal("10"))
+    steps = [loop.step(bar, c, dbar=d) for bar, d, c in fixture().slice(0, 45).feed()]
+    d = steps[40].decision
+    assert d is not None and d.gate_side == 1 and d.requested_qty is None
+    assert d.action == "none" and d.verdict is None and d.order_ids == ()
+    assert loop.orders == [] and not [e for e in loop.risk_events if e.rule != "risk_state"]
+    # те саме з повним трасуванням і реальним ядром: причина відмови — у trace.risk
+    cfg = base_config().with_params(warmup_bars=60, record_traces="all", initial_equity=Decimal("10"))
+    res = run_backtest(fixture().slice(0, 400), cfg, seed=3)
+    intents = [x for x in res.decisions if x.gate_side != 0]
+    assert intents and res.orders == []
+    for x in intents:
+        assert x.trace is not None and x.trace.risk is not None and x.trace.risk["evaluated"] is False
+        assert x.trace.risk["note"] == "BELOW_MIN_NOTIONAL" and x.requested_qty is None
 
 
 # ---------------------------------------------------------------- ризик-контур у циклі
@@ -138,6 +204,41 @@ def test_halted_means_zero_new_exposure_and_flatten_all() -> None:
     late = ds.close_time_ns(59)
     assert not [o for o in loop.orders if o.role in ("enter", "flip") and o.ts_created_ns > late]
     assert loop.halted_at == 60
+
+
+def test_killswitch_tripped_between_bars_cancels_queued_increase_but_keeps_open_stop() -> None:
+    # оператор/API спрацьовує засувку ПІСЛЯ рішення на закритті t, але ДО open_{t+1}: заявка на вхід
+    # (або розворот), що чекає open_{t+1}, не має виконатися — HALTED ⇒ жодної нової експозиції (ENG-20)
+    ds = fixture()
+    sym = ds.instrument.symbol_canon
+    feed = list(ds.slice(0, 60).feed())
+    flat = scripted_loop({40: 0.3})
+    for i, (bar, dbar, close_ns) in enumerate(feed[:45]):
+        if i == 41:
+            flat.fsm.killswitch.trip("operator", feed[40][2])
+        sr = flat.step(bar, close_ns, dbar=dbar)       # check_invariants=True: засувка ловиться і там
+        if i == 41:
+            assert sr.fills == () and sr.position_qty == 0 and sr.risk_state is RiskState.HALTED
+            assert {o.role for o in sr.order_updates} == {"enter", "stop"}
+            assert all(o.status.value == "CANCELED" for o in sr.order_updates)
+    assert flat.fills == [] and flat.positions == [] and flat.open_position is None
+
+    # розворот у черзі: скасовано лише його (і стоп нової позиції); стоп відкритого лонга живе до flatten
+    long_ = scripted_loop({40: 0.3, 41: 0.2, 42: 0.2, 43: -0.3})
+    for i, (bar, dbar, close_ns) in enumerate(feed[:50]):
+        if i == 44:
+            long_.fsm.killswitch.trip("operator", feed[43][2])
+        sr = long_.step(bar, close_ns, dbar=dbar)
+        if i == 44:
+            assert sr.position_qty > 0                  # розворот не виконано, лонг лишився
+            old_stop = next(o for o in long_.orders if o.role == "stop" and o.decision_ns == int(ds.t_ns[40]))
+            assert old_stop.status.value == "NEW"        # захист відкритої позиції не знято
+            assert sr.decision is not None and sr.decision.action == "flatten"
+    flip = next(o for o in long_.orders if o.role == "flip")
+    assert flip.status.value == "CANCELED" and flip.filled_qty == 0
+    [pos] = long_.positions
+    assert pos.side == 1 and pos.exit_reason is ExitReason.HALT
+    assert long_.portfolio.position_qty(sym) == 0
 
 
 def test_halt_release_requires_admin_then_cooldown_is_reduce_only() -> None:
@@ -291,6 +392,13 @@ def test_config_roundtrip_identity_and_profiles() -> None:
         cfg.with_params(detectors=("no_such_detector",))
     with pytest.raises(ValueError):
         cfg.with_params(engine="sugeno")
+    for bad, path in (({"take_profit": {"multiple_of_stop": 0}}, "engine.take_profit.multiple_of_stop"),
+                      ({"sigma_base": {"method": "ewma"}}, "engine.sigma_base.method"),
+                      ({"no_such_key": 1}, "engine.no_such_key")):
+        trees = {**cfg.trees, "engine": {**cfg.trees["engine"], **bad}}
+        with pytest.raises(ConfigValidationError) as ei:
+            BacktestConfig(trees=trees)
+        assert ei.value.path == path
     sub = cfg.with_params(detectors=("ema_slope", "donchian", "vol_regime"))
     loop = TradingLoop(fixture().instrument, sub, seed=1)
     assert [d.name for d in loop.core.detectors] == ["ema_slope", "donchian", "vol_regime"]

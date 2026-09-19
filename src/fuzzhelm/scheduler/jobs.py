@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -415,3 +416,47 @@ def build_scheduler(ctx: JobContext, scheduler: AsyncIOScheduler | None = None) 
             misfire_grace_time=600,
         )
     return sched
+
+
+async def serve(ctx: JobContext, stop: asyncio.Event, scheduler: AsyncIOScheduler | None = None) -> None:
+    """Запустити розклад і працювати, доки не встановлено `stop` (процес-воркер або lifespan)."""
+    sched = build_scheduler(ctx, scheduler)
+    sched.start()
+    log.info("scheduler started: %s", ", ".join(j.id for j in sched.get_jobs()))
+    try:
+        await stop.wait()
+    finally:
+        sched.shutdown(wait=False)
+        # AsyncIOScheduler виконує shutdown через call_soon_threadsafe — один прохід циклу, щоб він відбувся
+        await asyncio.sleep(0)
+
+
+async def _main() -> None:  # pragma: no cover — точка входу процесу (python -m fuzzhelm.scheduler.jobs)
+    import signal  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from fuzzhelm.ingest.ratelimit import binance_request_bucket  # noqa: PLC0415
+    from fuzzhelm.ingest.rest_client import BinanceRestClient  # noqa: PLC0415
+    from fuzzhelm.ingest.retry import RetryPolicy  # noqa: PLC0415
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    settings = get_settings()
+    clock = SystemClock()
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        client = BinanceRestClient(settings.binance_rest_base, http, binance_request_bucket(clock),
+                                   RetryPolicy(rng_seed=settings.seed), clock=clock)
+        ctx = build_db_context(settings, backfill=RestGapBackfiller(client), clock=clock)
+        try:
+            await serve(ctx, stop)
+        finally:
+            if ctx.notifier is not None:
+                await ctx.notifier.aclose()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    asyncio.run(_main())

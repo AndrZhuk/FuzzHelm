@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +33,11 @@ SERIES = {"rect": "#2a78d6", "trapezoid": "#eb6834", "simpson": "#1baf7a"}
 INK, INK_2, GRID, AXIS, SURFACE = "#0b0b0b", "#52514e", "#e1e0d9", "#c3c2b7", "#fcfcfb"
 
 
-def to_markdown(study: dict[str, Any], seed: int) -> str:
+def to_markdown(study: dict[str, Any], seed: int, config: str = "") -> str:
     lines = [
         "# Збіжність дефазифікації центроїдом за кроком сітки",
         "",
+        *([config, ""] if config else []),
         f"Рушій: Мамдані, робоча база 45 правил; {study['n_inputs']} входів "
         "(T, R, V) ~ U([−1;1]×[−1;1]×[0;1]), "
         f"seed = {seed}. Еталон u*: `{study['reference']}` — точне інтегрування кусково-лінійної μ_agg "
@@ -71,6 +73,14 @@ def to_markdown(study: dict[str, Any], seed: int) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def config_line(v_meta: Mapping[str, Any]) -> str:
+    """Рядок про походження МФ: числа збіжності залежать від конфігурації (хвиля 2: калібровані T/V)."""
+    if v_meta.get("provisional"):
+        return "Конфігурація: `config/membership.yaml` (V-блок: ТИМЧАСОВИЙ (provisional))."
+    return (f"Конфігурація: `config/membership.yaml` (V-блок: калібрований, source_run_id = "
+            f"{v_meta.get('source_run_id')}). Згенеровано `uv run python scripts/defuzz_convergence.py`.")
 
 
 def plot(study: dict[str, Any], out: Path) -> None:
@@ -111,8 +121,9 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     pts = rng.uniform((-1.0, -1.0, 0.0), (1.0, 1.0, 1.0), size=(args.n_inputs, 3))
     inputs = [(float(t), float(r), float(v)) for t, r, v in pts]
-    study = convergence_study(default_engine(), inputs)
-    md = to_markdown(study, args.seed)
+    engine = default_engine()
+    study = convergence_study(engine, inputs)
+    md = to_markdown(study, args.seed, config_line(engine.membership.V.meta))
     print(md)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     (FIG_DIR / "fuzzy_defuzz_convergence.md").write_text(md, encoding="utf-8")

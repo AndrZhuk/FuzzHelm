@@ -182,7 +182,8 @@ class StrategyConflictError(FuzzHelmError): existing_id, name, version   # то�
 async def create(run_id, *, kind, config, config_hash, dataset_hash, seed, engine, git_sha=None, strategy_id=None,
                  instrument_id=None, tf=None, ts_from_ns=None, ts_to_ns=None, started_at_ns=None) -> RunRow  # RUNNING
 async def create_from_manifest(run_id, manifest: RunManifest-like, *, config, ...) -> RunRow
-async def finish(run_id, status=DONE, *, journal_head_hash=None, equity_hash=None, error=None, finished_at_ns=None) -> RunRow
+async def finish(run_id, status=DONE, *, journal_head_hash=None, equity_hash=None, error=None, finished_at_ns=None,
+                 ts_to_ns=None) -> RunRow   # ts_to_ns — кінець вікна live-прогону (workers W-23); None — не змінювати
 async def get(run_id); async def list(*, kind=None, status=None, limit=100)
 async def find_by_identity(*, config_hash, dataset_hash, seed, engine, git_sha) -> RunRow | None  # git_sha через IS NOT DISTINCT FROM
 async def put_metrics(run_id, metrics: Mapping[str, float | int | None]) -> int   # upsert у run_metric

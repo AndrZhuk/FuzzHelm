@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -17,9 +18,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fuzzhelm.core.enums import ExitReason, Side
 from fuzzhelm.storage.models import PositionModel, table_of
-from fuzzhelm.storage.repositories.common import from_mapping, ns_to_dt_opt, to_numeric
+from fuzzhelm.storage.repositories.common import chunks, from_mapping, ns_to_dt_opt, to_numeric
 
 _T = table_of(PositionModel)
+INSERT_CHUNK = 2_000
+
+
+def position_values(*, run_id: UUID | None, instrument_id: int | None, side: Side | int,
+                    qty: Decimal, avg_entry: Decimal, opened_at_ns: int | None,
+                    leverage: Decimal | float | None = None, allocated_margin: Decimal | None = None,
+                    stop_price: Decimal | None = None, tp_price: Decimal | None = None,
+                    liq_price: Decimal | None = None, closed_at_ns: int | None = None,
+                    exit_reason: ExitReason | str | None = None, realized_pnl: Decimal | None = None,
+                    funding_paid: Decimal | None = None,
+                    max_adverse_excursion: Decimal | None = None) -> dict[str, Any]:
+    """Рядок position цілком (відкриття + закриття) для пакетного запису готового прогону (insert_many).
+
+    Порожні realized_pnl/funding_paid → 0 (як server_default)."""
+    return {
+        "run_id": run_id, "instrument_id": instrument_id, "side": int(side), "qty": qty,
+        "avg_entry": avg_entry, "leverage": to_numeric(leverage), "allocated_margin": allocated_margin,
+        "stop_price": stop_price, "tp_price": tp_price, "liq_price": liq_price,
+        "realized_pnl": realized_pnl if realized_pnl is not None else Decimal(0),
+        "funding_paid": funding_paid if funding_paid is not None else Decimal(0),
+        "max_adverse_excursion": max_adverse_excursion, "opened_at": ns_to_dt_opt(opened_at_ns),
+        "closed_at": ns_to_dt_opt(closed_at_ns),
+        "exit_reason": None if exit_reason is None else ExitReason(exit_reason).value,
+    }
 
 # поля, які можна змінювати під час життя позиції (ідентичність і відкриття — ні)
 MUTABLE_NUMERIC: frozenset[str] = frozenset({
@@ -63,6 +88,12 @@ class PositionRepo:
             tp_price=tp_price, liq_price=liq_price, opened_at=ns_to_dt_opt(opened_at_ns),
         ).returning(_T.c.id))
         return int(res.scalar_one())
+
+    async def insert_many(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Пакетний запис рядків `position_values(...)` (executemany частинами по INSERT_CHUNK)."""
+        for part in chunks(rows, INSERT_CHUNK):
+            await self.s.execute(insert(_T), [dict(r) for r in part])
+        return len(rows)
 
     async def update(self, position_id: int, **fields: Decimal | float | int | None) -> PositionRow:
         """Змінити числові поля (MUTABLE_NUMERIC); невідоме поле → ValueError."""

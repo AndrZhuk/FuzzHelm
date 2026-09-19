@@ -29,10 +29,13 @@ MAX_WINDOW_NS = 400 * 86_400 * 1_000_000_000  # > 45 днів брифінгу �
     status_code=status.HTTP_202_ACCEPTED,
     response_model=BacktestAccepted,
     summary="Submit a backtest run",
-    description="Queues an event-driven backtest (bar close → fill at next open) over stored candles and "
-    "returns its `run_id` immediately. Poll `GET /runs/{run_id}` for the status; the passport, "
-    "metrics and equity appear there when the engine writes them. At most 8 unfinished jobs per "
-    "API process (429 beyond that).",
+    description="Queues an event-driven backtest (bar close → fill at next open) over the stored closed "
+    "candles of `[ts_from_ns, ts_to_ns)` and returns its `run_id` immediately. The first ~523 bars "
+    "are the warm-up of features and detectors (no decisions there). Poll `GET /runs/{run_id}`: "
+    "the passport appears with status RUNNING as soon as the dataset is loaded, then DONE with "
+    "metrics, equity, decisions (explainable via `/decisions/{id}/explain`) and risk events, or "
+    "FAILED with the reason (e.g. an identical run — same config, dataset, seed, engine and git "
+    "commit — already exists). At most 8 unfinished jobs per API process (429 beyond that).",
     responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
 )
 async def submit_backtest(
@@ -46,7 +49,11 @@ async def submit_backtest(
     if body.ts_to_ns - body.ts_from_ns > MAX_WINDOW_NS:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="window longer than 400 days")
     run_id = services.ids.next_uuid()
-    spec = {**body.model_dump(), "seed": body.seed if body.seed is not None else services.settings.seed}
+    spec = {
+        **body.model_dump(exclude={"params"}),
+        "params": body.params.model_dump(exclude_none=True),
+        "seed": body.seed if body.seed is not None else services.settings.seed,
+    }
     job = None
     try:
         async with services.uow() as repos:

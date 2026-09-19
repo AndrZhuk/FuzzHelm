@@ -229,6 +229,23 @@ class PaperBroker:
         st.tp_price = None     # TP — біржова заявка; ціна ліквідації — механізм біржі, лишається
         st.tp_side = 0
 
+    def cancel(self, client_order_id: UUID) -> bool:
+        """Скасувати одну ще не виконану заявку (MARKET у черзі або стоп). False — немає або вже фінальна.
+
+        Потрібно засувці рушія: після спрацювання kill-switch поставлена в чергу заявка на вхід не мусить
+        виконатися, а захисний стоп відкритої позиції — лишитися (cancel_all зняв би й його).
+        """
+        o = self._orders.get(client_order_id)
+        if o is None or o.status != OrderStatus.NEW:
+            return False
+        st = self._require(o.req.instrument)
+        o.status = OrderStatus.CANCELED
+        if client_order_id in st.market_queue:
+            st.market_queue.remove(client_order_id)
+        if client_order_id in st.stop_orders:
+            st.stop_orders.remove(client_order_id)
+        return True
+
     # ================================================================ керування рівнями
 
     def set_take_profit(self, instrument: str, price: Decimal | None, *, side: Side | None = None) -> None:

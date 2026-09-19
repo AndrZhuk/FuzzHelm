@@ -3,7 +3,8 @@
 Найменування: api/routers/risk.py
 Призначення: GET /risk/state, GET /risk/events, GET /risk/limits — читання; PUT /risk/limits — зміна
 config/risk_limits.yaml (валідація risk.config, атомарний запис, audit_log before/after);
-POST /risk/killswitch/release — команда воркеру зняти HALTED (audit_log + NOTIFY fuzzhelm_control).
+POST /risk/killswitch/release — команда воркеру зняти HALTED (audit_log + NOTIFY fuzzhelm_control +
+Telegram-нотифікація, якщо налаштовано).
 Автор: Андрій Жук, 2026.
 
 Зняття HALTED робить власник автомата — торговий воркер (RiskStateMachine.release(Role.ADMIN)), а не API:
@@ -31,6 +32,7 @@ from fuzzhelm.api.limits import (
 )
 from fuzzhelm.api.live import CONTROL_CHANNEL, LIVE_CHANNEL
 from fuzzhelm.api.schemas import (
+    INT64_MAX,
     ErrorResponse,
     KillSwitchReleaseAccepted,
     KillSwitchReleaseIn,
@@ -123,7 +125,7 @@ async def risk_events(
     run_id: Annotated[UUID | None, Query()] = None,
     rule: Annotated[str | None, Query(max_length=64)] = None,
     only: Annotated[Literal["all", "veto", "transitions"], Query()] = "all",
-    since_ns: Annotated[int | None, Query(ge=0)] = None,
+    since_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX)] = None,
     limit: Annotated[int, Query(ge=1, le=2000)] = 500,
 ) -> list[dict[str, Any]]:
     async with services.uow() as repos:
@@ -274,6 +276,13 @@ async def release_killswitch(
             LIVE_CHANNEL,
             "audit",
             {"action": RELEASE_ACTION, "audit_id": audit_id, "run_id": run_ref, "actor": principal.login},
+        )
+    if services.notifier is not None and services.notifier.enabled:
+        # оператору на телефон — після COMMIT, у фоні: Telegram не затримує відповідь і не валить її
+        services.spawn(
+            services.notifier.killswitch(
+                action="release_requested", reason=body.reason, actor=principal.login, run_id=run_ref
+            )
         )
     return {
         "audit_id": audit_id,

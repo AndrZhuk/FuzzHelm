@@ -1,0 +1,34 @@
+{
+  "scenario": "flash_crash",
+  "derived_from": "fixtures/ws/btcusdt_2026-09-18.jsonl.gz",
+  "derived_from_sha256": "f0762b00948ea83f84bf77354a035422f2a0980450ae7f51363d1fe740272bf3",
+  "sha256": "0b093515b131bc0e3aa50be4bc1d2a833fd0cb481fa569893e79af03551aaba3",
+  "injection": {
+    "t0_ns": 1789759980000000000,
+    "long_qty": "0.066",
+    "entry_price": "81134.70",
+    "stop_price": "81012.20",
+    "equity_before": "9997.943843920",
+    "config_hash": "7e030de7918c0ac504b11f5c6bc1b5c94956fd8a6da17e49fcc39df9b1621ef6"
+  },
+  "profile_ms_from_t0": [
+    [
+      0,
+      "0.935"
+    ],
+    [
+      20000,
+      "0.890"
+    ],
+    [
+      60000,
+      "0.925"
+    ],
+    [
+      600000,
+      "0.970"
+    ]
+  ],
+  "design": "stress test, not a historical replay: at the minute boundary where the strategy enters holding a long position, prices gap −6.5 %, cascade to −11 % in 20 s, rebound to −7.5 %, recover to −3 % over 10 min; frames before t0 are byte-identical to the recording",
+  "generator": "scripts/make_demo_scenario.py"
+}

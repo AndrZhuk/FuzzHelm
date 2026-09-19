@@ -5,22 +5,26 @@
 пишеться в audit_log (STRIDE: Repudiation), перебір обмежує LoginRateLimiter (STRIDE: Spoofing).
 Автор: Андрій Жук, 2026.
 
-Повідомлення про помилку однакове для «немає користувача» і «хибний пароль», а UserRepo.authenticate
-рахує bcrypt і для неіснуючого логіна — перелік користувачів не витікає ні текстом, ні часом відповіді.
+Повідомлення про помилку однакове для «немає користувача» і «хибний пароль», а bcrypt рахується і для
+неіснуючого логіна (dummy_verify) — перелік користувачів не витікає ні текстом, ні часом відповіді.
 """
 
 from __future__ import annotations
 
+import asyncio
 import math
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from passlib.context import CryptContext
 from pydantic import ValidationError
 
 from fuzzhelm.api.auth import ACCESS_MATRIX, Permission, Principal, issue_token
 from fuzzhelm.api.deps import ServicesDep, client_ip, require
 from fuzzhelm.api.schemas import ErrorResponse, LoginJson, MeResponse, TokenResponse
 from fuzzhelm.api.services import role_of
+from fuzzhelm.storage.repositories import UserRow
+from fuzzhelm.storage.repositories.user import verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -48,6 +52,15 @@ _LOGIN_BODY: dict[str, Any] = {
         },
     }
 }
+
+
+def check_password(user: UserRow | None, password: str, context: CryptContext) -> bool:
+    """Та сама логіка, що UserRepo.authenticate (dummy_verify для невідомого логіна), але синхронна —
+    для виклику в потоці."""
+    if user is None:
+        context.dummy_verify()
+        return False
+    return verify_password(password, user.pwd_hash, context)
 
 
 async def _read_credentials(request: Request) -> LoginJson:
@@ -93,8 +106,14 @@ async def login(request: Request, services: ServicesDep) -> TokenResponse:
             headers={"Retry-After": str(math.ceil(wait))},
         )
     async with services.uow() as repos:
-        user = await repos.users.authenticate(creds.username, creds.password)
-        role = role_of(user)
+        candidate = await repos.users.get_by_login(creds.username)
+    # bcrypt (вартість 12, ~0,2 с CPU) — в окремому потоці і ПОЗА транзакцією: перебір паролів не
+    # зупиняє event loop і не тримає з'єднання пулу БД на час хешування; для неіснуючого логіна
+    # рахується фіктивний хеш — час відповіді однаковий
+    ok = await asyncio.to_thread(check_password, candidate, creds.password, services.password_context)
+    user = candidate if ok else None
+    role = role_of(user)
+    async with services.uow() as repos:
         if user is None or role is None or user.login is None:
             await repos.audit.append(
                 "auth.login_failed",

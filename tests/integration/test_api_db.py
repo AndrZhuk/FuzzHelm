@@ -1,4 +1,5 @@
-"""API на справжньому PostgreSQL: вхід, аудит before/after, CRUD стратегій, /explain, LISTEN/NOTIFY, планувальник.
+"""API на справжньому PostgreSQL: вхід, аудит before/after, CRUD стратегій, /explain, LISTEN/NOTIFY, бектест,
+планувальник.
 
 Найменування: tests/integration/test_api_db.py
 Автор: Андрій Жук, 2026.
@@ -11,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gzip
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from decimal import Decimal
@@ -27,18 +30,26 @@ import yaml
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-from tests.e2e.test_api import make_trace
 from tests.helpers.api_fakes import FakeBacktests
+from tests.helpers.api_traces import make_trace
 from tests.integration._data import BTC, IDS, T0_NS, add_instrument, candle
 
+from fuzzhelm.api.backtest_runner import DbBacktestRunner, prepare_backtest
+from fuzzhelm.api.backtests import EngineBacktestService, load_engine_module
 from fuzzhelm.api.deps import get_services
 from fuzzhelm.api.live import CONTROL_CHANNEL, LIVE_CHANNEL, asyncpg_dsn, encode_notify_payload
 from fuzzhelm.api.main import create_app
 from fuzzhelm.api.services import ApiServices, DbUnitOfWork, build_db_services
+from fuzzhelm.backtest.dataset import Dataset, load_exchange_instrument
+from fuzzhelm.backtest.manifest import equity_hash
+from fuzzhelm.backtest.metrics import METRIC_NAMES
 from fuzzhelm.config import Settings
 from fuzzhelm.core.clock import NS_PER_MIN, ManualClock
 from fuzzhelm.core.enums import EngineKind, GapStatus, Role, RunKind, Src, VerdictKind
 from fuzzhelm.fuzzy.defuzz import centroid
+from fuzzhelm.ingest.funding import COLUMNS as FUNDING_COLUMNS
+from fuzzhelm.ingest.funding import load_funding_json, rows_digest, write_funding_json
+from fuzzhelm.ingest.normalize import normalize_rest_klines
 from fuzzhelm.risk.journal import RiskEventRecord
 from fuzzhelm.scheduler.jobs import JobContext, hourly_dq
 from fuzzhelm.storage.models import APP_ROLE
@@ -48,7 +59,10 @@ from fuzzhelm.storage.repositories import (
     DecisionRecord,
     DecisionRepo,
     DqRepo,
+    EquityRepo,
     GapRepo,
+    InstrumentRepo,
+    OrderRepo,
     RiskEventRepo,
     RunRepo,
     StrategyRepo,
@@ -87,7 +101,8 @@ async def api(db_url: str, factory: async_sessionmaker[AsyncSession], tmp_path: 
     limits_path.write_text((CONFIG / "risk_limits.yaml").read_text(encoding="utf-8"), encoding="utf-8")
     app_engine = make_engine(db_url, null_pool=True, role=APP_ROLE)
     settings = Settings(jwt_secret=SECRET, _env_file=None)  # type: ignore[call-arg]
-    services = build_db_services(settings, engine=app_engine, limits_path=limits_path, backtests=FakeBacktests(),
+    services = build_db_services(settings, engine=app_engine, limits_path=limits_path,
+                                 backtests=FakeBacktests(),
                                  clock=ManualClock(T0_NS), listen=True)
     uids: dict[Role, int] = {}
     async with session_scope(factory) as s:
@@ -103,12 +118,13 @@ async def api(db_url: str, factory: async_sessionmaker[AsyncSession], tmp_path: 
 
 
 def strategy_texts() -> tuple[str, str]:
-    return (CONFIG / "rules_mamdani.yaml").read_text(encoding="utf-8"), (CONFIG / "membership.yaml").read_text(
-        encoding="utf-8")
+    rules = (CONFIG / "rules_mamdani.yaml").read_text(encoding="utf-8")
+    return rules, (CONFIG / "membership.yaml").read_text(encoding="utf-8")
 
 
 async def test_login_writes_audit_with_inet_ip(api: Api) -> None:
-    r = await api.client.post("/auth/login", data={"username": "analyst", "password": PASSWORDS[Role.ANALYST]})
+    creds = {"username": "analyst", "password": PASSWORDS[Role.ANALYST]}
+    r = await api.client.post("/auth/login", data=creds)
     assert r.status_code == 200 and r.json()["role"] == "analyst"
     bad = await api.client.post("/auth/login", json={"username": "analyst", "password": "nope"})
     assert bad.status_code == 401
@@ -131,7 +147,8 @@ async def test_limit_change_audit_before_after_is_append_only(api: Api) -> None:
     row = rows[0]
     assert row.id == r.json()["audit_id"] and row.user_id == api.uids[Role.ADMIN] and row.ip == CLIENT_IP
     assert row.before_json is not None and row.after_json is not None
-    assert row.before_json["limits"]["max_gross_leverage"]["value"] == "3"
+    # Decimal із файлу дослівно: `3.0` у YAML → "3.0" (масштаб не губиться і не додається)
+    assert row.before_json["limits"]["max_gross_leverage"]["value"] == "3.0"
     assert row.after_json["limits"]["max_gross_leverage"]["value"] == "2.5"
     assert row.after_json["_changed"] == ["limits.max_gross_leverage.value"]
     assert "max_gross_leverage:\n    value: 2.5" in api.limits_path.read_text(encoding="utf-8")
@@ -183,7 +200,8 @@ async def test_explain_on_real_db_uses_trace_extras_columns(api: Api) -> None:
         strategy = await StrategyRepo(s).create_version("demo", rules, membership, activate=True)
         run_id = IDS.next_uuid()
         await RunRepo(s).create(run_id, kind=RunKind.BACKTEST, config={"engine": "mamdani"},
-                                config_hash=bytes(32), dataset_hash=bytes(32), seed=1, engine=EngineKind.MAMDANI,
+                                config_hash=bytes(32), dataset_hash=bytes(32), seed=1,
+                                engine=EngineKind.MAMDANI,
                                 git_sha="b" * 40, strategy_id=strategy.id, instrument_id=iid, tf="1m")
         did = await DecisionRepo(s).insert(DecisionRecord.from_trace(
             trace, run_id=run_id, instrument_id=iid, target_side=1, target_qty=Decimal("0.012"),
@@ -209,11 +227,13 @@ async def test_risk_event_exact_factor_survives_numeric_6_4(api: Api) -> None:
         iid = await add_instrument(s)
         run_id = IDS.next_uuid()
         await RunRepo(s).create(run_id, kind=RunKind.PAPER, config={}, config_hash=bytes(32),
-                                dataset_hash=b"\x02" * 32, seed=2, engine=EngineKind.MAMDANI, git_sha="c" * 40)
+                                dataset_hash=b"\x02" * 32, seed=2, engine=EngineKind.MAMDANI,
+                                git_sha="c" * 40)
         await RiskEventRepo(s).insert_many([
             RiskEventRecord(ts_ns=T0_NS, rule="max_gross_leverage", verdict=VerdictKind.SHRINK,
                             factor=Decimal("0.99996"), observed=Decimal("3.0001"), limit_value=Decimal("3"),
-                            instrument=BTC.symbol_canon, payload={"requested": Decimal("0.012")}, run_id=run_id),
+                            instrument=BTC.symbol_canon, payload={"requested": Decimal("0.012")},
+                            run_id=run_id),
         ], instrument_ids={BTC.symbol_canon: iid})
     async with session_scope(api.owner) as s:
         (row,) = await RiskEventRepo(s).list_for_run(run_id)
@@ -230,20 +250,14 @@ async def test_sse_streams_only_committed_notifications(api: Api, db_url: str) -
     api.services.ensure_live()
     source = api.services.live_source
     assert source is not None
-    for _ in range(500):                                              # чекаємо LISTEN (≤ 5 с)
-        if source.connected:
-            break
-        await asyncio.sleep(0.01)
+    await asyncio.wait_for(source.wait_connected(), timeout=5)        # подія LISTEN, без опитування
     assert source.connected
 
     async def read_stream() -> httpx.Response:
         return await api.client.get("/stream/live", params={"max_events": 1}, headers=analyst)
 
     task = asyncio.create_task(read_stream())
-    for _ in range(500):
-        if api.services.live.subscribers:
-            break
-        await asyncio.sleep(0.01)
+    await asyncio.wait_for(api.services.live.wait_subscribers(1), timeout=5)
     conn = await asyncpg.connect(asyncpg_dsn(db_url))
     try:
         tx = conn.transaction()
@@ -291,7 +305,11 @@ async def test_scheduler_queries_and_hourly_dq_on_real_db(factory: async_session
     first = (h0 - T0_NS) // NS_PER_MIN
     async with session_scope(factory) as s:
         iid = await add_instrument(s)
-        await CandleRepo(s).upsert([candle(first + i, src=Src.REST) for i in range(60) if i not in (5, 6)], iid)
+        # quote_volume = volume·vwap ∈ [v·l, v·h]: свічки валідні і за інваріантом qv (helper _data.candle
+        # тримає qv сталим, тож для більших обсягів він виходить за межі — це інша перевірка)
+        rows = [candle(first + i, src=Src.REST) for i in range(60) if i not in (5, 6)]
+        rows = [c.model_copy(update={"quote_volume": c.volume * c.vwap}) for c in rows]  # type: ignore[operator]
+        await CandleRepo(s).upsert(rows, iid)
         gaps = GapRepo(s)
         g_partial = await gaps.open(iid, "klines", h0 + 5 * NS_PER_MIN, h0 + 7 * NS_PER_MIN, expected_count=2)
         await gaps.update_status(g_partial, GapStatus.PARTIAL, filled_rows=0)
@@ -302,7 +320,8 @@ async def test_scheduler_queries_and_hourly_dq_on_real_db(factory: async_session
         gaps = GapRepo(s)
         assert [g.id for g in await gaps.list_by_status([GapStatus.PARTIAL, GapStatus.UNFILLABLE])] == [
             g_partial, g_spent]
-        assert [g.id for g in await gaps.list_by_status(["PARTIAL", "UNFILLABLE"], max_attempts=5)] == [g_partial]
+        spent_excluded = await gaps.list_by_status(["PARTIAL", "UNFILLABLE"], max_attempts=5)
+        assert [g.id for g in spent_excluded] == [g_partial]
         assert [g.id for g in await gaps.list_overlapping(iid, h0, h0 + 60 * NS_PER_MIN)] == [g_partial]
         assert [g.id for g in await gaps.list_overlapping(iid, h0 - 2 * NS_PER_MIN, h0)] == [g_spent]
     weights = (0.455446, 0.262850, 0.140852, 0.140852)
@@ -314,7 +333,7 @@ async def test_scheduler_queries_and_hourly_dq_on_real_db(factory: async_session
     assert (stored.observed_buckets, stored.invalid_count) == (58, 0)
     assert stored.gap_seconds == Decimal("120.00") and stored.completeness == Decimal("0.9667")
     assert stored.score == Decimal(str(row.score))
-    assert await hourly_dq(ctx) == []                                  # година вже має рядок — не перезаписуємо
+    assert await hourly_dq(ctx) == []                        # година вже має рядок — не перезаписуємо
 
 
 async def test_default_services_do_not_touch_db_until_first_request(db_url: str) -> None:
@@ -326,7 +345,105 @@ async def test_default_services_do_not_touch_db_until_first_request(db_url: str)
         assert (await c.get("/healthz")).status_code == 200            # БД недосяжна, liveness — так
         assert (await c.get("/docs")).status_code == 200
         r = await c.post("/auth/login", data={"username": "a", "password": "b"})
-        assert r.status_code == 503 and r.json() == {"detail": "service dependency unavailable"} or \
-            r.json()["detail"] in ("database unavailable", "database error")
+        # недосяжна БД — 503 без деталей драйвера (OSError чи OperationalError — залежно від asyncpg)
+        assert r.status_code == 503, r.text
+        assert r.json()["detail"] in (
+            "service dependency unavailable", "database unavailable", "database error")
     await eng.dispose()
-    assert UUID(int=0) is not None
+
+
+async def test_backtest_runner_persists_run_and_explain_is_consistent(api: Api, tmp_path: Path) -> None:
+    """POST /backtests → справжній рушій над свічками з БД → паспорт, рішення, ордери, капітал, метрики;
+    /explain збереженого рішення відтворюється з run.config; повтор ідентичного прогону — FAILED (дубль)."""
+    inst = load_exchange_instrument("BTCUSDT")
+    raw = json.loads(gzip.decompress((ROOT / "fixtures" / "rest" / "binance_klines.json.gz").read_bytes()))
+    rows = raw[:1200]
+    candles = normalize_rest_klines(rows, inst, ts_ingest_ns=rows[-1][6] * 1_000_000 + 10**12)
+    async with session_scope(api.owner) as s:
+        iid = await InstrumentRepo(s).upsert(inst)
+        await CandleRepo(s).upsert(candles, iid)
+    # застосунок пише результати роллю fuzzhelm_app (як build_db_services) — прав достатньо
+    runner = DbBacktestRunner(session_factory(api.app_engine), data_dir=tmp_path, clock=ManualClock(T0_NS),
+                              git=False)
+    service = EngineBacktestService(runner)
+    api.services.backtests = service
+    analyst = await api.login(Role.ANALYST)
+    body = {"symbol": inst.symbol_canon, "ts_from_ns": candles[0].open_time_ns,
+            "ts_to_ns": candles[-1].open_time_ns + NS_PER_MIN, "seed": 7}
+    r = await api.client.post("/backtests", json=body, headers=analyst)
+    assert r.status_code == 202, r.text
+    run_id = UUID(r.json()["run_id"])
+    job = await service.wait(run_id)
+    assert job is not None and job.status.value == "DONE", job and job.error
+    counts = job.result
+    assert counts["bars"] == 1200 and counts["decisions"] > 0 and counts["equity_points"] == 1200
+
+    run = (await api.client.get(f"/runs/{run_id}", headers=analyst)).json()
+    assert run["status"] == "DONE" and run["kind"] == "backtest" and run["engine"] == "mamdani"
+    assert run["equity_hash"] == counts["equity_hash"] and run["dataset_hash"] == counts["dataset_hash"]
+    assert run["config"]["trees"]["rules"]["rules"] and run["seed"] == 7
+    metrics = (await api.client.get(f"/runs/{run_id}/metrics", headers=analyst)).json()["metrics"]
+    assert set(METRIC_NAMES) <= set(metrics)
+    eq = (await api.client.get(f"/runs/{run_id}/equity", headers=analyst)).json()
+    assert eq["n_total"] == 1200
+    async with session_scope(api.owner) as s:
+        ts, equity = await EquityRepo(s).equity_series(run_id)
+        decisions = await DecisionRepo(s).list_for_run(run_id)
+        orders = await OrderRepo(s).list_for_run(run_id)
+    assert equity_hash(equity, ts) == counts["equity_hash"]          # крива з БД = паспорт прогону
+    assert len(decisions) == counts["decisions"] and len(orders) == counts["orders"]
+    assert all(o.decision_id in {d.id for d in decisions} for o in orders)
+    assert all(d.fired_rules and d.narrative for d in decisions)
+
+    ex = (await api.client.get(f"/decisions/{decisions[0].id}/explain", headers=analyst)).json()
+    assert ex["strategy"]["source"] == "run_config" and ex["consistency"]["ok"] is True, ex["consistency"]
+    assert ex["narrative_source"] == "stored" and ex["sizing"]["binding_constraint"]
+    audit = [a for a in await _audit(api) if a.action == "backtest.submit"]
+    assert audit and audit[0].target == f"run/{run_id}"
+
+    again = await api.client.post("/backtests", json=body, headers=analyst)
+    dup = await service.wait(UUID(again.json()["run_id"]))
+    assert dup is not None and dup.status.value == "FAILED" and str(run_id) in (dup.error or "")
+    await service.aclose()
+
+
+async def test_api_dataset_hash_equals_engine_canonical_path_for_subwindow(api: Api, tmp_path: Path) -> None:
+    """Ті самі свічки й той самий файл фандингу → той самий dataset_hash через API і через шлях рушія
+    (`Dataset.from_candle_arrays`, як `backtest.runner.load_db_window`), навіть для під-вікна: ставки з
+    [t₀ − 1 доба, t₀) входять у набір за правилом рушія (власне обрізання [ts_from, ts_to) губило їх,
+    deviations API-15)."""
+    inst = load_exchange_instrument("BTCUSDT")
+    raw = json.loads(gzip.decompress((ROOT / "fixtures" / "rest" / "binance_klines.json.gz").read_bytes()))
+    rows = raw[:1200]
+    candles = normalize_rest_klines(rows, inst, ts_ingest_ns=rows[-1][6] * 1_000_000 + 10**12)
+    async with session_scope(api.owner) as s:
+        iid = await InstrumentRepo(s).upsert(inst)
+        await CandleRepo(s).upsert(candles, iid)
+    lo, hi = candles[200].open_time_ns, candles[1000].open_time_ns
+    step_ms = 8 * 3600 * 1000  # фіксації фандингу 00/08/16 UTC
+    first_ms = (lo // 1_000_000 // step_ms - 4) * step_ms  # 4 фіксації (32 год) до початку вікна
+    fund_rows = [[t, "0.00010000", "60000.00000000", "Regular"]
+                 for t in range(first_ms, hi // 1_000_000 + 2 * step_ms, step_ms)]
+    fpath = tmp_path / "funding_BTCUSDT.json"
+    write_funding_json(fpath, {
+        "v": 1, "source": "synthetic", "venue": "BINANCE_USDM", "symbol": "BTCUSDT",
+        "symbol_canon": inst.symbol_canon, "window": {}, "fetched_at_utc": "2026-09-19T00:00:00Z",
+        "requests": 0,
+        "count": len(fund_rows), "columns": list(FUNDING_COLUMNS), "rows_digest": rows_digest(fund_rows),
+        "rows": fund_rows,
+    })
+    spec = {"symbol": inst.symbol_canon, "tf": "1m", "ts_from_ns": lo, "ts_to_ns": hi, "engine": "mamdani",
+            "seed": 7, "params": {}}
+    async with session_scope(session_factory(api.app_engine)) as s:
+        prep = await prepare_backtest(s, spec, load_engine_module(), data_dir=tmp_path)
+    async with session_scope(api.owner) as s:
+        arrays = await CandleRepo(s).load_arrays(iid, "1m", lo, hi, closed_only=True)
+    canonical = Dataset.from_candle_arrays(arrays, inst, funding=load_funding_json(fpath, inst).rates)
+    assert len(prep.dataset) == 800 and prep.dataset.funding_t_ns is not None
+    assert (prep.dataset.funding_t_ns < lo).any()  # ставки до ts_from — частина набору рушія
+    assert prep.dataset.dataset_hash == canonical.dataset_hash
+
+
+async def _audit(api: Api) -> list[Any]:
+    async with session_scope(api.owner) as s:
+        return await AuditRepo(s).list(limit=50)

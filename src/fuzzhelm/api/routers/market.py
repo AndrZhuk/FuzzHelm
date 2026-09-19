@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from fuzzhelm.api.auth import Permission, Principal
 from fuzzhelm.api.deps import ServicesDep, require
-from fuzzhelm.api.schemas import CandlePageOut, ErrorResponse, HealthOut
+from fuzzhelm.api.schemas import INT32_MAX, INT64_MAX, CandlePageOut, ErrorResponse, HealthOut
 from fuzzhelm.api.services import resolve_instrument
 from fuzzhelm.api.views import candle_out, dq_out
 
@@ -40,15 +40,19 @@ async def candles(
     symbol: Annotated[
         str, Query(max_length=32, description="Canonical symbol, e.g. BTC-USDT-PERP.")
     ] = "BTC-USDT-PERP",
-    instrument_id: Annotated[int | None, Query(description="Instrument id (overrides `symbol`).")] = None,
+    instrument_id: Annotated[
+        int | None, Query(ge=1, le=INT32_MAX, description="Instrument id (overrides `symbol`).")
+    ] = None,
     tf: Annotated[Literal["1m"], Query(description="Timeframe.")] = "1m",
     from_ns: Annotated[
-        int | None, Query(ge=0, description="Inclusive lower bound of open_time, ns UTC.")
+        int | None, Query(ge=0, le=INT64_MAX, description="Inclusive lower bound of open_time, ns UTC.")
     ] = None,
     to_ns: Annotated[
-        int | None, Query(ge=0, description="Exclusive upper bound of open_time, ns UTC.")
+        int | None, Query(ge=0, le=INT64_MAX, description="Exclusive upper bound of open_time, ns UTC.")
     ] = None,
-    after_ns: Annotated[int | None, Query(ge=0, description="Keyset cursor (`next_after_ns`).")] = None,
+    after_ns: Annotated[
+        int | None, Query(ge=0, le=INT64_MAX, description="Keyset cursor (`next_after_ns`).")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=5000, description="Page size.")] = 500,
     closed_only: Annotated[bool, Query(description="Only closed candles.")] = False,
     order: Annotated[Literal["asc", "desc"], Query(description="Sort order by open_time.")] = "asc",
@@ -110,10 +114,12 @@ async def health(
             )
         stats = await repos.gaps.stats()
     snap = services.live.last("health")
+    by_source = services.live.last_by_source("health")
     return HealthOut(
         now_ns=now_ns,
         instruments=out,  # type: ignore[arg-type]
         gaps_by_status=stats,
         open_gaps_total=stats.get("OPEN", 0) + stats.get("FILLING", 0),
         pipeline=None if snap is None else {"seq": snap.seq, **snap.payload},
+        pipelines={src: {"seq": ev.seq, **ev.payload} for src, ev in sorted(by_source.items())},
     )

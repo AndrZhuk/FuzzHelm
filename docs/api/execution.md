@@ -76,6 +76,8 @@ class PaperBroker:                                # реалізує core.ports.
     def submit(self, req: OrderRequest) -> OrderAck          # лише черга; ack.ts_ns = clock.now_ns()
     def on_bar(self, bar: BarLike) -> list[Fill]
     def cancel_all(self, instrument: str) -> None            # скасовує заявки в черзі і TP (liq лишається)
+    def cancel(self, client_order_id: UUID) -> bool          # одна заявка NEW → CANCELED; False — немає/фінальна
+                                                             # (засувка рушія знімає вхід, стоп лишає: ENG-20)
     # рівні позиції
     def set_take_profit(self, instrument, price: Decimal | None, *, side: Side | None = None) -> None
         # квантується до tick; side=None — на поточну/наступну позицію (скидається її закриттям/розворотом);
