@@ -89,11 +89,32 @@ class AnomalyAutoencoder(seed=0, *, hidden=3, max_iter=500, quantile=0.99, activ
     def score(self, X) -> np.ndarray             # ‖z − ẑ‖² у стандартизованому просторі
     def is_anomaly(self, X) -> np.ndarray        # score > threshold
 @dataclass(frozen=True) class AnomalyVerdict(t_ns, score, threshold, anomaly, features)
-class AnomalyScorer(model, params=None): def update(self, bar: Bar) -> AnomalyVerdict | None   # потоковий скоринг
+class AnomalyScorer(model: AnomalyModel, params=None, *, label=None):     # потоковий скоринг (WIRE-01)
+    n_features; threshold; warmup (219); scored; flagged; warmup_bars_fed; bars_seen; stale_skipped
+    def update(self, bar: Bar) -> AnomalyVerdict | None   # на вхід моделі — перші model.n_features ознак
+    def warm_up(self, bars) -> int                         # історія до потоку: лише екстрактор, без скорів
+    # бари подаються строго за зростанням t_ns: бар, не новіший за вже поданий (свічка потоку, що перекривається з
+    # прогрівом; повтор), пропускається — update → None, warm_up його не рахує, stale_skipped += 1 (WIRE-07)
+class AnomalyModel(Protocol): threshold; n_features; score(X) -> ndarray   # AnomalyAutoencoder | FrozenAutoencoder
+AnomalyAutoencoder.n_features; AnomalyAutoencoder.export_params() -> dict     # скейлер, шари, активації, поріг
+class FrozenAutoencoder(params)        # numpy-відтворення StandardScaler.transform + MLPRegressor.predict (побітово)
+def model_artifact(model, *, symbol, extractor=None, **sections) -> dict   # {kind, v, symbol, architecture, model,
+                                                                            #  params_sha256, training, evaluation, …}
+def write_model_artifact(path, doc) -> Path; def load_model_artifact(path) -> LoadedModel(model, extractor, doc, path)
+    # перевіряє kind/v, SHA-256 параметрів, форми шарів, активації, поріг > 0 → інакше AnomalyModelError
+def default_model_path(symbol_venue, model_dir=None) -> Path          # data/anomaly_mlp_<SYMBOL>.json
+def load_anomaly_scorer(symbol_venue, *, model_dir=None, path=None) -> AnomalyScorer | None
+    # немає файлу → WARNING і None (контур без MLP); пошкоджений / чужий символ → AnomalyModelError
+def db_anomaly_score(score) -> Decimal | None     # NUMERIC(10,6): округлення 1e−6, обрізка до 9999.999999, NaN → None
+def anomaly_health(scorer, flagged) -> dict       # {anomaly_model, anomaly_threshold, anomaly_scored, anomalies}
 ANOMALY_KINDS = ("price_spike", "wick", "volume_burst", "frozen")
 def inject_anomaly(bars, i, kind, magnitude) -> Bar   # спотворена копія bars[i], OHLC узгоджений
 ```
 Ознаки 1–5 — вектор брифінгу §5.17, 6–8 — розширення до 8-3-8 (§3); див. deviations.d/ingest_ws.md.
+**Робоча модель — 5-3-5** (`data/anomaly_mlp_BTCUSDT.json`, JSON, не pickle; рішення й числа —
+`docs/deviations.d/wiring.md` WIRE-01): поріг q₉₉ = 2.865277120886994, 21 382 навчальні вектори днів 1–15,
+`params_sha256 98a2bebf…`; відтворена з артефакту мережа дає побітово ті самі скори, що й навчена
+(`tests/unit/test_wiring_anomaly.py`).
 
 ### 4a. `quality/anomaly_eval.py` — оцінювання на розмічених ін'єкціях (хвиля 3, PLAT-05)
 

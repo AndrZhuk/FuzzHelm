@@ -13,6 +13,7 @@ import pytest
 from fuzzhelm.backtest.metrics import (
     METRIC_NAMES,
     compute_metrics,
+    drawdown_series,
     dsr,
     expected_max_sr,
     max_drawdown,
@@ -173,3 +174,41 @@ def test_flat_equity_is_well_defined() -> None:
         assert m[k] == 0.0, k                               # жодних NaN/inf на нульовому сигналі
     # без позицій exposure не обчислюється — чесний NaN, а не вигаданий нуль
     assert math.isnan(compute_metrics([D(1), D(1)], [], periods_per_year=1)["exposure"])
+
+
+# ============================================================ вироджені криві (межі визначеності метрик)
+
+
+def test_degenerate_curves_have_defined_metrics_or_explicit_errors() -> None:
+    assert returns_from_equity([D(100)]).size == 0 and drawdown_series([]).size == 0
+    assert sortino_ratio(np.empty(0), 525600) == 0.0 and moments(np.array([0.01])) == (0.0, 3.0)
+    # одна точка: доходностей немає — CAGR і хвостове відношення 0; оборот на 0 періодах не визначений (NaN)
+    one = compute_metrics([D(100)], [], periods_per_year=365, traded_notional=D(0))
+    assert (one["total_return"], one["cagr"], one["tail_ratio"]) == (0.0, 0.0, 0.0)
+    assert math.isnan(one["turnover"])
+    # повна втрата капіталу: CAGR рівно −100 % (логарифм нуля не береться)
+    ruin = compute_metrics([D(100), D(50), D(0)], [], periods_per_year=365)
+    assert ruin["cagr"] == -1.0 and ruin["total_return"] == -1.0 and ruin["max_drawdown"] == 1.0
+    # доходність після нульового капіталу і просадка від непозитивного старту не визначені
+    with pytest.raises(ValueError, match="stay > 0"):
+        returns_from_equity([D(100), D(0), D(10)])
+    with pytest.raises(ValueError, match="initial equity"):
+        drawdown_series([0.0, 1.0])
+    for bad in ({"equity": [], "trades": [], "periods_per_year": 1},
+                {"equity": [D(1)], "trades": [], "periods_per_year": 0}):
+        with pytest.raises(ValueError):
+            compute_metrics(**bad)                                   # type: ignore[arg-type]
+
+
+def test_turnover_is_nan_when_trades_carry_no_notional() -> None:
+    # PnL-числа без номіналу: оборот невідомий — NaN, а не нуль (нуль означав би «не торгував»)
+    m = compute_metrics([D(100), D(101), D(102)], [D(1), D(1)], periods_per_year=365)
+    assert m["n_trades"] == 2 and math.isnan(m["turnover"])
+
+
+def test_psr_rejects_non_positive_variance_term() -> None:
+    # 1 − γ₃·SR + (γ₄−1)/4·SR² ≤ 0 можливе лише для неможливих моментів (γ₄ < 1) — помилка, а не число
+    with pytest.raises(ValueError, match="non-positive PSR variance"):
+        psr(1.0, 100, skew=2.0, kurt=1.0)
+    with pytest.raises(ValueError, match="at least 2"):
+        psr(0.1, 1)

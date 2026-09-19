@@ -75,7 +75,7 @@ async def candles(
         symbol=inst.symbol_canon,
         instrument_id=inst.id,
         tf=tf,
-        items=[candle_out(c) for c in page.items],  # type: ignore[misc]
+        items=[candle_out(c) for c in page.items],
         next_after_ns=page.next_after_ns,
     )
 
@@ -117,7 +117,7 @@ async def health(
     by_source = services.live.last_by_source("health")
     return HealthOut(
         now_ns=now_ns,
-        instruments=out,  # type: ignore[arg-type]
+        instruments=out,
         gaps_by_status=stats,
         open_gaps_total=stats.get("OPEN", 0) + stats.get("FILLING", 0),
         pipeline=None if snap is None else {"seq": snap.seq, **snap.payload},

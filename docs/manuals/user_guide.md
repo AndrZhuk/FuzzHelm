@@ -14,6 +14,12 @@
    ставки фандингу: `uv run fuzzhelm fetch-funding`. Стан БД: `uv run fuzzhelm db-stats`.
 3. Сценарій стрес-тесту вже в репозиторії (`fixtures/ws/scenarios/flash_crash.jsonl.gz`); перевірити, що він відтворюється
    побайтово: `uv run python scripts/make_demo_scenario.py --check`.
+4. Модель аномалій (QualityGate §4.1) вже в репозиторії: `data/anomaly_mlp_BTCUSDT.json` — MLP-автокодувальник 5-3-5,
+   навчений на днях 1–15 BTCUSDT (ті самі бари, що й калібрування МФ). Це JSON, а не pickle: його можна прочитати й
+   порівняти в git. Перенавчити (≈ 10 с, лише SELECT з БД) і заново заміряти ROC-AUC:
+   `make anomaly` (= `uv run python scripts/train_anomaly_mlp.py`; пише `docs/figures/quality_mlp_rocauc.md` і артефакт).
+   Для ETHUSDT моделі немає: воркери пишуть попередження і працюють для ETH без MLP (`make anomaly SYMBOL=ETHUSDT`
+   навчив би її на днях 1–15 ETHUSDT з окремим звітом `quality_mlp_rocauc_ETHUSDT.md`).
 
 ## 2. Реплей записаної сесії (демо, офлайн)
 
@@ -27,6 +33,10 @@ REST `fixtures/rest/binance_klines.json.gz`, які при цьому запис
 Кожна закрита свічка — рішення з повним трасуванням у `decision`, ордери, позиції, записи ризик-ланцюга, точка капіталу
 і події SSE (`/stream/live`). Шапка LiveView приходить подією `health`:
 `MODE: PAPER · FEED: REPLAY · NO MAINNET KEYS · SEED 20260918 · Q=0.98`.
+
+Кожна закрита свічка ще й отримує скор MLP-автокодувальника (екстрактор ознак прогрівається тими самими 523 барами):
+скор пишеться в `candle.anomaly_score`, аномалія (скор > q₉₉ навчання = 2.865…) зменшує `validity` скору якості Q своєї
+години (§5.17), а подія `health` показує `anomaly_scored`, `anomalies` і модель. `--no-anomaly` вимикає скорер.
 
 Вивід — JSON-підсумок (run_id, кількість барів і виконань, фінальний режим ризику, `equity_hash`, голова журналу).
 На записаній сесії профіль replay (поріг входу 0.20, `docs/deviations.d/workers.md` W-03) дає одну угоду: вхід о 19:32,
@@ -81,6 +91,19 @@ uv run python scripts/run_backtest.py --symbol ETHUSDT
 (та сама п'ятірка ідентичності) повторно не пишеться — звіт перебудовується з наявного. Через API:
 `POST /backtests {symbol, ts_from_ns, ts_to_ns, engine?, seed?, params?}` → 202 з `run_id`, стан — `GET /runs/{id}`.
 
+`git_dirty = 1` у паспорті означає незакомічені зміни **коду** — усього, крім `docs/` і `artifacts/` (одне визначення для
+`run_backtest.py`, POST /backtests, торгового воркера і скриптів експериментів; `backtest.manifest.read_git_state`).
+Редагування документації чи виводи попереднього кроку прогін «брудним» не роблять; список змінених файлів коду
+скрипт друкує, а воркер пише в `session.start` журналу (`git_dirty_paths`).
+
+Обчислювальний експеримент фази 7 (усе — з БД, лише закомічений код для `--persist commit`):
+```bash
+make grid                     # 108 клітинок + OOS, фронт Парето, PSR/DSR   (SYMBOL=ETHUSDT, WORKERS=4 — параметри)
+make walkforward              # walk-forward 15/5/5 × 6 з embargo, Мамдані і лінійна база
+make experiments              # увесь оркестратор scripts/run_all_experiments.sh (години; підсумок — artifacts/exp_logs)
+make report                   # таблиці звіту docs/report_tables/*.md з виводів і фактів БД
+```
+
 Відтворюваність будь-якого числа: `psql -c "select id, config_hash, git_sha, seed, equity_hash from run order by
 started_at desc limit 3"` і `uv run fuzzhelm verify-journal --run-id <id>` (ланцюг хешів + звірка з паспортом).
 
@@ -117,8 +140,25 @@ curl -s "localhost:8000/decisions/<id>/explain" -H "Authorization: Bearer $TOKEN
 uv run python -m fuzzhelm.workers.ingest_worker --symbols BTCUSDT,ETHUSDT            # до Ctrl-C
 uv run python -m fuzzhelm.workers.ingest_worker --minutes 1.5                         # димовий прогін
 ```
-Пише закриті свічки (src = WS), прогалини з REST-добором, журнал подій і Q завершених годин; знімок здоров'я конвеєра
-— подією `health` для `/market/health` (поле `pipelines.ingest_worker`; шапка торгового воркера — у
-`pipelines.trading_worker`). Ctrl-C або `--minutes` зупиняють воркер лише між записами: запис, що обробляється, завжди
+Пише закриті свічки (src = WS) разом з їх MLP-скором (`candle.anomaly_score`), прогалини з REST-добором, журнал подій
+і Q завершених годин (аномалії — у `anomaly_count` і `validity` рядка `dq_score`); знімок здоров'я конвеєра — подією
+`health` для `/market/health` (поле `pipelines.ingest_worker`: `anomalies`, `anomaly_scored`, `anomaly_model`; шапка
+торгового воркера — у `pipelines.trading_worker`). Перед першою свічкою скорер прогрівається 218 попередніми барами з
+БД (яких бракує — публічним REST); без файлу моделі інструмента — попередження в журналі й робота без MLP. Сторож тиші
+WebSocket рахує тишу монотонним годинником: крок NTP системного годинника не рве здорове з'єднання (WS-07). Ctrl-C або `--minutes` зупиняють воркер лише між записами: запис, що обробляється, завжди
 доходить до БД, тож ланцюг журналу сесії лишається цілим (`uv run fuzzhelm verify-journal --run-id <journal_run_id>`). Нічні задачі (добір PARTIAL/UNFILLABLE, погодинний Q, щоденний звіт) —
 `uv run python -m fuzzhelm.scheduler.jobs`.
+
+## 7. Make-цілі
+
+| ціль | що робить |
+|---|---|
+| `make test` / `make cov` / `make lint` / `make audit` | тести (офлайн) / покриття (поріг 80 % з `pyproject.toml`) / ruff + mypy / pip-audit |
+| `make test-int` | інтеграційні тести на тестовій БД 5443 (піднімає і гасить `docker-compose.test.yml`) |
+| `make backtest` · `make grid` · `make walkforward` · `make experiments` · `make report` | бектест, сітка, walk-forward, увесь оркестратор фази 7, таблиці звіту (`SYMBOL=…`, `WORKERS=…`) |
+| `make anomaly` | перенавчання MLP-моделі аномалій + звіт ROC-AUC |
+| `make replay` · `make ingest` · `make record` · `make verify` | реплей сесії, 45-денний добір, запис WS-сесії, перевірка ланцюгів журналу |
+| `make users` | лише підказка, як створити користувача API (пароль вводить людина) |
+| `make up` / `down` / `migrate` / `backup` / `restore FILE=…` | стенд Docker Compose, міграції, резервні копії |
+
+Перевірити, що виконає ціль, не запускаючи її: `make -n <ціль>`.

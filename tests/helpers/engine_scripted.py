@@ -15,7 +15,7 @@ from functools import cache
 import numpy as np
 
 from fuzzhelm.backtest.dataset import Dataset, load_fixture_dataset
-from fuzzhelm.backtest.engine import BacktestConfig, TradingLoop
+from fuzzhelm.backtest.engine import BacktestConfig, BacktestResult, TradingLoop, run_backtest
 from fuzzhelm.features.window import BarWindow
 from fuzzhelm.sizing.convert import price_to_decimal
 
@@ -48,6 +48,19 @@ def fixture() -> Dataset:
 def base_config() -> BacktestConfig:
     """Конфіг з файлів config/ (читається один раз)."""
     return BacktestConfig()
+
+
+@cache
+def fixture_run(n_bars: int | None = None, record_traces: str = "trades",
+                seed: int = 20260918) -> BacktestResult:
+    """run_backtest(перші n_bars фікстури, base_config() з record_traces, seed) — один прогін на процес.
+
+    Прогін детермінований за (дані, конфігурація, seed) — це перевіряють test_backtest_engine.py
+    (незалежний повторний прогін) і test_riskfix_var.py; результат лише читається, тож тести, що потребують
+    саме цього прогону, ділять його замість повторного обчислення.
+    """
+    ds = fixture() if n_bars is None else fixture().slice(0, n_bars)
+    return run_backtest(ds, base_config().with_params(record_traces=record_traces), seed=seed)
 
 
 def scripted_loop(script: Mapping[int, float] | Callable[[int], float], *, warmup: int = 30, seed: int = 1,

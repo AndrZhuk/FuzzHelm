@@ -75,6 +75,13 @@ def _frames() -> tuple[dict[str, Any], ...]:
     return tuple(r for r in map(orjson.loads, lines) if r["kind"] == "frame")
 
 
+@functools.cache
+def _normalized() -> tuple[Any, ...]:
+    """DTO кожного кадру з його записаним ts_ingest (нормалізація — чиста функція, DTO заморожені; кеш)."""
+    return tuple(normalize_binance(f["stream"], f["data"], f["ts_ingest_ns"], BTC_USDT_PERP)
+                 for f in _frames())
+
+
 def _first_frame(kind: str) -> dict[str, Any]:
     return next(f for f in _frames() if f["stream"] == f"btcusdt@{kind}")
 
@@ -256,9 +263,8 @@ def test_event_and_ingest_time_never_mixed() -> None:
     event_field = {"kline_1m": lambda d: d["E"], "aggTrade": lambda d: d["T"],
                    "markPrice@1s": lambda d: d["E"], "depth20@100ms": lambda d: d["T"]}
     seen: Counter[str] = Counter()
-    for fr in _frames():
+    for fr, a in zip(_frames(), _normalized(), strict=True):
         kind = fr["stream"].split("@", 1)[1]
-        a = normalize_binance(fr["stream"], fr["data"], fr["ts_ingest_ns"], BTC_USDT_PERP)
         b = normalize_binance(fr["stream"], fr["data"], fr["ts_ingest_ns"] + 123_456_789, BTC_USDT_PERP)
         assert a.ts_event_ns == b.ts_event_ns == event_field[kind](fr["data"]) * 1_000_000
         assert a.ts_ingest_ns == fr["ts_ingest_ns"] and b.ts_ingest_ns == fr["ts_ingest_ns"] + 123_456_789
@@ -283,14 +289,12 @@ def test_event_and_ingest_time_never_mixed() -> None:
 
 def test_every_recorded_ws_frame_normalizes_to_expected_dto() -> None:
     frames = _frames()
-    kinds = Counter(type(normalize_binance(f["stream"], f["data"], f["ts_ingest_ns"], BTC_USDT_PERP)).__name__
-                    for f in frames)
+    kinds = Counter(type(dto).__name__ for dto in _normalized())
     streams = Counter(f["stream"] for f in frames)
     assert kinds == {"Candle": streams["btcusdt@kline_1m"], "Trade": streams["btcusdt@aggTrade"],
                      "MarkPrice": streams["btcusdt@markPrice@1s"],
                      "BookSnapshot": streams["btcusdt@depth20@100ms"]}
-    kl = [normalize_binance(f["stream"], f["data"], f["ts_ingest_ns"], BTC_USDT_PERP)
-          for f in frames if f["stream"].endswith("kline_1m")]
+    kl = [dto for f, dto in zip(frames, _normalized(), strict=True) if f["stream"].endswith("kline_1m")]
     assert all(isinstance(c, Candle) and c.src is Src.WS for c in kl)
     # усі оновлення однієї хвилини мають один event_uid (природний ключ — open_time)
     by_open = {c.open_time_ns: c.event_uid for c in kl if isinstance(c, Candle)}

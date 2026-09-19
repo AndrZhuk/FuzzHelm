@@ -12,7 +12,14 @@ journal_head_hash, equity_hash) + унікальна ідентичність п
                    (Decimal-рядки); дві форми НЕ взаємозамінні (різні представлення даних);
   * equity_hash  — SHA-256(canonical_json(крива)), кожне значення квантоване до 1e−18 (масштаб
                    NUMERIC(38,18)), щоб Decimal('1.0') і Decimal('1.00') давали той самий хеш;
-  * git_sha      — `git rev-parse HEAD` (модуль поза межею детермінізму, subprocess дозволений).
+  * git_sha      — `git rev-parse HEAD` (модуль поза межею детермінізму, subprocess дозволений);
+  * git_dirty    — ОДНЕ визначення для всіх паспортів (XS-11, XA-19, W-11 → WIRE-03): «брудний код» =
+                   незакомічені зміни ПОЗА `artifacts/` і `docs/`
+                   (`git status --porcelain -- . ':(exclude)artifacts' ':(exclude)docs'`).
+                   Виводи скриптів і документація на числа прогону не впливають, тож їх поява (паралельне
+                   редагування docs/, виводи попереднього кроку оркестратора) не робить прогін «брудним».
+                   `read_git_state()` повертає ще й сирий прапорець (`dirty_any`) і шляхи змін
+                   (`dirty_paths`).
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ import hashlib
 import os
 import subprocess
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -92,22 +100,66 @@ def equity_hash(equity: Sequence[Decimal], ts_ns: Sequence[int] | None = None) -
     return hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
-def read_git_sha(repo: Path = ROOT) -> tuple[str | None, bool | None]:
-    """(sha, dirty) поточного коміту; (None, None), якщо git недоступний або це не репозиторій."""
+# Каталоги, зміни в яких НЕ роблять код «брудним»: виводи скриптів (artifacts/) і документація (docs/).
+# Код, конфіги, дані, фікстури, pyproject/uv.lock, скрипти рахуються завжди.
+GIT_DIRTY_IGNORED: tuple[str, ...] = ("artifacts", "docs")
+GIT_DIRTY_PATHS_MAX = 20
+
+
+@dataclass(frozen=True, slots=True)
+class GitState:
+    """Стан дерева для паспорта прогону.
+
+    sha         — HEAD (40 hex) або None; у контейнері без .git — з FUZZHELM_GIT_SHA (source = "env");
+    dirty       — незакомічені зміни КОДУ (поза GIT_DIRTY_IGNORED); None, якщо дерева не видно;
+    dirty_any   — сирий `git status --porcelain` (будь-які зміни, зокрема docs/ і artifacts/);
+    dirty_paths — перші GIT_DIRTY_PATHS_MAX рядків porcelain, що зробили dirty = True (провенанс).
+    """
+
+    sha: str | None
+    dirty: bool | None
+    dirty_any: bool | None
+    dirty_paths: tuple[str, ...] = ()
+    ignored: tuple[str, ...] = GIT_DIRTY_IGNORED
+    source: str = "git"                 # git | env | none
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"sha": self.sha, "dirty": self.dirty, "dirty_any": self.dirty_any,
+                "dirty_paths": list(self.dirty_paths), "dirty_ignored": list(self.ignored),
+                "source": self.source}
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, timeout=10,
+                          check=True).stdout
+
+
+def read_git_state(repo: Path = ROOT, *, ignored: Sequence[str] = GIT_DIRTY_IGNORED) -> GitState:
+    """Єдине визначення «брудного» коду для всіх паспортів (див. докстрінг модуля)."""
+    ign = tuple(ignored)
     try:
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
-                             timeout=10, check=True).stdout.strip()
-        status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True,
-                                text=True, timeout=10, check=True).stdout
+        sha = _git(repo, "rev-parse", "HEAD").strip()
+        raw = _git(repo, "status", "--porcelain")
+        code = _git(repo, "status", "--porcelain", "--", ".", *(f":(exclude){p}" for p in ign))
     except (OSError, subprocess.SubprocessError):
-        # у Docker-образі немає .git: SHA передається під час збирання (ARG GIT_SHA → FUZZHELM_GIT_SHA)
+        # у Docker-образі немає .git: SHA передається під час збирання (ARG GIT_SHA → FUZZHELM_GIT_SHA);
+        # стан дерева тоді невідомий (dirty = None), а не «чистий»
         env_sha = os.environ.get("FUZZHELM_GIT_SHA", "").strip().lower()
         if len(env_sha) == 40 and set(env_sha) <= _HEX40:
-            return env_sha, None
-        return None, None
+            return GitState(env_sha, None, None, ignored=ign, source="env")
+        return GitState(None, None, None, ignored=ign, source="none")
     if len(sha) != 40 or not set(sha) <= _HEX40:
-        return None, None
-    return sha, bool(status.strip())
+        return GitState(None, None, None, ignored=ign, source="none")
+    lines = [ln for ln in code.splitlines() if ln.strip()]
+    return GitState(sha, bool(lines), bool(raw.strip()), tuple(lines[:GIT_DIRTY_PATHS_MAX]), ign, "git")
+
+
+def read_git_sha(repo: Path = ROOT) -> tuple[str | None, bool | None]:
+    """(sha, dirty_any) — СИРИЙ прапорець `git status --porcelain` (зворотна сумісність: на ньому стоять
+    experiments_search.git_state / experiments_analysis.git_state, що звужують його самі й перевіряють, що
+    «сирий» відрізняється від «коду»). Для паспортів прогонів — `read_git_state().dirty` (зміни коду)."""
+    st = read_git_state(repo)
+    return st.sha, st.dirty_any
 
 
 class RunManifest(BaseModel):
@@ -155,7 +207,8 @@ def build_manifest(
     repo: Path = ROOT,
 ) -> RunManifest:
     ds = dataset_hash(dataset) if isinstance(dataset, Mapping) else dataset_hash_candles(dataset)
-    sha, dirty = read_git_sha(repo) if git else (None, None)
+    gs = read_git_state(repo) if git else None
+    sha, dirty = (gs.sha, gs.dirty) if gs is not None else (None, None)
     m = RunManifest(kind=RunKind(kind), engine=EngineKind(engine), seed=seed,
                     config_hash=config_hash(config), dataset_hash=ds, git_sha=sha, git_dirty=dirty)
     return m.with_results(journal_head=journal_head, equity=equity, equity_ts_ns=equity_ts_ns)

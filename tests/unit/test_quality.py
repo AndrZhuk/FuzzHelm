@@ -21,6 +21,7 @@ import numpy as np
 import orjson
 import pytest
 import yaml
+from tests.helpers.quality_models import fixture_bars, trained_autoencoder
 
 from fuzzhelm.core.dto import BookLevel, BookSnapshot, Candle, Instrument, Trade
 from fuzzhelm.core.enums import Src, Venue
@@ -297,7 +298,8 @@ def test_anomaly_feature_extractor_warmup_is_exact() -> None:
 
 def test_mlp_autoencoder_flags_injected_spike_and_not_normal_bar() -> None:
     train_X, _ = feature_matrix(BARS[:1500])                     # IS-вікно: лише справжні бари
-    model = AnomalyAutoencoder(seed=SEED).fit(train_X)
+    assert fixture_bars() == tuple(BARS)                          # спільна модель навчена на тих самих барах
+    model = trained_autoencoder()                                 # AnomalyAutoencoder(seed=SEED).fit(train_X)
     assert model.converged and model.n_iter <= 500
     assert model._mlp is not None and model._mlp.hidden_layer_sizes == (3,)
     # поріг = q99 власних навчальних скорів: рівно ~1 % навчальних барів вище за нього
@@ -316,7 +318,7 @@ def test_mlp_autoencoder_flags_injected_spike_and_not_normal_bar() -> None:
     # на відкладених справжніх барах частка хибних тривог близька до номінальних 1 % (не «все аномалія»)
     X_all, idx = feature_matrix(BARS)
     assert float(np.mean(model.is_anomaly(X_all[idx >= 1500]))) < 0.05
-    # детермінізм: той самий seed → той самий поріг і скори
+    # детермінізм: свіже навчання з тим самим seed → той самий поріг і скори, що в кешованої моделі
     again = AnomalyAutoencoder(seed=SEED).fit(train_X)
     assert again.threshold == model.threshold
     assert float(again.score(spike_X[-1])[0]) == s_spike
@@ -367,8 +369,7 @@ def test_injection_evaluation_is_deterministic_causal_and_uses_only_normal_train
 
 
 def test_streaming_scorer_matches_batch_scores() -> None:
-    train_X, _ = feature_matrix(BARS[:1500])
-    model = AnomalyAutoencoder(seed=SEED).fit(train_X)
+    model = trained_autoencoder()
     sc = AnomalyScorer(model)
     verdicts = [v for b in BARS[:600] if (v := sc.update(b)) is not None]
     X, _ = feature_matrix(BARS[:600])

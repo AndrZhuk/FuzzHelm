@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -46,6 +46,9 @@ from fuzzhelm.quality.invariants import InstrumentSpec, check_candle
 from fuzzhelm.storage.repositories import CandleRow, DqRow, GapRow, InstrumentRow
 from fuzzhelm.storage.session import get_default_engine, session_factory
 
+if TYPE_CHECKING:
+    from fuzzhelm.quality.invariants import CandleLike
+
 log = logging.getLogger(__name__)
 
 NS_PER_MS = 1_000_000
@@ -66,15 +69,32 @@ JOB_DAILY_REPORT = "daily_report"
 
 
 class SchedulerRepos(Protocol):
-    """Підмножина storage-репозиторіїв (api.services.DbRepos задовольняє її структурно)."""
+    """Підмножина storage-репозиторіїв (api.services.DbRepos задовольняє її структурно).
 
-    gaps: Any
-    candles: Any
-    instruments: Any
-    dq: Any
-    risk: Any
-    runs: Any
-    equity: Any
+    Члени — властивості лише для читання (як у api.services.Repos): інакше протокол із властивостями
+    не задовольняв би протокол зі змінними атрибутами.
+    """
+
+    @property
+    def gaps(self) -> Any: ...
+
+    @property
+    def candles(self) -> Any: ...
+
+    @property
+    def instruments(self) -> Any: ...
+
+    @property
+    def dq(self) -> Any: ...
+
+    @property
+    def risk(self) -> Any: ...
+
+    @property
+    def runs(self) -> Any: ...
+
+    @property
+    def equity(self) -> Any: ...
 
 
 UnitOfWork = Callable[[], contextlib.AbstractAsyncContextManager[SchedulerRepos]]
@@ -167,7 +187,9 @@ async def retry_gaps(
             async with ctx.uow() as repos:
                 attempts_after = (gap.attempts or 0) + 1
                 fallback = (
-                    GapStatus.UNFILLABLE if attempts_after >= ctx.max_attempts else GapStatus(gap.status)
+                    GapStatus.UNFILLABLE if attempts_after >= ctx.max_attempts
+                    # статус прогалини завжди записаний (nullable лише в DDL) — звуження типу
+                    else GapStatus(cast("str", gap.status))
                 )
                 row = await repos.gaps.update_status(gap.id, fallback, at_ns=now_ns)
             present = gap.filled_rows or 0
@@ -216,7 +238,8 @@ def dq_inputs_for_hour(
     hour_end = hour_start_ns + NS_PER_HOUR
     spec = None if instrument is None else InstrumentSpec(instrument.tick_size, instrument.step_size)
     closed = [c for c in candles if c.is_closed and hour_start_ns <= c.open_time_ns < hour_end]
-    invalid = sum(1 for c in closed if check_candle(c, spec, check_volume_step=False))
+    # ціни рядка nullable лише в DDL (брифінг §6); записувачі йдуть через DTO Candle — звуження типу
+    invalid = sum(1 for c in closed if check_candle(cast("CandleLike", c), spec, check_volume_step=False))
     anomalies = 0
     if anomaly_threshold is not None:
         anomalies = sum(
@@ -256,7 +279,7 @@ async def hourly_dq(ctx: JobContext, hour_start_ns: int | None = None, *, force:
             gaps = await repos.gaps.list_overlapping(inst.id, h, h + NS_PER_HOUR, stream="klines")
             inputs = dq_inputs_for_hour(page.items, gaps, h, inst, ctx.anomaly_threshold)
             score = dq_score(inputs, ctx.weights, ctx.tau0_ms)
-            row = DqRow(instrument_id=inst.id, hour_start_ns=h, **score.as_row())
+            row = DqRow(instrument_id=inst.id, hour_start_ns=h, **cast("dict[str, Any]", score.as_row()))
             await repos.dq.upsert(row)
             written.append(row)
     ctx.runs[JOB_HOURLY_DQ] = {"hour_start_ns": h, "rows": len(written)}

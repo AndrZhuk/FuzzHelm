@@ -41,6 +41,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
     "respx>=0.23.1",
     "ruff>=0.16.8",
     "time-machine>=3.5.1",
@@ -66,16 +67,32 @@ filterwarnings = [
   "ignore:.*crypt.*:DeprecationWarning",
 ]
 
+# Покриття (брифінг §10, §12 фаза 10). Рахується ВЕСЬ src/fuzzhelm, без omit: cli.py, workers/, infra/ теж
+# (раніше їх виключали — це завищувало відсоток). Два заміри (docs/deviations.d/quality_pass.md, QP-01):
+#   * `make cov` — типовий офлайн-набір; SQL storage/ і БД-шляхи workers/ тут не виконуються, тож число
+#     занижене; fail_under = 80 — запобіжник регресії на кожен прогін;
+#   * офіційне число гейта фази 10 — об'єднаний прогін з інтеграційними тестами на PostgreSQL:
+#     docker compose -f docker-compose.test.yml up -d --wait && FUZZHELM_TEST_DATABASE_URL=... \
+#     uv run pytest -m "integration or not integration" --cov (той самий fail_under).
+# Вузли `pragma: no cover` перелічено в QP-01; нових не додано (QR-02: один необґрунтований у fuzzy/defuzz.py знято).
+# Заглушки `...` виключаються лише як ціле тіло/однорядковий def-заглушка (протоколи, @overload), а НЕ будь-який
+# рядок із «...»: колишній шаблон "\.\.\." мовчки викидав зі звіту й сигнатури на кшталт `-> tuple[str, ...]:`
+# (разом з усім тілом функції), `Callable[..., T]`, анотації полів і рядки з «...» в коментарях (QR-01).
 [tool.coverage.run]
 source = ["src/fuzzhelm"]
 branch = true
-omit = ["src/fuzzhelm/cli.py", "src/fuzzhelm/workers/*", "src/fuzzhelm/infra/*"]
 
 [tool.coverage.report]
 fail_under = 80
 show_missing = true
 skip_covered = false
-exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "^\\s*\\.\\.\\.\\s*(#.*)?$",
+  "^\\s*(async\\s+)?def\\s.*:\\s*\\.\\.\\.\\s*(#.*)?$",
+]
 
 [tool.ruff]
 line-length = 110

@@ -1,0 +1,55 @@
+# FuzzHelm API на Fly.io (брифінг §9: «fly.toml — деплой на free tier»). Автор: Андрій Жук, 2026.
+# НЕ задеплоєно агентом: реєстрація на Fly.io, `fly launch --no-deploy --copy-config`, секрети і `fly deploy` —
+# кроки [ЛЮДИНА] (брифінг §12.9 п. 3). Інструкція — docs/manuals/deployment.md §6.
+#
+# Секрети задаються лише `fly secrets set …` (ніколи не в цьому файлі й не в git):
+#   FUZZHELM_DATABASE_URL  postgresql+asyncpg://… (Fly Postgres або інша керована PostgreSQL 16)
+#   FUZZHELM_JWT_SECRET    довгий випадковий рядок (з типовим API лише попереджає в журналі)
+# Виконання — лише paper/testnet: Settings відхиляє будь-який mainnet-хост (MainnetHostRejected).
+
+app = "fuzzhelm-change-me"          # плейсхолдер: імена застосунків Fly глобально унікальні
+primary_region = "waw"              # Варшава — найближчий до Львова регіон
+
+[build]
+  dockerfile = "Dockerfile"
+  # SHA коміту для паспортів прогонів (у образі немає .git): fly deploy --build-arg GIT_SHA=$(git rev-parse HEAD)
+
+[deploy]
+  # міграції ДО перемикання трафіку; без FUZZHELM_DATABASE_URL реліз чесно впаде, а не стартує без схеми
+  release_command = "alembic upgrade head"
+  strategy = "immediate"
+
+[env]
+  FUZZHELM_LOG = "INFO"
+
+[processes]
+  # Dockerfile не має CMD (команду задає docker-compose.yml) — тут та сама, що в сервісу api
+  app = "uvicorn fuzzhelm.api.main:app --host 0.0.0.0 --port 8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"       # безкоштовний режим: машина засинає без трафіку
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 25
+
+  [[http_service.checks]]
+    # /healthz — liveness без БД (api/main.py): не валить машину, якщо БД тимчасово недосяжна
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  # найменша машина (безкоштовна квота Hobby/legacy). Імпорт застосунку API локально — ≈ 96 МБ RSS
+  # (/usr/bin/time -l, 2026-09-19); важкі POST /backtests на 45-денному вікні можуть потребувати 512mb
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  processes = ["app"]

@@ -22,7 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import orjson
@@ -149,7 +149,8 @@ def parse_detector_outputs(raw: Sequence[Mapping[str, Any]] | None) -> tuple[Det
                     name=str(o["name"]),
                     s=float(o["s"]),
                     c=float(o["c"]),
-                    features=feats,
+                    # нескінченні ознаки збережено як JSON null; DetectorOutput несе їх лише для показу
+                    features=cast("dict[str, float]", feats),
                     group=DetectorGroup(str(o.get("group") or "trend").lower()),
                     weight=float(o.get("weight", 1.0)),
                 )
@@ -379,7 +380,7 @@ def explain_decision(
             agreement=agr,
             u_raw=fz.u_raw,
             kappa=agr.kappa,
-            u_final=u_final,
+            u_final=cast(float, u_final),  # agr is not None ⇒ kappa і u_final обчислені, не None
             engine=fz.engine,
             sizing=sizing,
             risk=risk,

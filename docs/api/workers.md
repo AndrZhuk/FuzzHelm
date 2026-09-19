@@ -44,7 +44,8 @@ PersistCounts(decisions, decisions_skipped, orders, orders_skipped, fills, posit
 
 # покроковий запис live/replay
 LivePersister(run_id, instrument_id, symbol, *, var=RollingVar())
-    await .write_step(session, StepResult, *, candle=None, journal=(), extra_risk=()) -> StepWrite
+    await .write_step(session, StepResult, *, candle=None, journal=(), extra_risk=(), anomaly_score=None) -> StepWrite
+        # anomaly_score (Decimal, db_anomaly_score) → CandleRepo.set_anomaly_scores у тій самій транзакції
     await .write_out_of_band(session, *, risk=(), audits=(), journal=(), user_id=None) -> int
         # зняття HALTED між барами; audit_log воркера — з user_id автора запиту API (W-21)
     .decision_id(open_time_ns); .totals; .orders_skipped
@@ -62,7 +63,7 @@ executemany частинами по 2 000) → позиції (`PositionRepo.ins
 ```bash
 python -m fuzzhelm.workers.trading_worker --profile replay|paper [--speed X|inf] [--scenario NAME] [--session PATH]
        [--warmup-bars N] [--minutes M] [--linger S] [--param KEY=VALUE]... [--no-db] [--no-candles] [--no-notify]
-       [--database-url URL]
+       [--no-anomaly] [--database-url URL]
 ```
 Коди виходу: 0 — прогін DONE; 1 — не DONE; 2 — `WorkerError`/`ConfigValidationError` (немає інструмента, файлу, історії).
 Вивід — JSON `SessionSummary.as_dict()` (run_id, bars, fills, closed_trades, final_state, halted_at_ns, transitions,
@@ -73,7 +74,8 @@ WorkerProfile.load(name) -> WorkerProfile(name, kind, instrument, tf, seed, raw,
                                           streams, heartbeat_timeout_s);  .backtest_config(**overrides)
 TradingSession(instrument, cfg, *, seed, run_id, kind, feed, warmup_bars, sink=None, streams=("kline","markPrice"),
                heartbeat_timeout_s=10.0, pipeline_clock=None (FrameClock), wall_clock=None, backfill=None,
-               src=Src.REPLAY, commands=None, gap_filler=None, limits_path=None)
+               src=Src.REPLAY, commands=None, gap_filler=None, limits_path=None,
+               anomaly: AnomalyScorer | None = None)     # QualityGate; warm_up() прогріває і його (WIRE-01)
     await .begin(meta)                 # перший запис журналу "session.start" + sink.on_start (паспорт RUNNING)
     .warm_up(history: Dataset)         # рівно warmup_bars барів СТРОГО до потоку; рішень немає (trade_start)
     await .run(items, *, stop=None)    # IngestPipeline.run над відфільтрованими потоками → PipelineReport
@@ -85,6 +87,11 @@ TradingSession(instrument, cfg, *, seed, run_id, kind, feed, warmup_bars, sink=N
     .health() -> dict                  # подія `health` (source = trading_worker): header "MODE: PAPER · FEED: … · NO MAINNET KEYS · SEED … · Q=…"
     .summary(status) / await .finish(status, error) -> SessionSummary   # "session.end" + sink.on_finish
 SessionSink (Protocol): on_start / on_step(StepOutput) / on_out_of_band / on_finish
+StepOutput(step, candle, journal, q, data_lag_ms, anomaly: AnomalyVerdict | None = None)   # скор свічки кроку
+    # anomaly — лише вердикт саме цієї свічки: добрані REST-бари дірки перед свічкою потоку мають None, а скор
+    # свічки потоку доходить до її кроку (WIRE-07)
+make_ws_client(settings, clock, instruments) -> BinanceWsClient   # мітки — clock, сторож — MonotonicClock (WS-07)
+WorkerOptions(..., anomaly=True, anomaly_model_dir=None)         # --no-anomaly вимикає MLP-скорер
 MemorySink()                           # тести, --no-db: steps, journal, risk_events, audits, out_of_band, summary
 DbSink(factory, *, instrument_id, symbol, passport, write_candles=True, publish=True)
 ControlChannel(factory, dsn)           # LISTEN fuzzhelm_control + опитування audit_log (джерело правди)
@@ -132,11 +139,14 @@ W-18) + запис журналу `control.risk_limits`. Команди заст
 
 ```bash
 python -m fuzzhelm.workers.ingest_worker [--symbols BTCUSDT,ETHUSDT] [--minutes N] [--journal-kinds candle,trade,book,mark]
-       [--no-notify] [--database-url URL]
+       [--no-notify] [--no-anomaly] [--database-url URL]
 ```
 ```python
 IngestOptions(symbols=("BTCUSDT","ETHUSDT"), minutes=None, database_url=None,
-              journal_kinds=("candle","trade","book","mark"), publish=True)
+              journal_kinds=("candle","trade","book","mark"), publish=True, anomaly=True, anomaly_model_dir=None)
+make_ws_client(settings, clock, instruments) -> BinanceWsClient   # сторож тиші — MonotonicClock (WS-07)
+anomaly_warmup_hook(factory, instrument_id, instrument, *, rest=None) -> AnomalyWarmupHook
+    # 218 закритих барів до першої свічки: БД; бракує і rest задано (живий WS) — публічний REST (у БД не пише)
 await run_ingest(opts, *, settings=None, stop=None, feed=None, http_transport=None) -> dict   # feed/transport — для тестів
 InstrumentSink(factory, instrument, instrument_id, *, journal, buffer, stats, journal_kinds, publish)
 await pump(source, handle, *, stop, deadline_s=None, halted=None) -> "eof" | "stop" | "deadline"
@@ -149,6 +159,12 @@ route(item, by_symbol) -> list[IngestPipeline]; flush_journal(factory, buffer, s
 W-09; скидання на кожну свічку і кожні 2 000 записів; `ingest.end` містить причину зупинки); Q лише ЗАВЕРШЕНИХ годин → `dq_score` (незавершену не пишемо: її
 пізніше повністю порахує `scheduler.hourly_dq`). Вихід — JSON зі статистикою (кадри, свічки, журнал, прогалини, Q годин,
 лаг p95, статистика WS).
+
+QualityGate (WIRE-01): на старті — `load_anomaly_scorer(<SYMBOL>)` для кожного інструмента (немає
+`data/anomaly_mlp_<SYMBOL>.json` → попередження, інструмент без MLP; моделі — у `ingest.start` журналу). Скор закритої
+свічки → `candle.anomaly_score` (явний UPDATE у транзакції свічки: upsert вже закриту свічку не оновлює); аномалії →
+`anomaly_count`/`validity` рядка `dq_score` години; health (GET /market/health → `pipelines.ingest_worker`) має
+`anomalies`, `anomaly_scored`, `anomaly_model`, `anomaly_threshold`; підсумок — `anomaly_scores`, `anomalies`.
 
 ## 4. Скрипти
 

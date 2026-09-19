@@ -16,7 +16,13 @@ PaperBroker (ENG-19); NO MAINNET KEYS — властивість конфігу�
 mainnet, хост виконання — лише з ALLOWED_TESTNET_HOSTS; воркер перевіряє це на старті).
 
 Час. Рушій працює на ManualClock барів (межа детермінізму); воркер — поза межею: настінний годинник
-(infra.wallclock) потрібен лише для темпу реплею, міток запуску і лагу live-даних.
+(infra.wallclock) потрібен лише для темпу реплею, міток запуску і лагу live-даних; сторож тиші живого WS —
+монотонний годинник (WS-07).
+
+QualityGate (§4.1): конвеєр сесії скорить кожну закриту свічку MLP-автокодувальником з
+`data/anomaly_mlp_<SYMBOL>.json` (немає файлу — попередження і робота без MLP). Прогрів екстрактора — ті самі
+бари, що й прогрів TradingLoop; аномалії входять у N_invalid години Q (отже, у вхід StaleDataGuard), скор
+пишеться в candle.anomaly_score разом зі свічкою, лічильники — у health (`anomalies`, `anomaly_scored`).
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ from uuid import UUID
 
 from fuzzhelm.backtest.dataset import Dataset
 from fuzzhelm.backtest.engine import BacktestConfig, StepResult, TradingLoop, run_order_ids
-from fuzzhelm.backtest.manifest import equity_hash, read_git_sha
+from fuzzhelm.backtest.manifest import equity_hash, read_git_state
 from fuzzhelm.config import FIXTURES_DIR, Settings, assert_testnet_url, get_settings, load_yaml
 from fuzzhelm.core.digest import canonical_json, to_canonical
 from fuzzhelm.core.dto import Candle, Instrument
@@ -51,6 +57,13 @@ from fuzzhelm.core.ports import Clock
 from fuzzhelm.ingest.pipeline import BackfillHook, IngestPipeline, PipelineReport, PipelineSinks
 from fuzzhelm.ingest.recorder import RawFrame, SessionItem
 from fuzzhelm.ingest.replay import FrameClock, iter_items, stream_kind
+from fuzzhelm.quality.anomaly_mlp import (
+    AnomalyScorer,
+    AnomalyVerdict,
+    anomaly_health,
+    db_anomaly_score,
+    load_anomaly_scorer,
+)
 from fuzzhelm.risk.journal import AuditRecord, RiskEventRecord
 from fuzzhelm.risk.state import Transition
 from fuzzhelm.sizing.convert import float_to_decimal_exact
@@ -205,6 +218,7 @@ class StepOutput:
     journal: tuple[JournalEntry, ...]
     q: float | None
     data_lag_ms: float
+    anomaly: AnomalyVerdict | None = None        # MLP-скор цієї свічки (None — прогрів / без моделі / REST)
 
 
 @dataclass(frozen=True)
@@ -243,6 +257,7 @@ class SessionSummary:
             "candles_released": None if self.report is None else self.report.candles_released,
             "frames": None if self.report is None else self.report.health.frames,
             "gaps": None if self.report is None else len(self.report.gaps),
+            "anomalies": None if self.report is None else self.report.health.anomalies,
         }
 
 
@@ -306,7 +321,7 @@ class TradingSession:
                  pipeline_clock: Clock | None = None, wall_clock: Clock | None = None,
                  backfill: BackfillHook | None = None, src: Src = Src.REPLAY,
                  commands: CommandSource | None = None, gap_filler: GapFiller | None = None,
-                 limits_path: Path | None = None) -> None:
+                 limits_path: Path | None = None, anomaly: AnomalyScorer | None = None) -> None:
         if warmup_bars < cfg.resolved_warmup():
             raise WorkerError(f"warm-up needs ≥ {cfg.resolved_warmup()} bars, got {warmup_bars}")
         self.instrument = instrument
@@ -327,8 +342,11 @@ class TradingSession:
         self._pclock: Clock = pipeline_clock if pipeline_clock is not None else FrameClock()
         self._wall = wall_clock
         self.pipeline = IngestPipeline(
-            instrument, sinks=PipelineSinks(on_event=self._on_event, on_candle=self.on_candle),
-            backfill=backfill, clock=self._pclock, src=src, heartbeat_timeout_s=heartbeat_timeout_s)
+            instrument, sinks=PipelineSinks(on_event=self._on_event, on_candle=self.on_candle,
+                                            on_anomaly=self._on_anomaly),
+            backfill=backfill, clock=self._pclock, src=src, heartbeat_timeout_s=heartbeat_timeout_s,
+            anomaly=anomaly)
+        self._pending_anomaly: AnomalyVerdict | None = None
         self._commands = commands
         self._gap_filler = gap_filler
         self._limits_path = limits_path
@@ -378,6 +396,8 @@ class TradingSession:
             sr = self.loop.step(bar, close_ns, dbar=dbar)
             if sr.decided or sr.fills or sr.orders:            # pragma: no cover — trade_start = warmup_bars
                 raise WorkerError("warm-up produced a trading step")
+        # ті самі бари прогріву — в екстрактор MLP-скорера: перша ж жива свічка отримує скор
+        self.pipeline.prime_anomaly(history.bar(i) for i in range(len(history)))
         self._next_open = int(history.t_ns[-1]) + TF_NS
         self._take_journal()            # прогрів записів журналу не породжує (рішень немає) — страховка
 
@@ -385,6 +405,9 @@ class TradingSession:
 
     def _on_event(self, ev: Any) -> None:
         self._last_event_ns = ev.ts_ingest_ns
+
+    def _on_anomaly(self, v: AnomalyVerdict) -> None:
+        self._pending_anomaly = v                  # конвеєр кличе on_anomaly ДО on_candle тієї самої свічки
 
     def q(self) -> float | None:
         """Скор якості Q поточної години (перший вхід ризик-ланцюга: StaleDataGuard, Q < 0.90 → VETO)."""
@@ -457,7 +480,13 @@ class TradingSession:
             self.transitions.append((tr.ts_ns, tr.state_from.value, tr.state_to.value, tr.event.value))
         if self.halted_at_ns is None and sr.risk_state is RiskState.HALTED:
             self.halted_at_ns = sr.close_time_ns
-        await self.sink.on_step(self, StepOutput(sr, c, self._take_journal(), q, lag_ns / 1e6))
+        # скор — лише своєї свічки: добраний REST-бар (_fill_discontinuity) іде кроком ПЕРЕД свічкою потоку,
+        # чий скор уже чекає, тож його не можна ні приписати добраному бару, ні скинути (WIRE-07)
+        v = self._pending_anomaly
+        anomaly = None
+        if v is not None and v.t_ns == c.open_time_ns:
+            anomaly, self._pending_anomaly = v, None
+        await self.sink.on_step(self, StepOutput(sr, c, self._take_journal(), q, lag_ns / 1e6, anomaly))
 
     # ------------------------------------------------------------------ команди (між барами)
 
@@ -555,6 +584,7 @@ class TradingSession:
             "frames": snap.frames, "lag_p95_ms": snap.lag_p95_ms, "reconnects": snap.reconnects,
             "gaps_open": snap.gaps_open, "gaps_by_status": snap.gaps_by_status,
             "candles_closed": snap.candles_closed, "invalid": snap.invalid, "duplicates": snap.duplicates,
+            **anomaly_health(self.pipeline.anomaly, snap.anomalies),
         }
 
     def summary(self, status: RunStatus, error: str | None = None) -> SessionSummary:
@@ -751,8 +781,9 @@ class DbSink:
         sr, c = out.step, out.candle
         rid = str(sess.run_id)
         async with session_scope(self.factory) as s:
-            w = await self.persister.write_step(s, sr, candle=c if self.write_candles else None,
-                                                journal=out.journal)
+            w = await self.persister.write_step(
+                s, sr, candle=c if self.write_candles else None, journal=out.journal,
+                anomaly_score=None if out.anomaly is None else db_anomaly_score(out.anomaly.score))
             await self._notify(s, "candle", {
                 "run_id": rid, "symbol": c.instrument, "open_time_ns": c.open_time_ns, "o": _dec_s(c.o),
                 "h": _dec_s(c.h), "l": _dec_s(c.l), "c": _dec_s(c.c), "v": _dec_s(c.volume)})
@@ -914,6 +945,8 @@ class WorkerOptions:
     write_candles: bool | None = None
     publish: bool = True
     params: tuple[tuple[str, str], ...] = ()      # перекриття полів BacktestConfig (--param u_enter=0.25)
+    anomaly: bool = True                          # MLP-скорер з data/anomaly_mlp_<SYMBOL>.json (QualityGate)
+    anomaly_model_dir: Path | None = None
 
 
 _INT_PARAMS = frozenset({"n_atr", "warmup_bars"})
@@ -1025,7 +1058,10 @@ async def run_worker(opts: WorkerOptions, *, stop: asyncio.Event | None = None,
             feed=feed, source=_rel_str(source_path) if source_path else
             settings.binance_ws_market, source_sha256=source_sha, scenario=scenario, streams=prof.streams,
             warmup_dataset_hash=warm.dataset_hash, started_ns=started_ns)
-        sha, dirty = read_git_sha()
+        gs = read_git_state()
+        sha, dirty = gs.sha, gs.dirty
+        scorer = (load_anomaly_scorer(inst.symbol_venue, model_dir=opts.anomaly_model_dir)
+                  if opts.anomaly else None)
         commands: CommandSource | None = None
         if factory is not None:
             from fuzzhelm.api.live import asyncpg_dsn  # noqa: PLC0415
@@ -1051,7 +1087,8 @@ async def run_worker(opts: WorkerOptions, *, stop: asyncio.Event | None = None,
             sink=sink, streams=prof.streams, heartbeat_timeout_s=prof.heartbeat_timeout_s,
             pipeline_clock=FrameClock() if replay else wall, wall_clock=wall, backfill=backfill,
             src=Src.REPLAY if replay else Src.WS, commands=commands,
-            gap_filler=None if replay else filler, limits_path=settings.config_dir / "risk_limits.yaml")
+            gap_filler=None if replay else filler, limits_path=settings.config_dir / "risk_limits.yaml",
+            anomaly=scorer)
         await session.begin({
             "profile": prof.name, "kind": prof.kind.value, "mode": MODE, "feed": feed, "scenario": scenario,
             "source": None if source_path is None else _rel_str(source_path),
@@ -1059,7 +1096,8 @@ async def run_worker(opts: WorkerOptions, *, stop: asyncio.Event | None = None,
             else str(speed), "warmup": {"bars": n_warm, "source": warm_src, "dataset_hash": warm.dataset_hash,
                                         "from_ns": int(warm.t_ns[0]), "to_ns": int(warm.t_ns[-1])},
             "config_hash": cfg.config_hash, "dataset_hash": ds_hash, "seed": prof.seed, "engine": cfg.engine,
-            "git_sha": sha, "git_dirty": dirty, "instrument": inst.symbol_canon,
+            "git_sha": sha, "git_dirty": dirty, "git_dirty_paths": list(gs.dirty_paths),
+            "anomaly_model": None if scorer is None else scorer.label, "instrument": inst.symbol_canon,
             "execution_host": settings.venue_base_url, "mainnet_keys": False})
         session.warm_up(warm)
         log.info("%s run %s: warm-up %d bars (%s), feed %s", prof.kind.value, run_id, n_warm, warm_src,
@@ -1115,9 +1153,7 @@ async def _feed_items(prof: WorkerProfile, source: Path | None, speed: float, *,
         async for it in feed.items():
             yield it
         return
-    from fuzzhelm.ingest.ws_client import BinanceWsClient  # noqa: PLC0415
-
-    ws = BinanceWsClient(settings, wall, instruments=[inst], src=Src.WS)
+    ws = make_ws_client(settings, wall, [inst])
     deadline = None if minutes is None else wall.now_ns() + int(minutes * 60e9)
     try:
         async for it in ws.items():
@@ -1126,6 +1162,15 @@ async def _feed_items(prof: WorkerProfile, source: Path | None, speed: float, *,
             yield it
     finally:
         await ws.aclose()
+
+
+def make_ws_client(settings: Settings, clock: Clock, instruments: Sequence[Instrument]) -> Any:
+    """Живий WS-клієнт: мітки кадрів — `clock` (час події), сторож тиші — MonotonicClock (WS-07)."""
+    from fuzzhelm.infra.wallclock import MonotonicClock  # noqa: PLC0415
+    from fuzzhelm.ingest.ws_client import BinanceWsClient  # noqa: PLC0415
+
+    return BinanceWsClient(settings, clock, instruments=list(instruments), src=Src.WS,
+                           monotonic=MonotonicClock())
 
 
 async def _linger(session: TradingSession, control: ControlChannel | None, seconds: float,
@@ -1161,6 +1206,8 @@ def parse_args(argv: Sequence[str] | None = None) -> WorkerOptions:
     ap.add_argument("--no-db", action="store_true", help="in-memory run (replay only), prints a summary")
     ap.add_argument("--no-candles", action="store_true", help="do not upsert consumed candles")
     ap.add_argument("--no-notify", action="store_true", help="do not NOTIFY fuzzhelm_live")
+    ap.add_argument("--no-anomaly", action="store_true",
+                    help="do not load the MLP anomaly model (data/anomaly_mlp_<SYMBOL>.json)")
     ap.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
                     help="override a strategy parameter of the profile, e.g. u_enter=0.25 (repeatable)")
     a = ap.parse_args(argv)
@@ -1171,7 +1218,7 @@ def parse_args(argv: Sequence[str] | None = None) -> WorkerOptions:
                          warmup_bars=a.warmup_bars, minutes=a.minutes, linger_s=a.linger,
                          database_url=a.database_url, no_db=a.no_db,
                          write_candles=False if a.no_candles else None, publish=not a.no_notify,
-                         params=tuple(_kv(x) for x in a.param))
+                         params=tuple(_kv(x) for x in a.param), anomaly=not a.no_anomaly)
 
 
 def _kv(x: str) -> tuple[str, str]:

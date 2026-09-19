@@ -115,7 +115,14 @@ def config_hash(config: Mapping) -> str       # BLAKE2b-256(canonical_json), hex
 def dataset_hash(columns: Mapping[str, NDArray]) -> str      # колонки свічок, канонічна форма, hex
 def dataset_hash_candles(candles: Sequence[Candle]) -> str   # альтернатива для DTO (не взаємозамінна)
 def equity_hash(equity: Sequence[Decimal], ts_ns: Sequence[int] | None = None) -> str   # SHA-256, hex
-def read_git_sha(repo: Path = ROOT) -> tuple[str | None, bool | None]   # (sha, dirty) через git
+GIT_DIRTY_IGNORED = ("artifacts", "docs")                               # зміни тут код «брудним» не роблять
+@dataclass(frozen=True) class GitState(sha, dirty, dirty_any, dirty_paths=(), ignored=GIT_DIRTY_IGNORED,
+                                       source="git"|"env"|"none");  .as_dict()
+def read_git_state(repo: Path = ROOT, *, ignored=GIT_DIRTY_IGNORED) -> GitState   # ЄДИНЕ визначення (WIRE-03):
+    # dirty = `git status --porcelain -- . ':(exclude)artifacts' ':(exclude)docs'` не порожній; dirty_any — сирий
+    # porcelain; dirty_paths — перші 20 рядків змін коду; без .git → sha з FUZZHELM_GIT_SHA, dirty = None
+def read_git_sha(repo: Path = ROOT) -> tuple[str | None, bool | None]   # (sha, dirty_any) — СИРИЙ прапорець,
+    # лише для зворотної сумісності exp_search/exp_analysis.git_state; паспорти прогонів — read_git_state().dirty
 
 class RunManifest(BaseModel, frozen):
     kind: RunKind; engine: EngineKind; seed: int; config_hash: str; dataset_hash: str

@@ -222,7 +222,7 @@ def convergence_study(engine: StrengthEngine, inputs: Sequence[tuple[float, floa
     if piecewise_linear:
         ref = np.array([exact_centroid(mfs, b.tolist(), lo, hi) for b in betas])
         ref_kind = "exact_piecewise_linear"
-    else:  # pragma: no cover - поточна конфігурація U кусково-лінійна
+    else:  # терми U не кусково-лінійні (напр. гаусіани): еталон — дуже дрібні трапеції
         n_ref = nodes_for_delta(1e-5, lo, hi)
         g = make_grid(n_ref, lo, hi)
         wr = quadrature_weights(n_ref, "trapezoid", lo, hi)

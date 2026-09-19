@@ -67,9 +67,9 @@ class StrategyValidationError(FuzzHelmError):
 class _NoAliasSafeLoader(yaml.SafeLoader):
     """SafeLoader, що відкидає якорі/псевдоніми: YAML-«бомба» з вкладених псевдонімів не пройде."""
 
-    def compose_node(self, parent: Any, index: Any) -> Any:  # type: ignore[override]
+    def compose_node(self, parent: Any, index: Any) -> Any:
         if self.check_event(yaml.AliasEvent):
-            event = self.peek_event()
+            event = self.peek_event()  # type: ignore[no-untyped-call]  # у stubs types-PyYAML без анотацій
             raise yaml.composer.ComposerError(None, None, "YAML aliases are not allowed", event.start_mark)
         return super().compose_node(parent, index)
 

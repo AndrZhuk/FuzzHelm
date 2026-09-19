@@ -11,6 +11,7 @@ import math
 from decimal import Decimal
 from pathlib import Path
 from statistics import NormalDist
+from typing import Any
 
 import numpy as np
 import pytest
@@ -94,7 +95,8 @@ def test_fat_tail_conclusion_is_built_from_measured_numbers() -> None:
 # ---------------------------------------------------------------- зведення фолдів і воркер
 
 
-def _fake(returns: list[float], pos: list[int], *, trades: int, notional: float, fees: float) -> dict:
+def _fake(returns: list[float], pos: list[int], *, trades: int, notional: float,
+          fees: float) -> dict[str, Any]:
     n = len(returns)
     return {"series": {"returns": np.array(returns), "position": np.array(pos, dtype=np.int8),
                        "state": np.zeros(n + 1, dtype=np.int8)},
@@ -380,3 +382,66 @@ def test_passport_separates_code_dirt_from_experiment_outputs() -> None:
     assert p["command"] == "uv run python scripts/x.py --smoke"
     assert {"git_sha", "git_dirty", "git_dirty_any", "git_dirty_paths"} <= set(p)
     assert not any(ln[3:].startswith(("artifacts/", "docs/")) for ln in p["git_dirty_paths"])
+
+
+# ------------------------------------------------------------ evaluate_variants: маршрутизація без прогонів
+
+
+def test_evaluate_variants_selects_on_is_only_and_runs_the_chosen_cell_out_of_sample(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Вибір на IS (selection="is_grid"): IS-задачі бачать лише бари [is_start, is_end) свого фолду, клітинка
+    обирається за правилом фронту лише з IS-метрик, OOS-задача фолду k біжить саме з обраною клітинкою і з
+    прогрівом усередині embargo; повне вікно — з параметрами варіанта. Рушій підмінено: перевіряється
+    маршрутизація задач, а не числа бектесту (їх перевіряють тести рушія)."""
+    ds = load_fixture_dataset()
+    base = ea.base_config()
+    variants = [ea.Variant("a", "A", base), ea.Variant("b", "B", base.with_params(cost_mode="zero"))]
+    folds = ea.smoke_folds(len(ds), base.feature_params().max_lookback, base.resolved_warmup())
+    cells = ea.select_cells(3)
+    t = ds.t_ns
+    stages: list[list[dict[str, Any]]] = []
+
+    def fake_run_parallel(fn: Any, tasks: list[dict[str, Any]], workers: int, *, seed: int) -> list[Any]:
+        stages.append(tasks)
+        out = []
+        for task in tasks:
+            m = task["meta"]
+            # на IS фолду k єдина недомінована клітинка — k mod 3 (різні фолди → різний вибір)
+            sharpe = 1.0 if m["kind"] == "is" and m["cell"] == m["fold"] % len(cells) else 0.0
+            out.append({"meta": m, "metrics": {"sharpe": sharpe, "max_drawdown": 0.01, "turnover": 1.0},
+                        "extras": {"n_obs": 1}})
+        return out
+
+    monkeypatch.setattr(ea, "run_parallel", fake_run_parallel)
+    ev = ea.evaluate_variants(ds, variants, folds=folds, seed=5, scopes=("oos", "full"), selection="is_grid",
+                              cells=cells, dd_cap=0.05)
+    is_tasks, eval_tasks = stages
+    assert len(is_tasks) == len(variants) * len(folds) * len(cells)
+    for task in is_tasks:
+        f = folds[task["meta"]["fold"]]
+        ts = task["arrays"]["t_ns"]
+        assert ts[0] == t[f.is_start] and ts[-1] == t[f.is_end - 1]      # лише IS, без embargo і OOS
+    for v in variants:
+        assert ev["chosen"][v.key] == [cells[k % len(cells)] for k in range(len(folds))]
+        assert [c["rule"] for c in ev["choice_info"][v.key]] == ["eps_constraint"] * len(folds)
+    warm = base.resolved_warmup()
+    by_variant: dict[str, list[dict[str, Any]]] = {}
+    for task in eval_tasks:
+        by_variant.setdefault(task["meta"]["variant"], []).append(task)
+    for v in variants:
+        oos = [x for x in by_variant[v.key] if x["meta"]["kind"] == "oos"]
+        [full] = [x for x in by_variant[v.key] if x["meta"]["kind"] == "full"]
+        for task in oos:
+            k = task["meta"]["fold"]
+            f, cell = folds[k], cells[k % len(cells)]
+            assert {p: task["config"][p] for p in cell} == cell           # OOS — обрана на IS клітинка
+            assert task["config"]["cost_mode"] == v.config.cost_mode      # поверх конфігурації варіанта
+            ts = task["arrays"]["t_ns"]
+            assert ts[0] == t[f.oos_start - warm] >= t[f.is_end] and task["eval_start"] == warm
+        assert full["config"] == v.config.to_dict()                       # повне вікно — без клітинки
+        assert len(ev["results"][v.key]["oos"]) == len(folds) and len(ev["results"][v.key]["full"]) == 1
+    with pytest.raises(ValueError, match="selection"):
+        ea.evaluate_variants(ds, variants, folds=folds, seed=5, selection="oos_peek")
+    with pytest.raises(ValueError, match="warm-up"):
+        ea.evaluate_variants(ds, [variants[0], ea.Variant("w", "W", base.with_params(warmup_bars=600))],
+                             folds=folds, seed=5)

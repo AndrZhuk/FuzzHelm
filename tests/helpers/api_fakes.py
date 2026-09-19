@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import functools
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
@@ -51,6 +52,16 @@ from fuzzhelm.storage.repositories.user import hash_password
 from fuzzhelm.storage.session import json_dumps
 
 FAST_PWD = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=4)
+
+
+@functools.cache
+def _fast_hash(password: str) -> str:
+    """bcrypt-хеш пароля — один раз на процес. Кожен тест API створює свіжих користувачів (4 ролі) — сотні
+    однакових хешувань; будь-який валідний bcrypt-хеш перевіряється тим самим паролем, тож вхід і відмова
+    з хибним паролем перевіряються так само (сіль у фейках — не предмет перевірки)."""
+    return hash_password(password, FAST_PWD)
+
+
 T0_NS = 1_758_153_600_000_000_000  # 2025-09-18 00:00:00 UTC
 NS_PER_MIN = 60_000_000_000
 JWT_SECRET = "test-secret-" + "x" * 32
@@ -103,7 +114,7 @@ class MemUsers:
         row = UserRow(
             id=self.st.next_id("user"),
             login=login,
-            pwd_hash=hash_password(password, FAST_PWD),
+            pwd_hash=_fast_hash(password),
             role=Role(role).value,
             created_at_ns=self.st.now_ns,
         )

@@ -96,7 +96,7 @@ async def load_window(factory: Any, symbol: str) -> Any:
 
 async def run(args: argparse.Namespace) -> dict[str, Any]:
     from fuzzhelm.backtest.engine import BacktestConfig, run_backtest  # noqa: PLC0415
-    from fuzzhelm.backtest.manifest import equity_hash, read_git_sha  # noqa: PLC0415
+    from fuzzhelm.backtest.manifest import equity_hash, read_git_state  # noqa: PLC0415
     from fuzzhelm.config import get_settings, load_yaml  # noqa: PLC0415
     from fuzzhelm.core.enums import RunKind, RunStatus  # noqa: PLC0415
     from fuzzhelm.core.journal import JournalEntry  # noqa: PLC0415
@@ -118,7 +118,11 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         prof = load_yaml(f"profiles/{args.profile}")
         cfg = BacktestConfig.from_profile(args.profile)
         seed = int(prof["seed"])
-        sha, dirty = read_git_sha()
+        # git_dirty — зміни КОДУ (поза artifacts/, docs/): одне визначення з експериментами (WIRE-03)
+        gs = read_git_state()
+        sha, dirty = gs.sha, gs.dirty
+        if dirty:
+            print("uncommitted code changes (run_metric.git_dirty = 1): " + "; ".join(gs.dirty_paths[:5]))
         ds_hash = ds.dataset_hash
         async with session_scope(factory) as s:
             existing = await RunRepo(s).find_by_identity(
@@ -260,6 +264,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "symbol": args.symbol,
         "profile": args.profile,
         "git_dirty": dirty,
+        "git_dirty_paths": list(gs.dirty_paths),
         "repro": repro,
         "head_now": sha,
         "n_orders": n_orders,
@@ -304,7 +309,8 @@ def report_md(r: dict[str, Any], figure: Path) -> str:
         f"| config_hash | `{run.config_hash.hex()}` |",
         f"| dataset_hash | `{run.dataset_hash.hex()}` (= `data/dataset_window.json` + ряд фандингу) |",
         f"| git_sha | `{run.git_sha}`"
-        + (" — **дерево мало незакомічені зміни** (`run_metric.git_dirty = 1`)" if m.get("git_dirty") else "")
+        + (" — **незакомічені зміни коду** поза `docs/`, `artifacts/` (`run_metric.git_dirty = 1`)"
+           if m.get("git_dirty") else "")
         + " |",
         f"| seed / engine | {run.seed} / {run.engine} |",
         f"| journal_head_hash | `{run.journal_head_hash.hex() if run.journal_head_hash else None}` |",
@@ -384,7 +390,7 @@ def _repro_lines(r: dict[str, Any]) -> list[str]:
 
     ok_eq, eq_txt = verdict(rep["equity_hash"], run.equity_hash)
     ok_j, j_txt = verdict(rep["journal_head"], run.journal_head_hash)
-    dirty = " + незакомічені зміни" if r["git_dirty"] else ""
+    dirty = " + незакомічені зміни коду" if r["git_dirty"] else ""
     lines = [
         f"Відтворення поточним кодом (HEAD `{str(r['head_now'])[:7]}`{dirty}; той самий run_id, seed і "
         f"дані): `equity_hash` {eq_txt}; голова журналу {j_txt}.",

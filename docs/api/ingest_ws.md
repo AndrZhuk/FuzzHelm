@@ -138,7 +138,8 @@ class BinanceWsClient(settings: Settings, clock: Clock, *, instruments: Sequence
                       sleep=asyncio.sleep, backoff: Callable[[str], Backoff] | None = None,
                       heartbeat_timeout_s: float = 10.0, recorder: SessionRecorder | None = None,
                       src: Src = Src.WS, kline_interval="1m", depth_levels=20, depth_speed="100ms",
-                      mark_speed="1s", max_connects: int | None = None, queue_size=10_000):
+                      mark_speed="1s", max_connects: int | None = None, queue_size=10_000,
+                      monotonic: Clock | None = None):   # None → сторож іде за clock (реплей/тести)
     def streams(self) -> dict[str, list[str]]     # {"market": [s@kline_1m, s@aggTrade, s@markPrice@1s], "public": [s@depth20@100ms]}
     def urls(self) -> dict[str, str]              # <base>?streams=a/b/c; кожен URL — assert_readonly_url
     async def items(self) -> AsyncIterator[SessionItem]   # кадри + ControlRecord connected/disconnected обох з'єднань
@@ -153,7 +154,9 @@ class BinanceWsClient(settings: Settings, clock: Clock, *, instruments: Sequence
 * `ts_ingest_ns` кожного кадру = `clock.now_ns()` у момент отримання; кадр без `stream`/`data` (напр.
   відповідь на SUBSCRIBE) відкидається (`bad_frames`).
 * Сторож тиші: `recv(ws, remaining)`; `TimeoutError` і `now ≥ last + timeout` → `HeartbeatTimeoutError` →
-  розрив класу `HEARTBEAT_TIMEOUT` → перепідключення.
+  розрив класу `HEARTBEAT_TIMEOUT` → перепідключення. `now`/`last`/`remaining` — з `monotonic` (воркери передають
+  `infra.wallclock.MonotonicClock`, WS-07 → WIRE-02): крок NTP уперед не дає хибного розриву, крок назад не ховає
+  справжню тишу (`tests/unit/test_wiring_ws_monotonic.py`). Мітки кадрів і записів керування — і далі `clock`.
 * Після розриву: `ControlRecord("disconnected", detail=Disconnect.detail)`; фатальний клас → `WsFatalError`
   у споживача; `NORMAL/GOING_AWAY` після робочої сесії — без паузи; інакше `sleep(backoff.next_delay())`.
   Backoff скидається лише після ПЕРШОГО справжнього кадру нової сесії.
@@ -225,7 +228,10 @@ def journal_sink(journal: EventJournal) -> Callable[[MarketEvent], None]   # app
 BackfillHook = Callable[[GapRecord], Awaitable[FillResult]]
 @dataclass class PipelineSinks(on_event, on_candle, on_trade, on_gap, on_invalid, on_disconnect,
                                on_anomaly)   # усі Optional; on_anomaly(AnomalyVerdict) — скор MLP кожної
-                               # випущеної свічки після прогріву (t_ns = open_time) → candle.anomaly_score
+                               # випущеної свічки після прогріву (t_ns = open_time) → candle.anomaly_score;
+                               # викликається ДО on_candle тієї самої свічки (стік пише обидва однією транзакцією)
+AnomalyWarmupHook = Callable[[int, int], Awaitable[Sequence[Bar]]]   # закриті бари open_time ∈ [lo, hi)
+def contiguous_tail(bars, lo_ns, hi_ns, tf_ns) -> list[Bar]   # найдовший безперервний хвіст, що закінчується на hi − tf
 @dataclass(frozen=True) class HourDq(hour_start_ns: int, score: DqScore)
 @dataclass(frozen=True) class PipelineReport(health: HealthSnapshot, gaps: tuple[GapRecord, ...], candles_released,
     trades_emitted, dedup: dict[str, int], aggregator: AggregatorStats, gap_stats: GapStats, dq: tuple[HourDq, ...],
@@ -235,7 +241,8 @@ class IngestPipeline(instrument: InstrumentLike, *, sinks=None, backfill: Backfi
                      clock: Clock | None = None,           # None → FrameClock (реплей, час = ts_ingest кадру)
                      src: Src = Src.REPLAY, tf="1m", heartbeat_timeout_s: float | None = None,
                      grace_ms=2000, max_reorder_ids=50, dedup_window: int | None = 500_000,
-                     anomaly: AnomalyScorer | None = None, dq_weights=None, tau0_ms=None):
+                     anomaly: AnomalyScorer | None = None, anomaly_warmup: AnomalyWarmupHook | None = None,
+                     dq_weights=None, tau0_ms=None):
     dedup: Deduplicator; detector: GapDetector; aggregator: CandleAggregator; health: PipelineHealth
     spec: InstrumentSpec | None           # tick/step, якщо instrument — повний Instrument (SymbolRef → None)
     trades_emitted; disconnects; backfill_requests; backfill_errors
@@ -244,7 +251,14 @@ class IngestPipeline(instrument: InstrumentLike, *, sinks=None, backfill: Backfi
     async def run(self, items: AsyncIterable | Iterable) -> PipelineReport   # process(...)* + finish()
     async def finish(self) -> PipelineReport                # flush дірок, добір, випуск утриманих свічок, Q
     def dq_scores(self) -> list[HourDq]
+    def prime_anomaly(self, bars: Iterable[Bar]) -> int   # історія до потоку → екстрактор скорера (торговий воркер)
+    anomaly_warmup_error: str | None                      # помилка хука прогріву (холодний старт, не падіння)
 ```
+QualityGate (§4.1, WIRE-01): перед ПЕРШОЮ випущеною свічкою конвеєр один раз кличе `anomaly_warmup(first − 218·tf,
+first)` і подає в екстрактор `contiguous_tail(...)` (дірка чи помилка хука → лише частковий/холодний старт: перші
+свічки без скору). Далі кожна випущена свічка: `anomaly.update(bar)` → `on_anomaly(verdict)` → `on_candle(c)`;
+аномалія → `health.anomalies` і `DqAccumulator.anomalies` години open_time (N_invalid §5.17: validity =
+1 − (invalid + anomalies)/total).
 Порядок обробки події (однаковий для потоку і REST-добору): `normalize_binance` → `quality.invariants`
 (`Instrument` → tick/step) → `Deduplicator.offer` (DUPLICATE відкидається) → stale-фільтр
 (BookSnapshot з меншим `last_update_id`, MarkPrice з меншим `ts_event`) → `on_event` → Candle:

@@ -25,6 +25,7 @@ import httpx
 import orjson
 import pytest
 import respx
+from tests.helpers.quality_models import fixture_bars, trained_autoencoder
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.frames import Close as WsClose
@@ -79,11 +80,9 @@ from fuzzhelm.ingest.retry import RetryPolicy
 from fuzzhelm.ingest.symbols import BTC_USDT_PERP
 from fuzzhelm.ingest.ws_client import BinanceWsClient, WsFatalError, classify_exception
 from fuzzhelm.quality.anomaly_mlp import (
-    AnomalyAutoencoder,
     AnomalyFeatureExtractor,
     AnomalyScorer,
     AnomalyVerdict,
-    feature_matrix,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -719,8 +718,8 @@ async def test_pipeline_scores_released_candles_and_reports_anomaly_verdicts() -
     rows = orjson.loads(gzip.decompress((REST / "binance_klines.json.gz").read_bytes()))
     now_ms = rows[-1][6] + 1_000
     candles = normalize_rest_klines(rows, INSTR, now_ms * 1_000_000, server_time_ms=now_ms)
-    train_X, _ = feature_matrix([bar_from_candle(c) for c in candles[:1500]])
-    model = AnomalyAutoencoder(seed=20260918).fit(train_X)
+    assert tuple(bar_from_candle(c) for c in candles[:1500]) == fixture_bars()[:1500]
+    model = trained_autoencoder()                  # AnomalyAutoencoder(seed=20260918) на цих 1500 барах, кеш
     feed = list(candles[1700:2001])
     spike = quantize_price(feed[-2].c * Decimal("1.01"), INSTR.tick_size)          # +1 % за хвилину
     feed[-1] = feed[-1].model_copy(update={"c": spike, "h": max(feed[-1].h, spike)})

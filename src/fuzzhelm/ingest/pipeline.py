@@ -12,7 +12,9 @@
   3. Deduplicator за event_uid: DUPLICATE → відкинуто (повтор кадру, перекриття добору);
      BookSnapshot/MarkPrice, старіші за вже прийняті (перестановка), — stale, відкинуто;
   4. стік on_event (журнал подій) — кожна прийнята зміна стану;
-  5. Candle → GapDetector.on_kline + CandleAggregator (закрита свічка рівно раз, по порядку) → on_candle;
+  5. Candle → GapDetector.on_kline + CandleAggregator (закрита свічка рівно раз, по порядку) →
+     [QualityGate: MLP-скор свічки → on_anomaly; аномалія → N_invalid години Q, health.anomalies]
+     → on_candle;
      Trade  → on_trade (перше надходження кожного agg_id) + GapDetector.on_trade;
      інші  → GapDetector.on_time (біржовий час рухає детектор свічок навіть без кадрів kline);
   6. нові прогалини → on_gap(OPEN) → FILLING → BackfillHook → події добору йдуть кроками 2–5 →
@@ -24,14 +26,21 @@
 з'єднанні довша за timeout = розрив (у live цим займається сам BinanceWsClient, тоді тут None). «Зараз» —
 мітка кожного запису будь-якого з'єднання, тож розрив фіксується в момент last + timeout, а не заднім
 числом із поверненням з'єднання (і фіксується, навіть якщо воно не повернеться).
+
+MLP-скорер (`anomaly=`, quality.anomaly_mlp.AnomalyScorer) бачить лише випущені закриті свічки у порядку
+open_time. Перед першою з них конвеєр один раз просить `anomaly_warmup(lo_ns, hi_ns)` — бари, що передують
+потоку (БД / REST у воркерах), — і подає в екстрактор найдовший безперервний хвіст, що впритул прилягає до
+першої свічки; без цього перші warmup − 1 = 218 свічок лишались би без скору. Скор свічки йде в on_anomaly
+ДО on_candle — стік пише свічку і її скор однією транзакцією.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections import deque
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -48,7 +57,7 @@ from fuzzhelm.core.errors import NormalizationError
 from fuzzhelm.core.journal import EventJournal
 from fuzzhelm.core.money import dec
 from fuzzhelm.core.ports import Clock
-from fuzzhelm.features.convert import bar_from_candle
+from fuzzhelm.features.convert import Bar, bar_from_candle
 from fuzzhelm.ingest.backfill import backfill_klines
 from fuzzhelm.ingest.candles import AggregatorStats, CandleAggregator
 from fuzzhelm.ingest.dedup import Deduplicator, DedupOutcome
@@ -73,6 +82,10 @@ from fuzzhelm.quality.invariants import InstrumentSpec, check_book, check_candle
 
 type Sink[T] = Callable[[T], Any]  # синхронний або async колбек
 SleepFn = Callable[[float], Awaitable[None]]
+# історія для прогріву MLP-скорера: закриті бари з open_time ∈ [lo_ns, hi_ns) (порядок і дублікати — будь-які)
+AnomalyWarmupHook = Callable[[int, int], Awaitable[Sequence[Bar]]]
+
+log = logging.getLogger("fuzzhelm.ingest.pipeline")
 
 HOUR_NS: Final = 3_600 * 1_000_000_000
 AGG_TRADES_PATH: Final = AGG_TRADES                       # REST aggTrades живе в rest_client (WS-04)
@@ -145,7 +158,8 @@ class PipelineSinks:
     on_gap: Sink[GapRecord] | None = None            # кожна зміна стану прогалини → ingest_gap
     on_invalid: Sink[InvalidEvent] | None = None
     on_disconnect: Sink[Disconnect] | None = None
-    # скор автокодувальника кожної випущеної свічки (після прогріву; t_ns = open_time) → candle.anomaly_score
+    # скор автокодувальника кожної випущеної свічки (після прогріву; t_ns = open_time) → candle.anomaly_score;
+    # викликається ДО on_candle тієї самої свічки
     on_anomaly: Sink[AnomalyVerdict] | None = None
 
 
@@ -179,6 +193,7 @@ class IngestPipeline:
                  tf: str = "1m", heartbeat_timeout_s: float | None = None, grace_ms: int = 2_000,
                  max_reorder_ids: int = 50, dedup_window: int | None = 500_000,
                  anomaly: AnomalyScorer | None = None,
+                 anomaly_warmup: AnomalyWarmupHook | None = None,
                  dq_weights: tuple[float, float, float, float] | None = None,
                  tau0_ms: float | None = None) -> None:
         self.instrument = instrument
@@ -198,6 +213,9 @@ class IngestPipeline:
         self.aggregator = CandleAggregator(tf, instrument=canon)
         self.health = PipelineHealth()
         self.anomaly = anomaly
+        self.anomaly_warmup = anomaly_warmup
+        self._anomaly_primed = False
+        self.anomaly_warmup_error: str | None = None
         self.dq_weights = dq_weights if dq_weights is not None else load_dq_weights()
         self.tau0_ms = tau0_ms if tau0_ms is not None else load_tau0_ms()
         self._heartbeat_s = heartbeat_timeout_s
@@ -360,16 +378,50 @@ class IngestPipeline:
         await self._on_gaps(changed)
 
     async def _release(self, c: Candle) -> None:
-        v = self.anomaly.update(bar_from_candle(c)) if self.anomaly is not None else None
+        v = None
+        if self.anomaly is not None:
+            if not self._anomaly_primed:
+                await self._prime_anomaly_before(c.open_time_ns)
+            v = self.anomaly.update(bar_from_candle(c))
         anomaly = v is not None and v.anomaly
         self.health.on_candle_closed(anomaly=anomaly)
         acc = self._acc(c.open_time_ns)
         acc.add_bucket(c.open_time_ns)
         if anomaly:
-            acc.anomalies += 1
-        await _call(self.sinks.on_candle, c)
+            acc.anomalies += 1        # §5.17: N_invalid години включає аномалії автокодувальника
         if v is not None:
             await _call(self.sinks.on_anomaly, v)
+        await _call(self.sinks.on_candle, c)
+
+    # ------------------------------------------------------------ прогрів MLP-скорера
+
+    def prime_anomaly(self, bars: Iterable[Bar]) -> int:
+        """Подати історію, що передує потоку, в екстрактор скорера (торговий воркер: ті самі бари прогріву,
+        що й у TradingLoop). Після виклику хук anomaly_warmup вже не викликається."""
+        self._anomaly_primed = True
+        return 0 if self.anomaly is None else self.anomaly.warm_up(bars)
+
+    async def _prime_anomaly_before(self, first_open_ns: int) -> None:
+        """Один раз перед першою свічкою: бари [first − (warmup−1)·tf, first) з хука → найдовший безперервний
+        хвіст, що закінчується на first − tf. Помилка хука не зупиняє конвеєр — лише холодний старт
+        скорера."""
+        self._anomaly_primed = True
+        if self.anomaly is None or self.anomaly_warmup is None:
+            return
+        need = self.anomaly.warmup - 1
+        lo, hi = first_open_ns - need * self._tf_ns, first_open_ns
+        try:
+            got = await self.anomaly_warmup(lo, hi)
+        except Exception as e:     # прогрів необов'язковий: холодний старт, а не падіння інжесту
+            self.anomaly_warmup_error = f"{type(e).__name__}: {e}"
+            log.warning("%s: anomaly warm-up failed (%s); first %d candles stay unscored",
+                        self.instrument.symbol_canon, self.anomaly_warmup_error, need)
+            return
+        bars = contiguous_tail(got, lo, hi, self._tf_ns)
+        self.anomaly.warm_up(bars)
+        if len(bars) < need:
+            log.info("%s: anomaly warm-up has %d of %d contiguous bars before %d; %d candles stay unscored",
+                     self.instrument.symbol_canon, len(bars), need, first_open_ns, need - len(bars))
 
     # ------------------------------------------------------------ прогалини і добір
 
@@ -469,6 +521,22 @@ class IngestPipeline:
             dedup={k.value: v for k, v in self.dedup.stats.items()}, aggregator=self.aggregator.stats,
             gap_stats=self.detector.stats, dq=dq, disconnects=tuple(self.disconnects),
             backfill_requests=self.backfill_requests, backfill_errors=tuple(self.backfill_errors))
+
+
+def contiguous_tail(bars: Iterable[Bar], lo_ns: int, hi_ns: int, tf_ns: int) -> list[Bar]:
+    """Бари з t_ns ∈ [lo, hi) без дублікатів, упорядковані; з них — найдовший хвіст без дірок, останній бар
+    якого — рівно hi − tf (інакше порожньо): прогрів не має «перестрибувати» пропущені хвилини."""
+    by_t: dict[int, Bar] = {}
+    for b in bars:
+        if lo_ns <= b.t_ns < hi_ns and (hi_ns - b.t_ns) % tf_ns == 0:
+            by_t.setdefault(b.t_ns, b)
+    out: list[Bar] = []
+    t = hi_ns - tf_ns
+    while t in by_t:
+        out.append(by_t[t])
+        t -= tf_ns
+    out.reverse()
+    return out
 
 
 def _parse_class(detail: str) -> CloseClass:

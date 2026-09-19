@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import yaml
 
@@ -78,7 +78,7 @@ def _plain(obj: Any) -> Any:
 
 def config_json(cfg: RiskConfig) -> dict[str, Any]:
     """JSON-подання конфігурації для відповіді й audit_log (Decimal → рядок без експоненти)."""
-    return _jsonable(cfg.model_dump(mode="python"))
+    return cast("dict[str, Any]", _jsonable(cfg.model_dump(mode="python")))
 
 
 def _jsonable(obj: Any) -> Any:

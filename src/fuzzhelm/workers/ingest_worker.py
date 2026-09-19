@@ -7,11 +7,19 @@
       * закриті свічки → `candle` (src = WS, ідемпотентний upsert);
       * кожна зміна стану прогалини → `ingest_gap` (OPEN → FILLING → FILLED | PARTIAL | UNFILLABLE);
       * кожна прийнята подія → `event_journal` (хеш-ланцюг сесії інжесту, пакетами);
+      * MLP-скор закритої свічки (QualityGate §4.1, модель `data/anomaly_mlp_<SYMBOL>.json`) →
+        `candle.anomaly_score` у тій самій транзакції, що й свічка; аномалії → N_invalid години Q (§5.17);
       * Q кожної ЗАВЕРШЕНОЇ години → `dq_score` (незавершену годину не пишемо: інакше нічний
         scheduler.hourly_dq, що рахує лише години без рядка, уже не порахував би її повністю);
-      * знімок PipelineHealth → NOTIFY `fuzzhelm_live` (kind `health`) → GET /market/health.
+      * знімок PipelineHealth → NOTIFY `fuzzhelm_live` (kind `health`) → GET /market/health
+        (зокрема `anomalies` і `anomaly_scored`).
 Запуск: python -m fuzzhelm.workers.ingest_worker [--symbols BTCUSDT,ETHUSDT] [--minutes N]
 Автор: Андрій Жук, 2026.
+
+Прогрів MLP-скорера: перед першою закритою свічкою потоку — 218 закритих барів, що їй передують, з БД;
+яких бракує — публічним REST (лише для живого WS; для підставленого потоку — тільки БД). Моделі немає —
+попередження в журналі й інжест без MLP. Сторож тиші WS — монотонний годинник (WS-07), мітки кадрів —
+настінний.
 
 Мережа: лише read-only хости з allowlist (Settings + assert_readonly_url у клієнтах); ордерних ендпоінтів
 немає. Журнал сесії інжесту має власний run_id (uuid4) без рядка `run`: тип прогону «ingest» у CHECK
@@ -31,6 +39,7 @@ import sys
 import time
 from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -40,9 +49,25 @@ from fuzzhelm.config import Settings, get_settings
 from fuzzhelm.core.dto import Candle, Instrument, MarketEvent
 from fuzzhelm.core.enums import GapStatus, Src, Venue
 from fuzzhelm.core.journal import EventJournal, JournalEntry
+from fuzzhelm.core.ports import Clock
+from fuzzhelm.features.convert import Bar, bar_from_candle
 from fuzzhelm.ingest.gap_detector import GapRecord
-from fuzzhelm.ingest.pipeline import HOUR_NS, IngestPipeline, PipelineSinks, event_kind, journal_sink
+from fuzzhelm.ingest.pipeline import (
+    HOUR_NS,
+    AnomalyWarmupHook,
+    IngestPipeline,
+    PipelineSinks,
+    event_kind,
+    journal_sink,
+)
 from fuzzhelm.ingest.recorder import ControlRecord, RawFrame, SessionItem
+from fuzzhelm.quality.anomaly_mlp import (
+    AnomalyScorer,
+    AnomalyVerdict,
+    anomaly_health,
+    db_anomaly_score,
+    load_anomaly_scorer,
+)
 
 log = logging.getLogger("fuzzhelm.workers.ingest")
 
@@ -57,11 +82,14 @@ class IngestStats:
     gap_rows: int = 0
     journal_entries: int = 0
     dq_rows: int = 0
+    anomaly_scores: int = 0          # candle.anomaly_score, записані разом зі свічками
+    anomalies: int = 0               # з них позначено аномаліями (скор > q99 навчання)
     by_symbol: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {k: getattr(self, k) for k in ("frames", "events", "candles_written", "gap_rows",
-                                                "journal_entries", "dq_rows", "by_symbol")}
+                                                "journal_entries", "dq_rows", "anomaly_scores", "anomalies",
+                                                "by_symbol")}
 
 
 class InstrumentSink:
@@ -81,10 +109,15 @@ class InstrumentSink:
         self._to_journal = journal_sink(journal)
         self._gap_ids: dict[int, int] = {}
         self._dq_written: set[int] = set()
+        self._scores: dict[int, AnomalyVerdict] = {}       # open_time_ns → скор (on_anomaly йде ДО on_candle)
         self.pipeline: IngestPipeline | None = None
 
     def sinks(self) -> PipelineSinks:
-        return PipelineSinks(on_event=self.on_event, on_candle=self.on_candle, on_gap=self.on_gap)
+        return PipelineSinks(on_event=self.on_event, on_candle=self.on_candle, on_gap=self.on_gap,
+                             on_anomaly=self.on_anomaly)
+
+    def on_anomaly(self, v: AnomalyVerdict) -> None:
+        self._scores[v.t_ns] = v
 
     async def on_event(self, ev: MarketEvent) -> None:
         self.stats.events += 1
@@ -99,8 +132,14 @@ class InstrumentSink:
 
         entries = list(self.buffer)
         self.buffer.clear()
+        v = self._scores.pop(c.open_time_ns, None)
+        score = None if v is None else db_anomaly_score(v.score)
         async with session_scope(self.factory) as s:
-            res = await CandleRepo(s).upsert([c], self.iid)
+            repo = CandleRepo(s)
+            res = await repo.upsert([c], self.iid)
+            if score is not None:
+                # явний UPDATE: upsert не чіпає вже закриту свічку (напр. записану REST-добором раніше)
+                await repo.set_anomaly_scores(self.iid, c.tf, [(c.open_time_ns, score)])
             if entries:
                 await JournalRepo(s).append_many(entries)
             if self.publish:
@@ -110,6 +149,9 @@ class InstrumentSink:
                 await self._notify(s, "health", self.health())
         self.stats.candles_written += res.inserted + res.updated
         self.stats.journal_entries += len(entries)
+        if score is not None and v is not None:
+            self.stats.anomaly_scores += 1
+            self.stats.anomalies += int(v.anomaly)
         self.stats.by_symbol[c.instrument] = self.stats.by_symbol.get(c.instrument, 0) + 1
         await self.write_complete_hours(latest_ns=c.close_time_ns)
 
@@ -154,7 +196,8 @@ class InstrumentSink:
         return {"source": "ingest_worker", "symbol": self.instrument.symbol_canon, "frames": snap.frames,
                 "lag_p95_ms": snap.lag_p95_ms, "reconnects": snap.reconnects, "gaps_open": snap.gaps_open,
                 "gaps_by_status": snap.gaps_by_status, "candles_closed": snap.candles_closed,
-                "invalid": snap.invalid, "duplicates": snap.duplicates, "q": snap.q}
+                "invalid": snap.invalid, "duplicates": snap.duplicates, "q": snap.q,
+                **anomaly_health(self.pipeline.anomaly, snap.anomalies)}
 
     async def _notify(self, s: Any, kind: str, payload: dict[str, Any]) -> None:
         from fuzzhelm.api.live import LIVE_CHANNEL, encode_notify_payload  # noqa: PLC0415
@@ -241,6 +284,40 @@ def route(item: SessionItem, by_symbol: dict[str, IngestPipeline]) -> list[Inges
     return [] if p is None else [p]
 
 
+def make_ws_client(settings: Settings, clock: Clock, instruments: Sequence[Instrument]) -> Any:
+    """Живий WS-клієнт: мітки кадрів — `clock` (час події), сторож тиші — MonotonicClock (WS-07)."""
+    from fuzzhelm.infra.wallclock import MonotonicClock  # noqa: PLC0415
+    from fuzzhelm.ingest.ws_client import BinanceWsClient  # noqa: PLC0415
+
+    return BinanceWsClient(settings, clock, instruments=list(instruments), src=Src.WS,
+                           monotonic=MonotonicClock())
+
+
+def anomaly_warmup_hook(factory: Any, instrument_id: int, instrument: Instrument, *,
+                        rest: Any | None = None) -> AnomalyWarmupHook:
+    """Історія для прогріву MLP-скорера: закриті 1m-свічки [lo, hi) з БД; якщо БД не має їх ПОВНІСТЮ і
+    впритул, а `rest` задано (живий WS) — добрати публічним REST (klines, лише читання; у БД не пишеться).
+    Конвеєр сам бере з результату безперервний хвіст, що прилягає до першої свічки потоку."""
+    from fuzzhelm.ingest.backfill import backfill_klines  # noqa: PLC0415
+    from fuzzhelm.storage.repositories import CandleRepo  # noqa: PLC0415
+    from fuzzhelm.storage.session import session_scope  # noqa: PLC0415
+
+    async def hook(lo_ns: int, hi_ns: int) -> list[Bar]:
+        async with session_scope(factory) as s:
+            arr = await CandleRepo(s).load_arrays(instrument_id, "1m", lo_ns, hi_ns, closed_only=True)
+        bars = arr.bars()
+        want = (hi_ns - lo_ns) // 60_000_000_000
+        if len(bars) >= want or rest is None:
+            return bars
+        res = await backfill_klines(rest, instrument.symbol_venue, lo_ns // 1_000_000, hi_ns // 1_000_000 - 1,
+                                    instrument=instrument, now_ms=hi_ns // 1_000_000)
+        log.info("%s: anomaly warm-up — %d bars in the DB, %d via REST", instrument.symbol_venue, len(bars),
+                 len(res.candles))
+        return [*bars, *(bar_from_candle(c) for c in res.candles)]
+
+    return hook
+
+
 @dataclass(frozen=True)
 class IngestOptions:
     symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT")
@@ -248,6 +325,8 @@ class IngestOptions:
     database_url: str | None = None
     journal_kinds: tuple[str, ...] = ("candle", "trade", "book", "mark")
     publish: bool = True
+    anomaly: bool = True                       # MLP-скорер з data/anomaly_mlp_<SYMBOL>.json
+    anomaly_model_dir: Path | None = None
 
 
 async def run_ingest(opts: IngestOptions, *, settings: Settings | None = None,
@@ -260,7 +339,6 @@ async def run_ingest(opts: IngestOptions, *, settings: Settings | None = None,
     from fuzzhelm.ingest.ratelimit import binance_request_bucket  # noqa: PLC0415
     from fuzzhelm.ingest.rest_client import BinanceRestClient  # noqa: PLC0415
     from fuzzhelm.ingest.retry import RetryPolicy  # noqa: PLC0415
-    from fuzzhelm.ingest.ws_client import BinanceWsClient  # noqa: PLC0415
     from fuzzhelm.storage.models import APP_ROLE  # noqa: PLC0415
     from fuzzhelm.storage.repositories import InstrumentRepo  # noqa: PLC0415
     from fuzzhelm.storage.session import make_engine, session_factory, session_scope  # noqa: PLC0415
@@ -284,10 +362,17 @@ async def run_ingest(opts: IngestOptions, *, settings: Settings | None = None,
                 if row is None:
                     raise SystemExit(f"instrument {sym} is not in the DB: run `fuzzhelm backfill` first")
                 instruments.append((row.to_dto(), row.id))
+        scorers: dict[str, AnomalyScorer] = {}
+        for inst, _ in instruments:
+            sc = (load_anomaly_scorer(inst.symbol_venue, model_dir=opts.anomaly_model_dir)
+                  if opts.anomaly else None)
+            if sc is not None:
+                scorers[inst.symbol_venue] = sc
         journal.append("ingest.start", {
             "symbols": list(opts.symbols), "market": settings.binance_ws_market,
             "public": settings.binance_ws_public, "rest": settings.binance_rest_base,
-            "feed": "ws" if feed is None else "injected"}, started_ns, started_ns)
+            "feed": "ws" if feed is None else "injected",
+            "anomaly_models": {sym: sc.label for sym, sc in sorted(scorers.items())}}, started_ns, started_ns)
         async with httpx.AsyncClient(timeout=15, transport=http_transport) as http:
             rest = BinanceRestClient(settings.binance_rest_base, http, binance_request_bucket(clock),
                                      RetryPolicy(rng_seed=settings.seed), clock=clock)
@@ -296,13 +381,16 @@ async def run_ingest(opts: IngestOptions, *, settings: Settings | None = None,
             for inst, iid in instruments:
                 sink = InstrumentSink(factory, inst, iid, journal=journal, buffer=buffer, stats=stats,
                                       journal_kinds=frozenset(opts.journal_kinds), publish=opts.publish)
-                pipe = IngestPipeline(inst, sinks=sink.sinks(), backfill=RestBackfiller(rest, inst),
-                                      clock=clock, src=Src.WS, heartbeat_timeout_s=None)
+                scorer = scorers.get(inst.symbol_venue)
+                pipe = IngestPipeline(
+                    inst, sinks=sink.sinks(), backfill=RestBackfiller(rest, inst), clock=clock, src=Src.WS,
+                    heartbeat_timeout_s=None, anomaly=scorer,
+                    anomaly_warmup=None if scorer is None else anomaly_warmup_hook(
+                        factory, iid, inst, rest=rest if feed is None else None))
                 sink.pipeline = pipe
                 sinks[inst.symbol_venue] = sink
                 pipes[inst.symbol_venue] = pipe
-            ws = (BinanceWsClient(settings, clock, instruments=[i for i, _ in instruments], src=Src.WS)
-                  if feed is None else None)
+            ws = make_ws_client(settings, clock, [i for i, _ in instruments]) if feed is None else None
             source: AsyncIterable[SessionItem] = ws.items() if ws is not None else feed  # type: ignore[assignment]
 
             async def handle(item: SessionItem) -> None:
@@ -338,9 +426,16 @@ async def run_ingest(opts: IngestOptions, *, settings: Settings | None = None,
                             "gaps": len(r.gaps), "gap_status": sorted({g.status.value for g in r.gaps}),
                             "dq_hours": [(h.hour_start_ns, round(h.score.score, 4)) for h in r.dq],
                             "backfill_requests": r.backfill_requests, "invalid": r.health.invalid,
-                            "duplicates": r.health.duplicates, "lag_p95_ms": r.health.lag_p95_ms}
+                            "duplicates": r.health.duplicates, "lag_p95_ms": r.health.lag_p95_ms,
+                            "anomalies": r.health.anomalies,
+                            "anomaly_scored": _scored(pipes[sym]),
+                            "anomaly_warmup_error": pipes[sym].anomaly_warmup_error}
                       for sym, r in reports.items()},
     }
+
+
+def _scored(pipe: IngestPipeline) -> int:
+    return 0 if pipe.anomaly is None else pipe.anomaly.scored
 
 
 def parse_args(argv: Sequence[str] | None = None) -> IngestOptions:
@@ -352,11 +447,13 @@ def parse_args(argv: Sequence[str] | None = None) -> IngestOptions:
     ap.add_argument("--journal-kinds", default="candle,trade,book,mark",
                     help="event kinds written to event_journal (book snapshots are the bulk)")
     ap.add_argument("--no-notify", action="store_true")
+    ap.add_argument("--no-anomaly", action="store_true",
+                    help="do not load the MLP anomaly models (data/anomaly_mlp_<SYMBOL>.json)")
     a = ap.parse_args(argv)
     return IngestOptions(symbols=tuple(s.strip().upper() for s in a.symbols.split(",") if s.strip()),
                          minutes=a.minutes, database_url=a.database_url,
                          journal_kinds=tuple(k.strip() for k in a.journal_kinds.split(",") if k.strip()),
-                         publish=not a.no_notify)
+                         publish=not a.no_notify, anomaly=not a.no_anomaly)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

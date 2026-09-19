@@ -104,7 +104,8 @@ build_db_services(settings=None, *, engine=None, limits_path=None, backtests=Non
 create_app(services=None, *, cors_origins=("http://localhost:5173", ...), build_default=True) -> FastAPI
 ```
 `Repos` — Protocol-підмножина репозиторіїв storage (`users, audit, strategies, runs, equity, decisions, candles,
-instruments, dq, gaps, risk`) плюс `notify(channel, kind, payload)`. Цей метод виконує `pg_notify` **у тій самій
+instruments, dq, gaps, risk` — властивості лише для читання, тож `DbRepos` і фейки тестів задовольняють протокол
+структурно; так само `scheduler.jobs.SchedulerRepos`, QP-02) плюс `notify(channel, kind, payload)`. Цей метод виконує `pg_notify` **у тій самій
 транзакції**, тож подію буде доставлено лише після COMMIT. Маршрут сам відкриває `async with services.uow()`, щоб
 COMMIT (а з ним і запис аудиту) стався **до** відповіді. Вихідний код yield-залежності FastAPI виконується вже після
 відповіді. Тести підміняють `ApiServices` через `app.dependency_overrides[get_services]` реалізацією в пам'яті
@@ -182,6 +183,9 @@ PARAM_KEYS = {n_atr, chi, u_enter, u_exit, rho_base, lam, tp_multiple, cost_mode
 3. Перевіряє ідентичність `(config_hash, dataset_hash, seed, engine, git_sha)` через `find_by_identity`
    (`IS NOT DISTINCT FROM`, ST-03). Дубль → задача **FAILED** «identical run already stored as <id>».
 4. Записує паспорт `run` зі статусом RUNNING (config = `identity_dict`, хеші, git HEAD, strategy_id, вікно).
+   `run_metric.git_dirty` — незакомічені зміни **коду** поза `docs/` і `artifacts/` (`DbBacktestRunner._git` →
+   `backtest.manifest.read_git_state`, одне визначення з паспортами експериментів; WIRE-03); шляхи змін — у
+   `runner.git_dirty_paths` і в результаті задачі (`git_sha`, `git_dirty`, `git_dirty_paths`).
 5. Викликає `run_backtest(dataset, cfg, seed, run_id=run_id, git=False, kind=BACKTEST)` у потоці.
 6. Однією транзакцією пише результат: рішення з трасуванням (`DecisionRecord.from_trace` + `narrate()` у
    `decision.narrative`), ордери (`OrderRepo.create` + `apply_fill` кожного виконання; FK на рішення-джерело),

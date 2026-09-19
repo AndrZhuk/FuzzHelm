@@ -10,14 +10,12 @@ risk.var; None, поки дохідностей < 500; пакетний (руш�
 from __future__ import annotations
 
 from decimal import Decimal
-from functools import cache
 from uuid import UUID
 
 import numpy as np
 import pytest
-from tests.helpers.engine_scripted import base_config, fixture
+from tests.helpers.engine_scripted import fixture, fixture_run
 
-from fuzzhelm.backtest.engine import BacktestResult, run_backtest
 from fuzzhelm.risk.var import (
     RollingVarCvar,
     historical_var_cvar,
@@ -29,12 +27,6 @@ from fuzzhelm.workers.persist import VAR_MIN_OBS, VAR_WINDOW, RollingVar, plan_b
 
 D = Decimal
 SEED = 20260918
-
-
-@cache
-def fixture_run() -> BacktestResult:
-    """3000 реальних барів BTCUSDT, дефолтна стратегія, трасування угод (є точки кривої)."""
-    return run_backtest(fixture(), base_config().with_params(record_traces="trades"), seed=SEED)
 
 
 def _curve(n: int, seed: int, vol: float = 0.002) -> list[Decimal]:

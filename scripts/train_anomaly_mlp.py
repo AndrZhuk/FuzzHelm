@@ -11,9 +11,20 @@ docs/figures/calibration_report.md) — навчання лише на норм�
 
 Сама процедура — `fuzzhelm.quality.anomaly_eval.evaluate_injections` (покрита швидким unit-тестом).
 
+Робоча модель (WIRE-01): після оцінювання скрипт навчає обрану архітектуру (`--arch`, типово 5-3-5 — п'ять
+ознак §5.17; на справжньому IS-вікні вона краща за 8-3-8 у 6/6 seed) на ТИХ САМИХ нормальних барах IS з тим
+самим seed і пише JSON-артефакт `data/anomaly_mlp_<SYMBOL>.json` (не pickle): архітектура, mean/scale
+скейлера, coefs_/intercepts_, поріг q₉₉, вікно навчання і його dataset_hash, seed, версії sklearn/numpy, числа
+оцінювання цього прогону і git-провенанс. Перед записом скрипт перевіряє, що (1) поріг збігається з порогом
+тієї самої архітектури в оцінюванні (та сама модель) і (2) мережа, відтворена з артефакту
+(`quality.anomaly_mlp.load_model_artifact`), дає ПОБІТОВО ті самі скори на навчальних векторах. У режимі
+`--from-fixture` модель пишеться лише за явним `--model-out` (фікстура не має підмінити робочу модель).
+
 Запуск:  uv run python scripts/train_anomaly_mlp.py [--seed 20260918] [--rate 0.02] [--extra-seeds 1,2,3,4,5]
+         uv run python scripts/train_anomaly_mlp.py --no-report          # лише оцінювання + артефакт моделі
          uv run python scripts/train_anomaly_mlp.py --from-fixture --out /tmp/mlp_fixture.md
-Результат: docs/figures/quality_mlp_rocauc.md (усі числа в ньому — з цього прогону).
+Результат: docs/figures/quality_mlp_rocauc.md (усі числа в ньому — з цього прогону) і
+data/anomaly_mlp_<SYMBOL>.json.
 """
 
 from __future__ import annotations
@@ -21,16 +32,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import gzip
+import platform
 import statistics
 import sys
+import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import orjson
 
-from fuzzhelm.backtest.manifest import dataset_hash
+from fuzzhelm.backtest.manifest import dataset_hash, read_git_state
 from fuzzhelm.cli import DAY_MS, NS_PER_MS, DatasetWindow, load_window, utc_iso
 from fuzzhelm.config import get_settings
 from fuzzhelm.core.enums import Venue
@@ -44,7 +58,17 @@ from fuzzhelm.quality.anomaly_eval import (
     evaluate_injections,
     structurally_valid,
 )
-from fuzzhelm.quality.anomaly_mlp import ANOMALY_KINDS, FEATURE_NAMES
+from fuzzhelm.quality.anomaly_mlp import (
+    ANOMALY_KINDS,
+    FEATURE_NAMES,
+    AnomalyAutoencoder,
+    ExtractorParams,
+    default_model_path,
+    feature_matrix,
+    load_model_artifact,
+    model_artifact,
+    write_model_artifact,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 KLINES = ROOT / "fixtures" / "rest" / "binance_klines.json.gz"
@@ -242,6 +266,83 @@ def write_md(main: EvalReport, extra: list[EvalReport], meta: dict[str, Any], *,
     return text
 
 
+DECISION_UK = (
+    "Робоча архітектура — 5-3-5: вектор п'яти ознак брифінгу §5.17 (нормативна вимога). Порівняння з "
+    "8-3-8 (§3) на справжньому IS-вікні — docs/figures/quality_mlp_rocauc.md: 5-3-5 має вищий ROC-AUC у "
+    "6 з 6 seed і нижчу частку хибних тривог при q99; перевага зберігається і на внутрішньому розбитті IS "
+    "(навчання дні 1–12, перевірка 13–15), тобто рішення не спирається лише на відкладені дні 16–20 "
+    "(docs/deviations.d/wiring.md WIRE-01)."
+)
+
+
+def train_production_model(bars: list[Bar], normal: list[bool], n_train: int, n_feat: int, seed: int
+                           ) -> tuple[AnomalyAutoencoder, np.ndarray, int]:
+    """Та сама вибірка, що й навчання в evaluate_injections: вектори барів IS [0, n_train), нормальні бари."""
+    X, idx = feature_matrix(bars[:n_train])
+    keep = np.asarray(normal, dtype=bool)[idx]
+    train_X = X[keep][:, :n_feat]
+    return AnomalyAutoencoder(seed=seed).fit(train_X), train_X, int((~keep).sum())
+
+
+def build_artifact(model: AnomalyAutoencoder, train_X: np.ndarray, excluded: int, meta: dict[str, Any],
+                   main: EvalReport, extra: list[EvalReport], *, arch: str, seed: int, command: str,
+                   window_ms: tuple[int, int] | None) -> dict[str, Any]:
+    import sklearn  # noqa: PLC0415
+
+    other = next(a for a in ARCHITECTURES if a != arch)
+    reps = [main, *extra]
+    ev_arch, ev_other = main.archs[arch], main.archs[other]
+    gs = read_git_state(ROOT)
+    cal = _calibration_hash()
+    training: dict[str, Any] = {
+        "estimator": "sklearn.preprocessing.StandardScaler -> sklearn.neural_network.MLPRegressor",
+        "hidden_layer_sizes": [model.hidden], "activation": model.activation, "max_iter": model.max_iter,
+        "random_state": seed, "n_iter": model.n_iter, "converged": model.converged,
+        "source": meta["source"], "symbol": meta["symbol"], "window": meta["train_label"],
+        "from_utc": meta["train_from"], "n_bars": int(meta["n_train"]), "n_vectors": int(train_X.shape[0]),
+        "excluded_vectors": excluded, "synthetic_candles_in_window": meta["synthetic"],
+        "dataset_hash": meta["train_hash"], "dataset_hash_columns": ["c", "h", "l", "o", "t_ns", "v"],
+        "calibration_dataset_hash": cal, "same_bars_as_mf_calibration": cal == meta["train_hash"],
+        "train_score_quantile": model.quantile, "threshold": float(model.threshold),
+    }
+    if window_ms is not None:
+        training["from_ms"], training["to_ms"] = window_ms
+    evaluation: dict[str, Any] = {
+        "procedure": "fuzzhelm.quality.anomaly_eval.evaluate_injections",
+        "report": "docs/figures/quality_mlp_rocauc.md", "holdout": meta["holdout_label"],
+        "holdout_dataset_hash": meta["holdout_hash"], "per_kind_injections": main.per_kind, "seed": main.seed,
+        "same_threshold_as_evaluated_model": float(model.threshold) == ev_arch.threshold,
+        arch: {"roc_auc_all": ev_arch.auc_all, "fpr_at_q99": ev_arch.fpr_at_q99,
+               "per_kind": {k: dict(v) for k, v in ev_arch.per_kind.items()}},
+        other: {"roc_auc_all": ev_other.auc_all, "fpr_at_q99": ev_other.fpr_at_q99},
+    }
+    if extra:
+        evaluation["seeds"] = [r.seed for r in reps]
+        for label in (arch, other):
+            aucs = [r.archs[label].auc_all for r in reps]
+            evaluation[label]["roc_auc_all_mean"] = statistics.mean(aucs)
+            evaluation[label]["roc_auc_all_sd"] = statistics.stdev(aucs)
+        evaluation[f"{arch}_wins"] = sum(r.archs[arch].auc_all > r.archs[other].auc_all for r in reps)
+    return model_artifact(
+        model, symbol=str(meta["symbol"]), extractor=ExtractorParams(),
+        symbol_canon=meta.get("symbol_canon"),
+        decision=DECISION_UK if arch == "5-3-5" and not str(meta["source"]).startswith("fixture") else None,
+        training=training, evaluation=evaluation,
+        versions={"python": platform.python_version(), "numpy": np.__version__,
+                  "sklearn": sklearn.__version__},
+        provenance={"command": command, "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "git_sha": gs.sha, "git_dirty": gs.dirty, "git_dirty_paths": list(gs.dirty_paths)},
+    )
+
+
+def verify_roundtrip(doc: dict[str, Any], model: AnomalyAutoencoder, train_X: np.ndarray) -> bool:
+    """Мережа з артефакту (JSON → numpy) дає побітово ті самі скори, що й навчена модель."""
+    with tempfile.TemporaryDirectory() as d:
+        p = write_model_artifact(Path(d) / "m.json", doc)
+        loaded = load_model_artifact(p)
+    return bool(np.array_equal(loaded.model.score(train_X), model.score(train_X)))
+
+
 def _seeds(text: str) -> list[int]:
     return [int(x) for x in text.split(",") if x.strip()]
 
@@ -259,13 +360,22 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--window-json", type=Path, default=WINDOW_JSON)
     ap.add_argument("--database-url", default=None, help="default: FUZZHELM_DATABASE_URL / .env")
     ap.add_argument("--from-fixture", action="store_true", help="offline: 3000 bars of the REST fixture")
-    ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--out", type=Path, default=None,
+                    help="report path (default docs/figures/quality_mlp_rocauc.md; other symbols: "
+                         "quality_mlp_rocauc_<SYMBOL>.md — the BTCUSDT report is never overwritten by them)")
+    ap.add_argument("--no-report", action="store_true", help="do not write the markdown report")
+    ap.add_argument("--arch", choices=tuple(ARCHITECTURES), default="5-3-5",
+                    help="architecture of the persisted model (default 5-3-5, see WIRE-01)")
+    ap.add_argument("--model-out", type=Path, default=None,
+                    help="model artifact path (default data/anomaly_mlp_<SYMBOL>.json; fixture mode: none)")
+    ap.add_argument("--no-model", action="store_true", help="evaluate only, do not write the model artifact")
     a = ap.parse_args(argv)
     if not 0 < a.rate <= 0.25:
         ap.error("--rate must be in (0, 0.25]")
     settings = get_settings()
     seed = settings.seed if a.seed is None else a.seed
     t0 = time.perf_counter()
+    window_ms: tuple[int, int] | None = None
     if a.from_fixture:
         bars, meta = load_fixture()
         normal = [structurally_valid(b) for b in bars]
@@ -276,6 +386,7 @@ def main(argv: list[str] | None = None) -> int:
         url = str(a.database_url or settings.database_url)
         bars, meta, synthetic = asyncio.run(load_db(url, a.symbol, window, a.is_days, a.holdout_days))
         normal = [structurally_valid(b) and b.t_ns not in synthetic for b in bars]
+        window_ms = window.sub_window(1, a.is_days)
     n_train = int(meta["n_train"])
     train, holdout = (0, n_train), (n_train, len(bars))
     per_kind = max(1, round(a.rate * (len(bars) - n_train)))
@@ -286,10 +397,38 @@ def main(argv: list[str] | None = None) -> int:
     cmd += f" --seed {seed} --rate {a.rate:g} --extra-seeds {','.join(map(str, a.extra_seeds))}"
     if not a.from_fixture:
         cmd += f" --symbol {a.symbol} --is-days {a.is_days} --holdout-days {a.holdout_days}"
-    if a.out != OUT:
-        cmd += f" --out {a.out}"
-    print(write_md(reports[0], reports[1:], meta, command=cmd, rate=a.rate, seconds=time.perf_counter() - t0,
-                   out=a.out))
+    default_out = OUT if a.from_fixture or a.symbol.upper() == "BTCUSDT" else \
+        OUT.with_name(f"quality_mlp_rocauc_{a.symbol.upper()}.md")
+    out = a.out or default_out
+    if out != default_out and not a.no_report:
+        cmd += f" --out {out}"
+    if a.no_report:
+        cmd += " --no-report"
+    if a.arch != "5-3-5":
+        cmd += f" --arch {a.arch}"
+    if not a.no_report:
+        print(write_md(reports[0], reports[1:], meta, command=cmd, rate=a.rate,
+                       seconds=time.perf_counter() - t0, out=out))
+    model_out = None if a.no_model else (a.model_out or (None if a.from_fixture
+                                                         else default_model_path(a.symbol)))
+    if model_out is None:
+        return 0
+    if a.model_out is not None:
+        cmd += f" --model-out {a.model_out}"
+    model, train_X, excluded = train_production_model(bars, normal, n_train, ARCHITECTURES[a.arch], seed)
+    doc = build_artifact(model, train_X, excluded, meta, reports[0], reports[1:], arch=a.arch, seed=seed,
+                         command=cmd, window_ms=window_ms)
+    same = doc["evaluation"]["same_threshold_as_evaluated_model"]
+    bit_identical = verify_roundtrip(doc, model, train_X)
+    if not (same and bit_identical):
+        print(f"refusing to write {model_out}: same_threshold={same}, "
+              f"bit_identical_roundtrip={bit_identical}", file=sys.stderr)
+        return 1
+    write_model_artifact(model_out, doc)
+    print(f"model {doc['architecture']} → {model_out}: threshold {model.threshold!r}, "
+          f"{train_X.shape[0]} training vectors, n_iter {model.n_iter}, "
+          f"params_sha256 {doc['params_sha256']}; "
+          f"round trip bit-identical: {bit_identical}")
     return 0
 
 

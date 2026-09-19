@@ -212,17 +212,40 @@ class RiskStore(Protocol):
 
 
 class Repos(Protocol):
-    users: UserStore
-    audit: AuditStore
-    strategies: StrategyStore
-    runs: RunStore
-    equity: EquityStore
-    decisions: DecisionStore
-    candles: CandleStore
-    instruments: InstrumentStore
-    dq: DqStore
-    gaps: GapStore
-    risk: RiskStore
+    # члени — властивості лише для читання: протокол коваріантний, тож DbRepos (UserRepo, …) і фейки тестів
+    # задовольняють його структурно (змінний атрибут протоколу інваріантний — mypy відкидав DbRepos)
+    @property
+    def users(self) -> UserStore: ...
+
+    @property
+    def audit(self) -> AuditStore: ...
+
+    @property
+    def strategies(self) -> StrategyStore: ...
+
+    @property
+    def runs(self) -> RunStore: ...
+
+    @property
+    def equity(self) -> EquityStore: ...
+
+    @property
+    def decisions(self) -> DecisionStore: ...
+
+    @property
+    def candles(self) -> CandleStore: ...
+
+    @property
+    def instruments(self) -> InstrumentStore: ...
+
+    @property
+    def dq(self) -> DqStore: ...
+
+    @property
+    def gaps(self) -> GapStore: ...
+
+    @property
+    def risk(self) -> RiskStore: ...
 
     async def notify(self, channel: str, kind: str, payload: Mapping[str, Any]) -> None:
         """Подія, що буде доставлена лише після COMMIT цієї одиниці роботи."""

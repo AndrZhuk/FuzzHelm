@@ -376,14 +376,19 @@ class DbBacktestRunner:
         self.data_dir = Path(data_dir)
         self.clock = clock or SystemClock()
         self.git = git
+        self.git_dirty_paths: tuple[str, ...] = ()      # провенанс останнього прогону (зміни коду)
 
     async def _git(self) -> tuple[str | None, bool | None]:
-        """(git_sha, dirty): SHA — HEAD; dirty — незакомічені зміни в дереві (run_metric.git_dirty, W-11)."""
+        """(git_sha, dirty): SHA — HEAD; dirty — незакомічені зміни КОДУ, тобто поза artifacts/ і docs/
+        (єдине визначення backtest.manifest.read_git_state, WIRE-03) → run_metric.git_dirty (W-11).
+        Шляхи змін — у self.git_dirty_paths і в результаті задачі."""
         if not self.git:
             return None, None
-        from fuzzhelm.backtest.manifest import read_git_sha  # noqa: PLC0415
+        from fuzzhelm.backtest.manifest import read_git_state  # noqa: PLC0415
 
-        return await asyncio.to_thread(read_git_sha)
+        st = await asyncio.to_thread(read_git_state)
+        self.git_dirty_paths = st.dirty_paths
+        return st.sha, st.dirty
 
     async def _fail(self, run_id: UUID, error: str) -> None:
         async with session_scope(self.factory) as s:
@@ -399,7 +404,9 @@ class DbBacktestRunner:
         cfg, ds = prep.config, prep.dataset
         # хеш датасету (BLAKE2b над стовпчиками) і git — не в event loop
         ds_hash: str = await asyncio.to_thread(lambda: ds.dataset_hash)
+        self.git_dirty_paths = ()
         git_sha, git_dirty = await self._git()
+        dirty_paths: list[str] = list(self.git_dirty_paths)
         async with session_scope(self.factory) as s:
             runs = RunRepo(s)
             dup = await runs.find_by_identity(
@@ -471,6 +478,9 @@ class DbBacktestRunner:
             "config_hash": cfg.config_hash,
             "dataset_hash": ds_hash,
             "equity_hash": m.equity_hash,
+            "git_sha": git_sha,
+            "git_dirty": git_dirty,
+            "git_dirty_paths": dirty_paths,
             **counts.as_dict(),
         }
 

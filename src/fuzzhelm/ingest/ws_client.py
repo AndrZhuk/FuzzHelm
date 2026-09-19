@@ -7,6 +7,11 @@
 сирого потоку в SessionRecorder. Реалізує core.ports.MarketFeed (async-ітератор MarketEvent).
 Автор: Андрій Жук, 2026.
 
+Два годинники (WS-07): `clock` — час події (мітка ts_ingest_ns кадрів і записів керування, час епохи), а
+`monotonic` — лише для сторожа тиші. Сторож на настінному годиннику реагував на крок NTP: стрибок уперед між
+кадрами давав нульовий залишок таймауту і хибний розрив, стрибок назад — відкладав виявлення справжньої тиші.
+Воркери передають infra.wallclock.MonotonicClock; без `monotonic` (тести, реплей) сторож іде за `clock`.
+
 Шви для тестів (мережа в тестах не використовується ніколи): `connect(url)` — фабрика async-контекстного
 менеджера з'єднання (за замовчуванням websockets.asyncio.client.connect), `recv(ws, timeout)` —
 отримання кадру з таймаутом (за замовчуванням asyncio.wait_for), `sleep` — пауза backoff. Фіктивні
@@ -115,9 +120,12 @@ class BinanceWsClient:
                  heartbeat_timeout_s: float = DEFAULT_HEARTBEAT_TIMEOUT_S,
                  recorder: SessionRecorder | None = None, src: Src = Src.WS, kline_interval: str = "1m",
                  depth_levels: int = 20, depth_speed: str = "100ms", mark_speed: str = "1s",
-                 max_connects: int | None = None, queue_size: int = 10_000) -> None:
+                 max_connects: int | None = None, queue_size: int = 10_000,
+                 monotonic: Clock | None = None) -> None:
         self.settings = settings
         self.clock = clock
+        # сторож тиші міряє інтервали монотонним годинником: крок NTP не є тишею з'єднання (WS-07)
+        self.monotonic: Clock = monotonic if monotonic is not None else clock
         insts = (list(instruments) if instruments
                  else [symbol_ref(Venue.BINANCE_USDM, s) for s in settings.symbols])
         self.instruments: dict[str, InstrumentLike] = {i.symbol_venue.lower(): i for i in insts}
@@ -186,19 +194,20 @@ class BinanceWsClient:
         async with self._connect(url) as ws:
             self.connects[conn] += 1
             await self._put(ControlRecord(conn, self.clock.now_ns(), "connected", url))
-            wd = HeartbeatWatchdog(self.heartbeat_timeout_s, self.clock.now_ns())
+            mono = self.monotonic
+            wd = HeartbeatWatchdog(self.heartbeat_timeout_s, mono.now_ns())
             healthy = False
             while not self._closing:
                 try:
-                    raw = await self._recv(ws, wd.remaining_s(self.clock.now_ns()))
+                    raw = await self._recv(ws, wd.remaining_s(mono.now_ns()))
                 except TimeoutError:
-                    if wd.expired(self.clock.now_ns()):
+                    if wd.expired(mono.now_ns()):
                         wd.fires += 1
                         self.watchdog_fires[conn] += 1
                         raise HeartbeatTimeoutError(f"no frames for {wd.timeout_s:g}s") from None
                     continue
-                ts = self.clock.now_ns()
-                wd.beat(ts)
+                ts = self.clock.now_ns()                  # мітка кадру — час події
+                wd.beat(mono.now_ns())                    # сторож — монотонний інтервал
                 frame = self._parse(conn, raw, ts)
                 if frame is None:
                     continue

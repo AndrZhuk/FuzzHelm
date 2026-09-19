@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from tests.helpers.engine_scripted import base_config, crash_dataset, fixture
+from tests.helpers.engine_scripted import base_config, crash_dataset, fixture, fixture_run
 
 from fuzzhelm.backtest.dataset import (
     DEFAULT_KLINES,
@@ -58,8 +58,8 @@ def _canon(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def test_backtest_deterministic_same_seed_same_equity_sha256() -> None:
-    a = baseline()
-    b = run_backtest(fixture(), base_config().with_params(record_traces="trades"), seed=SEED)
+    a = baseline()                                         # з check_invariants — окремий, незалежний прогін
+    b = fixture_run(None, "trades", SEED)                  # ≡ run_backtest(fixture(), trades, SEED)
     assert len(a.trades) > 0, "fixture run must trade, otherwise the check is vacuous"
     assert a.equity_hash == b.equity_hash
     assert a.equity == b.equity
@@ -73,7 +73,7 @@ def test_backtest_deterministic_same_seed_same_equity_sha256() -> None:
 def test_different_seed_changes_equity() -> None:
     ds = fixture().slice(0, 1500)
     cfg = base_config().with_params(record_traces="none")
-    a = run_backtest(ds, cfg, seed=SEED)
+    a = fixture_run(1500, "none", SEED)                    # ≡ run_backtest(ds, cfg, seed=SEED)
     b = run_backtest(ds, cfg, seed=SEED + 1)
     assert len(a.trades) > 0
     # негативний контроль: інший seed — інша крива (seed входить через seeded-шум ковзання, EXE-02)
@@ -105,8 +105,7 @@ def test_zero_signal_yields_flat_equity(engine: str) -> None:
 
 def test_record_traces_mode_does_not_change_equity() -> None:
     ds = fixture().slice(0, 1500)
-    runs = {m: run_backtest(ds, base_config().with_params(record_traces=m), seed=SEED)
-            for m in ("none", "trades", "all")}
+    runs = {m: fixture_run(1500, m, SEED) for m in ("none", "trades", "all")}
     assert len({r.equity_hash for r in runs.values()}) == 1
     assert len(runs["all"].decisions) == len(ds) - runs["all"].warmup_bars + 1
     with_orders = [d for d in runs["all"].decisions if d.order_ids]

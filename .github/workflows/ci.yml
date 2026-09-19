@@ -1,0 +1,115 @@
+# FuzzHelm CI (брифінг §9: ruff → mypy(core, fuzzy, risk) → pytest --cov → pip-audit; + інтеграційні на PostgreSQL 16).
+# Автор: Андрій Жук, 2026. Жодних секретів: тести офлайн (respx/фікстури), інтеграційні — на тимчасовій БД сервісу.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"                # лише uv.lock: CI не резолвить залежності заново
+  PYTHONHASHSEED: "0"
+  FUZZHELM_LOG: WARNING
+
+jobs:
+  lint:
+    name: lint (ruff → mypy core/fuzzy/risk)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: ruff
+        run: uv run ruff check src tests scripts
+      - name: mypy (--strict на core, fuzzy, risk — pyproject [tool.mypy])
+        run: uv run mypy src/fuzzhelm/core src/fuzzhelm/fuzzy src/fuzzhelm/risk
+
+  test:
+    name: test (unit + property + e2e, coverage)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      # addopts у pyproject відкидає integration/live/slow; поріг покриття — [tool.coverage.report] fail_under
+      # (pytest-cov бере його з конфігурації coverage, коли --cov-fail-under не задано)
+      - name: pytest --cov
+        run: uv run pytest -q -n auto --cov --cov-report=term-missing --cov-report=xml
+      - name: coverage per key package (fuzzy/risk/decision/sizing >= 90 %)
+        run: uv run python -m tests.helpers.cov_packages
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  integration:
+    name: integration (PostgreSQL 16)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fuzzhelm
+          POSTGRES_PASSWORD: fuzzhelm          # лише для одноразової БД раннера
+          POSTGRES_DB: fuzzhelm_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fuzzhelm -d fuzzhelm_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      FUZZHELM_TEST_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5432/fuzzhelm_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      # conftest пропускає (skip) інтеграційні тести, якщо БД недосяжна: у CI це мусить бути червоним, а не зеленим
+      - name: pytest -m integration
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run pytest -q -m integration -p no:randomly -rs | tee integration.log
+          if grep -q "test PostgreSQL unreachable" integration.log; then
+            echo "::error::integration tests were skipped: test PostgreSQL unreachable"; exit 1
+          fi
+
+  audit:
+    name: audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      # середовище з uv.lock (runtime + dev); сам проєкт (editable, не з PyPI) пропускається
+      - name: pip-audit
+        run: uv run pip-audit --skip-editable --progress-spinner off

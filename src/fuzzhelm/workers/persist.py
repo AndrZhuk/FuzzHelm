@@ -312,6 +312,7 @@ class StepWrite:
     equity_points: int = 0
     journal_entries: int = 0
     candles: int = 0
+    anomaly_scores: int = 0
     var95: Decimal | None = None
     cvar95: Decimal | None = None
 
@@ -337,12 +338,19 @@ class LivePersister:
 
     async def write_step(self, session: AsyncSession, sr: Any, *, candle: Candle | None = None,
                          journal: Sequence[JournalEntry] = (),
-                         extra_risk: Sequence[RiskEventRecord] = ()) -> StepWrite:
+                         extra_risk: Sequence[RiskEventRecord] = (),
+                         anomaly_score: Decimal | None = None) -> StepWrite:
+        """`anomaly_score` — MLP-скор свічки (quality.anomaly_mlp.db_anomaly_score): пишеться явним UPDATE,
+        бо upsert закриту свічку, записану раніше (напр. REST-добором), не оновлює."""
         out = StepWrite()
         run_id, iid = self.run_id, self.instrument_id
         if candle is not None:
-            res = await CandleRepo(session).upsert([candle], iid)
+            repo = CandleRepo(session)
+            res = await repo.upsert([candle], iid)
             out.candles = res.inserted + res.updated
+            if anomaly_score is not None:
+                await repo.set_anomaly_scores(iid, candle.tf, [(candle.open_time_ns, anomaly_score)])
+                out.anomaly_scores = 1
         d = sr.decision
         if d is not None and d.trace is not None:
             out.decision_id = await DecisionRepo(session).insert(
@@ -400,7 +408,7 @@ class LivePersister:
         if journal:
             out.journal_entries = await JournalRepo(session).append_many(list(journal))
         for k in ("orders", "fills", "positions_opened", "positions_closed", "risk_events", "equity_points",
-                  "journal_entries", "candles"):
+                  "journal_entries", "candles", "anomaly_scores"):
             self.totals[k] += getattr(out, k)
         self.totals["decisions"] += int(out.decision_id is not None)
         return out

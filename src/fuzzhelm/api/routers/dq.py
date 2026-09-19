@@ -53,4 +53,4 @@ async def score(
     weights = dict(zip(CRITERIA, load_dq_weights(services.settings.config_dir), strict=True))
     return DqScoreOut(
         symbol=inst.symbol_canon, instrument_id=inst.id, weights=weights, items=[dq_out(r) for r in rows]
-    )  # type: ignore[misc]
+    )

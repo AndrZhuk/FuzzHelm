@@ -9,6 +9,8 @@ COPY config ./config
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY fixtures ./fixtures
+# модель автокодувальника аномалій, історія фандингу, вікно датасету (WIRE: без data/ контейнер працює без MLP)
+COPY data ./data
 RUN uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 # SHA коміту для паспорта прогону (у образі немає .git): docker compose build --build-arg GIT_SHA=$(git rev-parse HEAD)
