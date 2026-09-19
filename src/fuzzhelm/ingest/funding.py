@@ -140,7 +140,8 @@ def funding_columns(rates: Sequence[FundingRate], prefix: str = "funding_"
                     ) -> dict[str, npt.NDArray[Any]]:
     """Колонки для `backtest.manifest.dataset_hash`: `<prefix>t_ns` (int64, нс) і `<prefix>rate` (float64,
     `features.convert.to_float` — коректно округлений double рядка біржі). Рушій хешує їх разом зі
-    свічками: `dataset_hash({**candle_arrays.columns(), **funding_columns(rates)})`."""
+    свічками і специфікацією інструмента (RF-02): `dataset_hash({**candle_arrays.columns(),
+    **funding_columns(rates), ...instrument_spec})`."""
     t = np.array([r.funding_time_ms * NS_PER_MS for r in rates], dtype=np.int64)
     rate = np.array([to_float(r.funding_rate) for r in rates], dtype=np.float64)
     return {f"{prefix}t_ns": t, f"{prefix}rate": rate}

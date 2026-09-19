@@ -326,6 +326,20 @@ class RiskEventOut(_Out):
     payload: dict[str, Any] | None
 
 
+RISK_EVENTS_PAGE_DEFAULT = 500  # розмір сторінки /risk/events за замовчуванням
+RISK_EVENTS_PAGE_MAX = 2000  # найбільша сторінка (далі — курсором)
+
+
+class RiskEventPageOut(_Out):
+    run_id: UUID | None = Field(description="Run whose journal is listed (null: no live run yet).")
+    items: list[RiskEventOut] = Field(description="Newest first: ORDER BY ts DESC, id DESC.")
+    page_size: int = Field(description="Requested page size (`limit`).")
+    next_cursor: str | None = Field(
+        description="Opaque keyset cursor `<ts_ns>:<id>` of the last item; pass it as `cursor` to get the "
+        "next (older) page with the same filters. Null on the last page."
+    )
+
+
 class RiskStateOut(_Out):
     run_id: UUID | None
     state: str

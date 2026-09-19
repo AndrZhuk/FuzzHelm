@@ -94,8 +94,33 @@ ANOMALY_KINDS = ("price_spike", "wick", "volume_burst", "frozen")
 def inject_anomaly(bars, i, kind, magnitude) -> Bar   # спотворена копія bars[i], OHLC узгоджений
 ```
 Ознаки 1–5 — вектор брифінгу §5.17, 6–8 — розширення до 8-3-8 (§3); див. deviations.d/ingest_ws.md.
-Виміряно (`scripts/train_anomaly_mlp.py`, seed 20260918, 3000 справжніх барів, IS 60 %):
-ROC-AUC по всіх типах — 0.9873 (8-3-8) проти 0.9796 (5-3-5); таблиця — `docs/figures/quality_mlp_rocauc.md`.
+
+### 4a. `quality/anomaly_eval.py` — оцінювання на розмічених ін'єкціях (хвиля 3, PLAT-05)
+
+```python
+DEFAULT_MAGNITUDES = {"price_spike": (0.003, 0.02), "wick": (0.003, 0.02), "volume_burst": (5.0, 30.0), "frozen": (0, 0)}
+ARCHITECTURES = {"8-3-8": 8, "5-3-5": 5}          # кількість перших ознак FEATURE_NAMES на вході
+def structurally_valid(bar) -> bool                # ціни > 0, h ≥ max(o,c), l ≤ min(o,c), v ≥ 0, n ≥ 0
+def plan_injections(lo, hi, *, per_kind, rng, magnitudes=DEFAULT_MAGNITUDES) -> InjectionPlan(positions, magnitudes)
+def clean_pass(bars, snap_at) -> (X, idx, snaps)   # ознаки чистого ряду + знімки екстрактора ДО барів snap_at
+def positive_vectors(bars, plan, snaps) -> {kind: ndarray}   # ін'єкції «по одній» на стані чистого ряду
+def evaluate_injections(bars, *, train=(lo, hi), holdout=(lo, hi), seed, per_kind, normal=None,
+                        magnitudes=..., architectures=...) -> EvalReport
+    # EvalReport(seed, per_kind, n_train_bars, n_holdout_bars, train_vectors, excluded_train_vectors, neg_vectors,
+    #            sigma_dlogp_train, archs={label: ArchResult(auc_all, per_kind{auc, recall_at_q99}, fpr_at_q99,
+    #            threshold, n_iter, converged)}, sigma_dlogp_holdout, feature_drift{name: {sd_ratio, tail_share}})
+def feature_drift(train_X, test_X) -> {name: {"sd_ratio", "tail_share"}}   # tail_share — частка поза q0.5…q99.5 train
+```
+Інваріанти: held-out строго після навчання (`ValueError` інакше); `normal[i] = False` вилучає бар з навчання;
+позиції ін'єкцій — лише в held-out; усе випадкове — з `numpy.random.default_rng(seed)`.
+
+**Виміряно на справжньому IS-вікні** (`uv run python scripts/train_anomaly_mlp.py`, робоча БД, BTCUSDT; навчання —
+дні 1–15, ті самі 21 600 барів, що й калібрування МФ, `dataset_hash 9156616d…`; held-out — дні 16–20, 7 200 барів;
+144 ін'єкції кожного з 4 типів; seed 20260918): ROC-AUC по всіх типах **0.9531 (8-3-8) проти 0.9729 (5-3-5)**,
+FPR при q₉₉ на чистих held-out барах 0.0375 / 0.0233; по 6 seed — 0.9551 ± 0.0021 проти 0.9718 ± 0.0021 (8-3-8
+програє в 6 з 6). Таблиця, типи й частоти ін'єкцій, дрейф ознак — `docs/figures/quality_mlp_rocauc.md`; висновки —
+`docs/deviations.d/platform.md` PLAT-05. Попередній замір на 3000-барній фікстурі (0.9873 / 0.9796) відтворюється
+`--from-fixture --rate 0.125`.
 
 ## 5. `quality/health.py`
 

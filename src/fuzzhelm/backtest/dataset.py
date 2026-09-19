@@ -12,8 +12,12 @@ sizing.convert.price_to_decimal(x, tick) точний: repr(float) — найк�
 Обсяг — через float_to_decimal_exact (repr), він tick-у не має.
 
 dataset_hash = backtest.manifest.dataset_hash над (t_ns, o, h, l, c, v) — тими самими колонками, що й
-CandleArrays.columns() зі сховища, тож хеш набору з БД і з масивів збігається; якщо є ряд фандингу, до хешу
-додаються funding_t_ns і funding_rate (формат ingest.funding.funding_columns): інша ставка — інший датасет.
+CandleArrays.columns() зі сховища, — плюс колонка `instrument_spec` (канонічний JSON специфікації інструмента:
+tick/step/minNotional/mmr/maint_amount/max_leverage/символ, Decimal → 1e−18; ENG-13 / RF-02): результат
+прогону залежить від специфікації, тож та сама крива свічок з іншою mmr — інший набір і інший ключ
+ux_run_identity. Якщо є ряд фандингу, до хешу додаються funding_t_ns і funding_rate (формат
+ingest.funding.funding_columns): інша ставка — інший датасет. Хеш лише свічок (data/dataset_window.json,
+backtest.runner.load_db_window) — dataset_hash(CandleArrays.columns()), він від цього не змінився.
 """
 
 from __future__ import annotations
@@ -32,7 +36,9 @@ import numpy.typing as npt
 
 from fuzzhelm.config import FIXTURES_DIR
 from fuzzhelm.core.clock import NS_PER_MIN, NS_PER_SEC
+from fuzzhelm.core.digest import canonical_json
 from fuzzhelm.core.dto import Candle, Instrument
+from fuzzhelm.core.money import quantize_internal
 from fuzzhelm.execution.paper_broker import DecBar
 from fuzzhelm.features.convert import Bar, to_float
 from fuzzhelm.features.window import LookaheadGuard
@@ -47,6 +53,7 @@ BARS_PER_YEAR: dict[str, int] = {tf: (365 * 86_400 * NS_PER_SEC) // ns for tf, n
 FLOAT_COLUMNS: tuple[str, ...] = ("o", "h", "l", "c", "v", "qv")
 INT_COLUMNS: tuple[str, ...] = ("t_ns", "n")
 HASH_COLUMNS: tuple[str, ...] = ("t_ns", "o", "h", "l", "c", "v")   # = storage CandleArrays.columns()
+INSTRUMENT_SPEC_COLUMN = "instrument_spec"
 
 DEFAULT_KLINES = FIXTURES_DIR / "rest" / "binance_klines.json.gz"
 DEFAULT_EXCHANGE_INFO = FIXTURES_DIR / "rest" / "exchange_info.json"
@@ -208,8 +215,10 @@ class Dataset:
         return t + self.tf_ns - NS_PER_MS
 
     def columns(self) -> dict[str, npt.NDArray[Any]]:
-        """Колонки для backtest.manifest.dataset_hash (свічки + фандинг, якщо є)."""
+        """Колонки для backtest.manifest.dataset_hash: свічки + специфікація інструмента (байти канонічного
+        JSON, instrument_spec_column) + фандинг, якщо є."""
         cols: dict[str, npt.NDArray[Any]] = {k: getattr(self, k) for k in HASH_COLUMNS}
+        cols[INSTRUMENT_SPEC_COLUMN] = instrument_spec_column(self.instrument)
         if self.funding_t_ns is not None and self.funding_rate is not None:
             cols["funding_t_ns"] = self.funding_t_ns
             cols["funding_rate"] = self.funding_rate
@@ -293,6 +302,31 @@ class Dataset:
             funding_t_ns=payload.get("funding_t_ns"), funding_rate=payload.get("funding_rate"),
             source=str(payload.get("source", "payload")),
         )
+
+
+def instrument_spec(instrument: Instrument) -> dict[str, Any]:
+    """Канонічна специфікація інструмента, від якої залежить результат прогону (частина паспорта, RF-02).
+
+    Числа — Decimal, квантовані до 1e−18 (масштаб NUMERIC(38,18)) і записані рядком: '0.1' і '0.10' (запис
+    exchangeInfo проти рядка БД) — та сама специфікація. Поля: біржа, символи, тип контракту, tick_size,
+    step_size, min_notional, mmr, maint_amount, max_leverage (рушій бере його як біржове плече L_set).
+    """
+    def num(x: Decimal) -> str:
+        return format(quantize_internal(x), "f")
+
+    return {
+        "venue": instrument.venue.value, "symbol_venue": instrument.symbol_venue,
+        "symbol_canon": instrument.symbol_canon, "base_asset": instrument.base_asset,
+        "quote_asset": instrument.quote_asset, "contract_type": instrument.contract_type.value,
+        "tick_size": num(instrument.tick_size), "step_size": num(instrument.step_size),
+        "min_notional": num(instrument.min_notional), "mmr": num(instrument.mmr),
+        "maint_amount": num(instrument.maint_amount), "max_leverage": instrument.max_leverage,
+    }
+
+
+def instrument_spec_column(instrument: Instrument) -> npt.NDArray[np.uint8]:
+    """Специфікація як колонка для dataset_hash: байти canonical_json(instrument_spec) (uint8)."""
+    return np.frombuffer(canonical_json(instrument_spec(instrument)), dtype=np.uint8).copy()
 
 
 def dec_bar_of(bar: Bar, instrument: Instrument) -> DecBar:

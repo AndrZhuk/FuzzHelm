@@ -49,6 +49,9 @@ uv run python -m fuzzhelm.backtest.runner --db BTCUSDT --report` (та сама 
   45 днях — 2 бари (BTC) / 3 (ETH) (`BacktestResult.trades` прогону з заголовка), тож позиція рідко переживає
   перехід; у HALTED (κ = 0) позиція закривається flatten-all (ENG-06), а вхід у черзі скасовується (ENG-20). У звіті
   формулювати оцінку саме так.
+- **Стан (riskfix, 2026-09-19):** поведінку лишено; точні припущення межі (κ = κ_mode на вході відкритої позиції,
+  E — капітал на вході, відкат нереалізованого прибутку не враховано) — у докстрінгах `risk/margin.py`
+  (`DrawdownSpeedBound`, `per_bar_loss_bound`) і `docs/deviations.d/riskfix.md` RF-04.
 
 ## ENG-05. Стан тригера Шмітта синхронізується з фактичною позицією
 - **Спека (§5.9):** тригер Шмітта на `u_final`; взаємодія зі стопом/TP/вето не описана.
@@ -116,6 +119,10 @@ uv run python -m fuzzhelm.backtest.runner --db BTCUSDT --report` (та сама 
 - **Зроблено:** хеші не змінено; ідентичність інструмента в паспорті — через `run.instrument_id`.
 - **Обмеження:** якщо біржа змінить специфікацію, повторний прогін дасть той самий ключ `ux_run_identity` з іншим
   результатом. Пропозиція (для власника storage/API): писати специфікацію інструмента в `run.config`.
+- **Стан (riskfix, 2026-09-19): закрито** — специфікація (tick, step, minNotional, mmr, maint_amount, max_leverage,
+  символи) входить у `dataset_hash` окремою канонічною колонкою `instrument_spec` (`Dataset.columns()`); звірка
+  паспорта в API не змінилась; хеш лише свічок (`data/dataset_window.json`) — той самий. Деталі — RF-02 у
+  `docs/deviations.d/riskfix.md`.
 
 ## ENG-14. ЗНАХІДКА: стан COOLDOWN поглинаючий для пласкої книги (виміряно на реальних даних)
 - **Спека (§5.12):** COOLDOWN — reduce-only; `COOLDOWN → WARNING` лише при `DD ≤ 0.05 ∧ dwell ≥ 30`.
@@ -139,6 +146,11 @@ uv run python -m fuzzhelm.backtest.runner --db BTCUSDT --report` (та сама 
   неявно припускає, що в COOLDOWN позиція існує і торгується з κ = 0.25. Звідси ще варіант (г): COOLDOWN = вхід
   дозволено з κ_mode = 0.25 (reduce-only лише для позицій, відкритих до переходу) — тоді просадка може змінюватися
   і стан не поглинаючий. Рушій і ризик-модуль не змінено: вибір (а)–(г) — рішення автора/власника `risk`.
+- **Стан (riskfix, 2026-09-19): розв'язано рішенням автора — варіант (г) типовий.** Перемикач
+  `state_machine.cooldown_policy: scaled_entries | reduce_only` (`config/risk_limits.yaml`, `runner --cooldown-policy`);
+  `reduce_only` відтворює описане тут біт-у-біт (BTC `equity_hash 8a82f814e93855ce…`), `scaled_entries` — вхід із
+  κ = 0.25, на 45 днях доходить до HALTED на 8.14 / 7.86 добі. RF-01 у `docs/deviations.d/riskfix.md`, числа —
+  `docs/figures/riskfix_cooldown_policy.md`.
 
 ## ENG-15. Кеш Decimal-барів ключувався лише хешем свічок (знайдено під час аудиту WIP-коду)
 - **Було:** `Dataset.dec_bars` кешувались у процесі за `dataset_hash`, який не містить інструмента: ті самі масиви

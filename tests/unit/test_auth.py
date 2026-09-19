@@ -6,8 +6,12 @@
 
 from __future__ import annotations
 
+import base64
+import json
+from typing import Any
+
+import jwt
 import pytest
-from jose import jwt
 from passlib.context import CryptContext
 
 from fuzzhelm.api.auth import (
@@ -30,8 +34,22 @@ from fuzzhelm.storage.repositories import UserRow
 from fuzzhelm.storage.repositories.user import hash_password
 
 SECRET = "unit-test-secret-" + "k" * 32
+OTHER_SECRET = "другий-секрет-" + "q" * 32  # ≥ 32 байти: PyJWT не попереджає про короткий ключ HMAC
 NS = 1_000_000_000
 T0 = 1_758_153_600 * NS
+
+# той самий ключ SECRET (49 байт) під HS384/HS512 — PyJWT попереджає про довжину; це і є суть підробки
+SAME_KEY_OTHER_HMAC = pytest.mark.filterwarnings("ignore::jwt.InsecureKeyLengthWarning")
+
+
+def unverified_claims(token: str) -> dict[str, Any]:
+    """Payload без перевірки підпису (лише для побудови підробок у тестах)."""
+    return dict(jwt.decode(token, options={"verify_signature": False}))
+
+
+def b64url(obj: dict[str, Any] | bytes) -> str:
+    raw = obj if isinstance(obj, bytes) else json.dumps(obj, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
 def test_issue_and_decode_roundtrip_claims() -> None:
@@ -42,27 +60,76 @@ def test_issue_and_decode_roundtrip_claims() -> None:
     assert tok.expires_in_s == 8 * 3600 and tok.expires_at_s == T0 // NS + 8 * 3600
     p = decode_token(tok.token, secret=SECRET, clock=clock)
     assert (p.uid, p.login, p.role, p.jti, p.exp_s) == (7, "olena", Role.OPERATOR, "abc", tok.expires_at_s)
-    claims = jwt.get_unverified_claims(tok.token)
+    claims = unverified_claims(tok.token)
     assert (
         set(claims) == {"sub", "uid", "role", "iat", "nbf", "exp", "iss", "jti"}
         and claims["iss"] == JWT_ISSUER
     )
 
 
+@SAME_KEY_OTHER_HMAC
 def test_decode_rejects_other_algorithm_other_secret_and_issuer() -> None:
     clock = FixedClock(T0)
-    good = jwt.get_unverified_claims(
+    good = unverified_claims(
         issue_token(uid=1, login="a", role="admin", secret=SECRET, ttl_hours=1, clock=clock).token
     )
     for token in (
         jwt.encode(good, SECRET, algorithm="HS512"),  # інший алгоритм тим самим ключем
-        jwt.encode(good, "другий-секрет", algorithm="HS256"),  # чужий ключ
+        jwt.encode(good, OTHER_SECRET, algorithm="HS256"),  # чужий ключ
         jwt.encode({**good, "iss": "evil"}, SECRET, algorithm="HS256"),
         jwt.encode({k: v for k, v in good.items() if k != "uid"}, SECRET, algorithm="HS256"),
         jwt.encode({**good, "role": "root"}, SECRET, algorithm="HS256"),  # роль поза Role
     ):
         with pytest.raises(AuthError):
             decode_token(token, secret=SECRET, clock=clock)
+
+
+@SAME_KEY_OTHER_HMAC
+def test_token_with_other_algorithm_or_alg_none_is_rejected() -> None:
+    """PyJWT з algorithms=["HS256"]: alg=none (з підписом і без, у будь-якому регістрі), інші HMAC
+    (HS384/HS512 тим самим ключем), асиметричні заголовки (RS256/ES256 — атака підміни алгоритму) і
+    заголовок без alg відкидаються до перевірки підпису; ідентичні claims під HS256 — приймаються."""
+    clock = FixedClock(T0)
+    good = issue_token(uid=1, login="a", role="admin", secret=SECRET, ttl_hours=1, clock=clock).token
+    claims = unverified_claims(good)
+    assert jwt.get_unverified_header(good)["alg"] == "HS256"
+    assert decode_token(good, secret=SECRET, clock=clock).role is Role.ADMIN
+    body = b64url(claims)
+    sig = good.rsplit(".", 1)[1]
+    forged = [
+        jwt.encode(claims, SECRET, algorithm="HS384"),
+        jwt.encode(claims, SECRET, algorithm="HS512"),
+        jwt.encode(claims, None, algorithm="none"),  # PyJWT уміє видати unsecured JWT — прийняти не має
+        f"{b64url({'alg': 'none', 'typ': 'JWT'})}.{body}.",
+        f"{b64url({'alg': 'None', 'typ': 'JWT'})}.{body}.",
+        f"{b64url({'alg': 'NONE', 'typ': 'JWT'})}.{body}.{sig}",
+        f"{b64url({'alg': 'RS256', 'typ': 'JWT'})}.{body}.{b64url(b'x' * 256)}",
+        f"{b64url({'alg': 'ES256', 'typ': 'JWT'})}.{body}.{b64url(b'x' * 64)}",
+        f"{b64url({'typ': 'JWT'})}.{body}.{sig}",
+    ]
+    for token in forged:
+        with pytest.raises(AuthError, match="invalid token"):
+            decode_token(token, secret=SECRET, clock=clock)
+
+
+def test_claims_are_required_and_typed() -> None:
+    """Без nbf/iat/jti/sub/exp/iss або з нецілим exp/uid (bool, дріб, рядок) токен відкидається, навіть
+    із правильним підписом."""
+    clock = FixedClock(T0)
+    good = unverified_claims(
+        issue_token(uid=1, login="a", role="admin", secret=SECRET, ttl_hours=1, clock=clock).token
+    )
+    variants: list[dict[str, Any]] = [{k: v for k, v in good.items() if k != name}
+                                      for name in ("nbf", "iat", "jti", "sub", "exp", "iss")]
+    variants += [{**good, "uid": True}, {**good, "uid": "1"}, {**good, "exp": good["exp"] + 0.5},
+                 {**good, "exp": str(good["exp"])}]
+    for bad in variants:
+        with pytest.raises(AuthError):
+            decode_token(jwt.encode(bad, SECRET, algorithm="HS256"), secret=SECRET, clock=clock)
+    # iat «з майбутнього» за межею допуску — ще не дійсний, навіть якщо nbf у минулому
+    future_iat = {**good, "iat": good["iat"] + CLOCK_SKEW_S + 1}
+    with pytest.raises(AuthError, match="not yet valid"):
+        decode_token(jwt.encode(future_iat, SECRET, algorithm="HS256"), secret=SECRET, clock=clock)
 
 
 def test_expiry_and_not_before_use_injected_clock() -> None:

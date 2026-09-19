@@ -1,0 +1,20 @@
+# Контекст збірки образу api/worker (Dockerfile копіює лише pyproject/uv.lock, src, config, alembic, fixtures).
+# Секрети (.env) і локальне оточення (.venv ~430 МБ) у контекст не передаються взагалі.
+.env
+.env.*
+!.env.example
+.venv/
+.git/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+docs/
+tests/
+data/
+artifacts/
+.DS_Store

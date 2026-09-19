@@ -242,8 +242,11 @@ def test_killswitch_tripped_between_bars_cancels_queued_increase_but_keeps_open_
 
 
 def test_halt_release_requires_admin_then_cooldown_is_reduce_only() -> None:
+    # буквальна політика §5.12 (cooldown_policy=reduce_only); типову scaled_entries перевіряє
+    # tests/unit/test_riskfix_cooldown.py (вхід у COOLDOWN з κ = 0.25)
     ds = fixture()
-    loop = scripted_loop(lambda t: 0.3 if t >= 40 else 0.0, record_traces="none")
+    loop = scripted_loop(lambda t: 0.3 if t >= 40 else 0.0, record_traces="none",
+                         cooldown_policy="reduce_only")
     run_loop(loop, ds, stop=60)
     loop.fsm.killswitch.trip("test", ds.close_time_ns(59))
     feed = list(ds.slice(0, 200).feed())

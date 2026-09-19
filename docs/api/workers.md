@@ -15,12 +15,12 @@
 ## 1. `workers.persist` — адаптер «рушій → сховище»
 
 ```python
-VAR_WINDOW = 500; VAR_ALPHA = 0.05; VAR_MIN_OBS = 20; GIT_DIRTY_METRIC = "git_dirty"
+VAR_WINDOW = 500; VAR_ALPHA = 0.05; VAR_MIN_OBS = VAR_WINDOW (= 500, RF-03); GIT_DIRTY_METRIC = "git_dirty"
 
 # VaR₉₅/CVaR₉₅ для equity_point (звітна метрика §5.13, у ГРОШАХ: E_t · оцінка risk.var на останніх min(t, W) дохідностях)
-var_cvar_fractions(returns, *, window=500, alpha=0.05, min_obs=20, chunk=4096) -> (var[N+1], cvar[N+1])  # NaN до min_obs
+var_cvar_fractions(returns, *, window=500, alpha=0.05, min_obs=500, chunk=4096) -> (var[N+1], cvar[N+1])  # NaN до min_obs
 var_cvar_money(equity: Sequence[Decimal], ...) -> (list[Decimal | None], list[Decimal | None])
-RollingVar(window=500, alpha=0.05, min_obs=20).update(E_t) -> (var | None, cvar | None)   # live, ті самі числа
+RollingVar(window=500, alpha=0.05, min_obs=500).update(E_t) -> (var | None, cvar | None)   # live, ті самі числа
 
 # паспорт прогону
 Passport(run_id, kind, config, config_hash, dataset_hash, seed, engine, git_sha=None, git_dirty=None,

@@ -13,18 +13,19 @@
     (live/replay-воркер: LivePersister пише кожен бар у транзакції воркера разом із NOTIFY).
 Автор: Андрій Жук, 2026.
 
-VaR/CVaR у equity_point (§5.13 — звітна метрика, ордери не блокує). Колонки NUMERIC(38,18) стоять поруч
-із капіталом, тож вони в ГРОШАХ (USDT): VaR_t = E_t · VaR̂₉₅(r), де VaR̂ — історична оцінка
-risk.var.historical_var_cvar на вікні останніх min(t, W) бар-дохідностей r_τ = ΔE_τ/E_{τ−1}, τ ≤ t
-(вікно закінчується на t включно: це «ризик кривої станом на t», а не прогноз для тесту Купця — той робить
-risk.var.rolling_var_breaches строго на минулому), W = 500. Поки дохідностей менше за VAR_MIN_OBS = 20
-(хвіст m = ⌊0.05·n⌋ < 1 спостереження), колонки NULL.
+VaR/CVaR у equity_point (§5.13 — звітна метрика, ордери не блокує; RF-03). Колонки NUMERIC(38,18) стоять
+поруч із капіталом, тож вони в ГРОШАХ (USDT): VaR_t = E_t · VaR̂₉₅(r), де VaR̂ — історична оцінка
+risk.var (нижній емпіричний квантиль r_(m), m = ⌊0.05·W⌋ = 25) на вікні останніх W = 500 бар-дохідностей
+r_τ = ΔE_τ/E_{τ−1}, τ ≤ t (вікно закінчується на t включно: це «ризик кривої станом на t», а не прогноз для
+тесту Купця — той робить risk.var.rolling_var_breaches строго на минулому). Поки дохідностей менше за
+W = 500 (VAR_MIN_OBS = VAR_WINDOW: лише повні вікна §5.13), колонки NULL. Пакетний шлях бере числа, які вже
+порахував рушій (BacktestResult.equity_points, risk.var.var_cvar_money), покроковий — risk.var.RollingVarCvar
+(те саме ядро — ті самі числа). Значення не обрізаються до 0 (R-04: VaR < 0 на вікні майже з самих виграшів).
 """
 
 from __future__ import annotations
 
-import math
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -41,8 +42,8 @@ from fuzzhelm.core.enums import OrderStatus, RunKind, RunStatus
 from fuzzhelm.core.journal import JournalEntry
 from fuzzhelm.decision.narrative_uk import narrate
 from fuzzhelm.risk.journal import AuditRecord, RiskEventRecord
-from fuzzhelm.risk.var import historical_var_cvar, returns_from_equity, tail_count
-from fuzzhelm.sizing.convert import float_to_decimal_exact
+from fuzzhelm.risk.var import RollingVarCvar, rolling_var_cvar
+from fuzzhelm.risk.var import var_cvar_money as _var_cvar_money
 from fuzzhelm.storage.repositories import (
     AuditRepo,
     CandleRepo,
@@ -62,7 +63,7 @@ from fuzzhelm.storage.repositories.position import position_values
 
 VAR_WINDOW = 500
 VAR_ALPHA = 0.05
-VAR_MIN_OBS = 20
+VAR_MIN_OBS = VAR_WINDOW                # §5.13: лише повні вікна W = 500 (до того — NULL)
 GIT_DIRTY_METRIC = "git_dirty"          # 1.0 — прогін зроблено з незакоміченого дерева (sha — лише HEAD)
 
 FloatArray = npt.NDArray[np.float64]
@@ -74,73 +75,23 @@ FloatArray = npt.NDArray[np.float64]
 def var_cvar_fractions(returns: Sequence[float] | FloatArray, *, window: int = VAR_WINDOW,
                        alpha: float = VAR_ALPHA, min_obs: int = VAR_MIN_OBS,
                        chunk: int = 4096) -> tuple[FloatArray, FloatArray]:
-    """VaR/CVaR (частки капіталу) для кожної точки кривої: N = len(returns) + 1 точок, NaN до min_obs.
-
-    Точка t бачить дохідності r[max(0, t−W) : t] (тобто r_1..r_t кривої). Та сама оцінка, що й
-    risk.var.historical_var_cvar (нижній емпіричний квантиль r_(m), m = max(1, ⌊α·n⌋)), для повних вікон —
-    векторизовано блоками (без матриці N×W у пам'яті).
-    """
-    if window <= 0 or min_obs <= 0:
-        raise ValueError("window and min_obs must be > 0")
-    r = np.asarray(returns, dtype=np.float64)
-    n_pts = r.size + 1
-    var = np.full(n_pts, np.nan)
-    cvar = np.full(n_pts, np.nan)
-    # розгортання вікна (min_obs ≤ t < W): поштучно тією самою функцією модуля risk
-    for t in range(min_obs, min(window, n_pts)):
-        res = historical_var_cvar(r[:t], alpha, window=None)
-        var[t], cvar[t] = res.var, res.cvar
-    if n_pts > window:
-        m = tail_count(window, alpha)
-        wins = np.lib.stride_tricks.sliding_window_view(r, window)      # рядок k: r[k : k+W] → точка t = k+W
-        for lo in range(0, wins.shape[0], chunk):
-            block = np.partition(wins[lo:lo + chunk], m - 1, axis=1)[:, :m]
-            r_m = block.max(axis=1)
-            excess = (r_m[:, None] - block).mean(axis=1)
-            t0 = lo + window
-            var[t0:t0 + block.shape[0]] = -r_m
-            cvar[t0:t0 + block.shape[0]] = -r_m + excess
-    return var, cvar
-
-
-def _money(frac: float, equity: Decimal) -> Decimal | None:
-    if not math.isfinite(frac):
-        return None
-    return float_to_decimal_exact(frac) * equity
+    """VaR/CVaR (частки капіталу) для кожної точки кривої: N = len(returns) + 1 точок, NaN до min_obs
+    дохідностей. Обгортка risk.var.rolling_var_cvar (векторизовано блоками, без матриці N×W у пам'яті)."""
+    return rolling_var_cvar(returns, window, alpha, min_obs=min_obs, chunk=chunk)
 
 
 def var_cvar_money(equity: Sequence[Decimal], *, window: int = VAR_WINDOW, alpha: float = VAR_ALPHA,
                    min_obs: int = VAR_MIN_OBS) -> tuple[list[Decimal | None], list[Decimal | None]]:
-    """VaR₉₅/CVaR₉₅ у грошах (E_t · частка) для кожної точки кривої капіталу."""
-    if not equity:
-        return [], []
-    var, cvar = var_cvar_fractions(returns_from_equity(equity), window=window, alpha=alpha, min_obs=min_obs)
-    return ([_money(v.item(), e) for v, e in zip(var, equity, strict=True)],
-            [_money(c.item(), e) for c, e in zip(cvar, equity, strict=True)])
+    """VaR₉₅/CVaR₉₅ у грошах (E_t · частка) для кожної точки кривої капіталу (risk.var.var_cvar_money)."""
+    return _var_cvar_money(equity, window, alpha, min_obs=min_obs)
 
 
-class RollingVar:
+class RollingVar(RollingVarCvar):
     """Покрокова версія var_cvar_money для live-воркера (ті самі числа на тій самій кривій)."""
 
     def __init__(self, window: int = VAR_WINDOW, alpha: float = VAR_ALPHA,
                  min_obs: int = VAR_MIN_OBS) -> None:
-        if window <= 0 or min_obs <= 0:
-            raise ValueError("window and min_obs must be > 0")
-        self.window, self.alpha, self.min_obs = window, alpha, min_obs
-        self._r: deque[float] = deque(maxlen=window)
-        self._prev: Decimal | None = None
-
-    def update(self, equity: Decimal) -> tuple[Decimal | None, Decimal | None]:
-        prev, self._prev = self._prev, equity
-        if prev is not None:
-            if prev <= 0:
-                raise ValueError("non-positive equity")
-            self._r.append(returns_from_equity([prev, equity])[0].item())
-        if len(self._r) < self.min_obs:
-            return None, None
-        res = historical_var_cvar(np.fromiter(self._r, dtype=np.float64, count=len(self._r)), self.alpha,
-                                  window=None)
-        return _money(res.var, equity), _money(res.cvar, equity)
+        super().__init__(window, alpha, min_obs=min_obs)
 
 
 # ====================================================================== паспорт прогону
@@ -269,11 +220,24 @@ def plan_backtest(result: Any, *, run_id: UUID, instrument_id: int, var_window: 
     plan.fills = len(result.fills)
     plan.positions = list(result.positions)
     points = list(result.equity_points)
-    var, cvar = var_cvar_money([p.equity for p in points], window=var_window, min_obs=var_min_obs)
-    plan.equity = [equity_point(p, v, c) for p, v, c in zip(points, var, cvar, strict=True)]
+    if (var_window, var_min_obs) == (VAR_WINDOW, VAR_MIN_OBS) and _engine_filled_var(points, var_min_obs):
+        # рушій уже порахував ту саму оцінку (run_backtest → risk.var.var_cvar_money з тими самими W, α)
+        plan.equity = [equity_point(p, p.var95, p.cvar95) for p in points]
+    else:
+        var, cvar = var_cvar_money([p.equity for p in points], window=var_window, min_obs=var_min_obs)
+        plan.equity = [equity_point(p, v, c) for p, v, c in zip(points, var, cvar, strict=True)]
     plan.risk_events = list(result.risk_events)
     plan.metrics = {**dict(result.metrics), **dict(result.extras)}
     return plan
+
+
+def _engine_filled_var(points: Sequence[Any], min_obs: int) -> bool:
+    """Чи несуть точки VaR/CVaR рушія: крива коротша за min_obs + 1 точок (усі NULL — і так, і так) або
+    точка min_obs має значення (рушій заповнює всі точки від min_obs)."""
+    if len(points) <= min_obs:
+        return True
+    p = points[min_obs]
+    return getattr(p, "var95", None) is not None and getattr(p, "cvar95", None) is not None
 
 
 @dataclass(frozen=True, slots=True)

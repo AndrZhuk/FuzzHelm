@@ -550,6 +550,32 @@ class MemRisk:
         ]
         return sorted(rows, key=lambda r: (r.ts_ns or 0, r.id), reverse=True)[:limit]
 
+    async def page_for_run(
+        self,
+        run_id: UUID,
+        *,
+        since_ns: int | None = None,
+        until_ns: int | None = None,
+        rule: str | None = None,
+        verdict: VerdictKind | str | None = None,
+        before: tuple[int, int] | None = None,
+        limit: int = 500,
+    ) -> list[RiskEventRow]:
+        """Семантика RiskEventRepo.page_for_run: (ts, id) DESC, ts ∈ [since, until), (ts, id) < before."""
+        want = None if verdict is None else getattr(verdict, "value", verdict)
+        rows = [
+            r
+            for r in self.st.risk_events
+            if r.run_id == run_id
+            and r.ts_ns is not None
+            and (since_ns is None or r.ts_ns >= since_ns)
+            and (until_ns is None or r.ts_ns < until_ns)
+            and (rule is None or r.rule == rule)
+            and (want is None or r.verdict == want)
+            and (before is None or (r.ts_ns, r.id) < before)
+        ]
+        return sorted(rows, key=lambda r: (r.ts_ns or 0, r.id), reverse=True)[:limit]
+
     async def vetoes(self, run_id: UUID, *, limit: int = 500) -> list[RiskEventRow]:
         return [r for r in await self.list_for_run(run_id, limit=10**9) if r.verdict == "VETO"][:limit]
 

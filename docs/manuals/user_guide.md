@@ -62,8 +62,10 @@ observed −2.058 %, limit −2.00 %):
 docker exec fuzzhelm-db-1 psql -U fuzzhelm -d fuzzhelm -c "select ts, rule, verdict, observed, limit_value from risk_event
   where run_id = '89619416-720b-4880-b4e4-26d2c74bca68' and rule = 'max_daily_loss' and verdict = 'VETO' order by ts limit 3"
 ```
-(`GET /risk/events` віддає записи від найновіших і не більше 2 000 — до цих ранніх записів довгого прогону він не
-догортає; див. відкриті питання у `docs/deviations.d/workers.md`.)
+Через API ці ранні записи довгого прогону досяжні напряму (хвиля 3, PLAT-03): `GET /risk/events?run_id=<id>&only=veto&
+rule=max_daily_loss&until_ns=1786060800000000000` (до 2026-08-07) або гортанням усього журналу курсором `next_cursor`
+(сторінки ≤ 2 000). Перевірено на робочій БД: прогін `89619416…` має 26 979 записів `risk_event` — 14 сторінок, кожен
+запис рівно раз; вибірка з `until_ns` дала ті самі 82 VETO `max_daily_loss`, перший — observed −2.058 %.
 Аудит зняття: запис запиту API (`risk.killswitch.release`, автор — admin) і два записи воркера (`killswitch.release`,
 `risk.release` — стан до/після) з тим самим `user_id`, настінним часом застосування і `after.request_audit_id`.
 
@@ -84,21 +86,17 @@ started_at desc limit 3"` і `uv run fuzzhelm verify-journal --run-id <id>` (л�
 
 ## 5. Вхід в API і пояснення рішення
 
-Перший адміністратор створюється людиною **[ЛЮДИНА]** (агент креденшлів не вводить), пароль вводиться з клавіатури:
+Перший адміністратор створюється людиною **[ЛЮДИНА]** (агент креденшлів не вводить і користувачів у робочій БД не
+створює). Пароль вводиться з клавіатури двічі, без відлуння, і ніколи не передається в аргументах командного рядка:
 ```bash
-uv run python - <<'PY'
-import asyncio, getpass
-from fuzzhelm.core.enums import Role
-from fuzzhelm.storage.repositories import UserRepo
-from fuzzhelm.storage.session import make_engine, session_factory, session_scope
-async def main():
-    eng = make_engine()
-    async with session_scope(session_factory(eng)) as s:
-        await UserRepo(s).create(input("login: "), getpass.getpass("password: "), Role.ADMIN)
-    await eng.dispose()
-asyncio.run(main())
-PY
+uv run fuzzhelm user add --login <логін> --role admin           # ≥ 8 символів, ≤ 72 байти, ≠ логіну
+uv run fuzzhelm user list                                        # id, логін, роль, час створення (без хешів)
+uv run fuzzhelm user set-role --login <логін> --role analyst     # останнього admin понизити не можна
 ```
+У скриптах пароль передається через stdin: `printf '%s\n' "$PW" | uv run fuzzhelm user add --login <логін> --role
+analyst --password-stdin`. Кожна команда пише `audit_log` (`user.create`, `user.set_role`, `user.list`, актор `cli`);
+пароль і його bcrypt-хеш не друкуються й в аудит не потрапляють (`docs/api/cli.md`). У контейнерах compose:
+`docker compose run --rm -it api fuzzhelm user add --login <логін> --role admin`.
 Ролі: `operator` (зміна стратегій, бектести), `analyst` (читання, бектести), `auditor` (читання + `/audit`), `admin`
 (ліміти ризику, зняття kill-switch). Матриця доступу — `docs/api/api.md` §1.
 

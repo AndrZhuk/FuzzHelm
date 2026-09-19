@@ -5,8 +5,9 @@
 Автор: Андрій Жук, 2026.
 
 Порядок оцінювання:
-  1. кожне з правил (6 лімітів §5.11) + вбудований гейт режиму (RiskModeGate: COOLDOWN — reduce-only,
-     HALTED або спрацьований kill-switch — flatten-all) перевіряє контекст;
+  1. кожне з правил (6 лімітів §5.11) + вбудований гейт режиму (RiskModeGate: у COOLDOWN наявну позицію не
+     збільшувати, нові входи — за політикою cooldown_policy; HALTED або спрацьований kill-switch — жодного
+     приросту і flatten-all) перевіряє контекст;
   2. КОЖЕН RuleVerdict пишеться в RiskJournal (rule, verdict, factor, observed, limit);
   3. V = compose(вердикти) — порядок правил не впливає (комутативний моноїд, verdict.py);
   4. дозволений приріст = floor_to_step(exposure(V, increase)); цільова позиція = знак·(base + приріст).
@@ -23,8 +24,8 @@ from typing import Any
 
 from fuzzhelm.core.digest import to_canonical
 from fuzzhelm.core.enums import RiskState
-from fuzzhelm.core.money import D0, D1, dec, floor_qty
-from fuzzhelm.risk.config import RiskConfig, load_risk_config
+from fuzzhelm.core.money import D0, dec, floor_qty
+from fuzzhelm.risk.config import CooldownPolicy, RiskConfig, load_risk_config
 from fuzzhelm.risk.context import RiskContext
 from fuzzhelm.risk.journal import RiskJournal
 from fuzzhelm.risk.killswitch import KillSwitch
@@ -37,32 +38,49 @@ from fuzzhelm.risk.rules.stale_data import StaleDataGuard
 from fuzzhelm.risk.state import SEVERITY
 from fuzzhelm.risk.verdict import ALLOW, VETO, RiskRule, RuleVerdict, Verdict, compose, exposure
 
+_LEVEL_WARNING = dec(SEVERITY[RiskState.WARNING])
+_LEVEL_COOLDOWN = dec(SEVERITY[RiskState.COOLDOWN])
+
 
 class RiskModeGate:
-    """Гейт режиму автомата: COOLDOWN — reduce-only, HALTED / kill-switch — жодного приросту + flatten-all.
+    """Гейт режиму автомата (ALLOW або VETO лише приросту; зменшення/закриття проходить завжди).
 
-    observed = рівень тяжкості стану (NORMAL 0, WARNING 1, COOLDOWN 2, HALTED 3; kill-switch → 3),
-    limit = 1 (найвищий рівень, у якому приріст експозиції ще дозволений).
+    observed = рівень тяжкості стану (NORMAL 0, WARNING 1, COOLDOWN 2, HALTED 3; kill-switch → 3);
+    limit    = найвищий рівень, у якому ЦЕЙ вид приросту ще дозволений:
+        * збільшення наявної позиції (base_qty > 0) — 1 (WARNING) за будь-якої політики: позицію, відкриту
+          до COOLDOWN, у COOLDOWN не збільшують;
+        * новий вхід (base_qty = 0: з пласкої книги або новий бік розвороту) — 2 (COOLDOWN) за політики
+          scaled_entries (розмір уже помножено на κ_mode(COOLDOWN) у сайзері), 1 — за reduce_only;
+    VETO ⇔ приріст > 0 і observed > limit. HALTED / kill-switch (3) відхиляють будь-який приріст.
+    Монотонність: гейт повертає лише ALLOW/VETO, а множина VETO за reduce_only містить множину VETO за
+    scaled_entries — політика змінює лише те, ЯКІ прирости відхиляються, і ніколи не збільшує експозицію.
     """
 
     name = "risk_mode"
-    limit = D1
 
-    def __init__(self, killswitch: KillSwitch | None = None) -> None:
+    def __init__(self, killswitch: KillSwitch | None = None,
+                 cooldown_policy: CooldownPolicy | str = CooldownPolicy.SCALED_ENTRIES) -> None:
         self.killswitch = killswitch
+        self.cooldown_policy = CooldownPolicy(cooldown_policy)
 
     def check(self, ctx: RiskContext) -> RuleVerdict:
         tripped = self.killswitch is not None and self.killswitch.is_tripped
         state = RiskState.HALTED if tripped else ctx.risk_state
         level = dec(SEVERITY[state])
-        blocked = level > self.limit
+        new_entry = ctx.increase_qty > 0 and ctx.base_qty == 0
+        scaled = self.cooldown_policy is CooldownPolicy.SCALED_ENTRIES
+        limit = _LEVEL_COOLDOWN if scaled and new_entry else _LEVEL_WARNING
         payload: dict[str, object] = {
             "state": ctx.risk_state.value, "kill_switch": tripped,
-            "reduce_only": blocked, "flatten_all": state is RiskState.HALTED,
+            "cooldown_policy": self.cooldown_policy.value, "new_entry": new_entry,
+            # наявну позицію збільшувати не можна (COOLDOWN за будь-якої політики, HALTED)
+            "reduce_only": level > _LEVEL_WARNING,
+            "entries_allowed": level <= (_LEVEL_COOLDOWN if scaled else _LEVEL_WARNING),
+            "flatten_all": state is RiskState.HALTED,
             "increase_qty": ctx.increase_qty,
         }
-        verdict = VETO if blocked and ctx.increase_qty > 0 else ALLOW
-        return RuleVerdict(self.name, verdict, level, self.limit, payload)
+        verdict = VETO if ctx.increase_qty > 0 and level > limit else ALLOW
+        return RuleVerdict(self.name, verdict, level, limit, payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,14 +116,19 @@ class GuardResult:
 
 
 class RiskGuard:
+    """Ланцюг правил. `cooldown_policy` — лише для вбудованого гейта режиму (RiskModeGate); з конфігурації —
+    `state_machine.cooldown_policy` (from_config), типово scaled_entries, як у config/risk_limits.yaml."""
+
     def __init__(self, rules: Sequence[RiskRule], journal: RiskJournal | None = None, *,
-                 killswitch: KillSwitch | None = None, mode_gate: bool = True) -> None:
+                 killswitch: KillSwitch | None = None, mode_gate: bool = True,
+                 cooldown_policy: CooldownPolicy | str = CooldownPolicy.SCALED_ENTRIES) -> None:
         names = [r.name for r in rules]
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate rule names in the chain: {names}")
         chain: list[RiskRule] = list(rules)
+        self.cooldown_policy = CooldownPolicy(cooldown_policy)
         if mode_gate:
-            chain.append(RiskModeGate(killswitch))
+            chain.append(RiskModeGate(killswitch, self.cooldown_policy))
         self.rules: tuple[RiskRule, ...] = tuple(chain)
         self.journal = journal if journal is not None else RiskJournal()
         self.killswitch = killswitch
@@ -113,7 +136,9 @@ class RiskGuard:
     @classmethod
     def from_config(cls, cfg: RiskConfig | None = None, journal: RiskJournal | None = None, *,
                     killswitch: KillSwitch | None = None) -> RiskGuard:
-        return cls(default_rules(cfg or load_risk_config()), journal, killswitch=killswitch)
+        cfg = cfg or load_risk_config()
+        return cls(default_rules(cfg), journal, killswitch=killswitch,
+                   cooldown_policy=cfg.state_machine.cooldown_policy)
 
     def evaluate(self, ctx: RiskContext) -> GuardResult:
         records: list[RuleVerdict] = []

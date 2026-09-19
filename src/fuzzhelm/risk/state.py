@@ -7,10 +7,18 @@
     DD_t = 1 − E_t / max_{τ≤t} E_τ
     NORMAL   → WARNING:   DD ≥ 0.04 ∨ σ_ann/σ_base > 1.6
     WARNING  → NORMAL:    DD ≤ 0.025 ∧ dwell ≥ 15 барів
-    WARNING  → COOLDOWN:  DD ≥ 0.08 ∨ PnL_day ≤ −0.02·E_open        (reduce-only)
+    WARNING  → COOLDOWN:  DD ≥ 0.08 ∨ PnL_day ≤ −0.02·E_open        (див. cooldown_policy нижче)
     COOLDOWN → WARNING:   DD ≤ 0.05 ∧ dwell ≥ 30 барів
     *        → HALTED:    DD ≥ 0.12 ∨ PnL_day ≤ −0.03·E_open        (засувний)
     κ_mode = {NORMAL: 1.0, WARNING: 0.5, COOLDOWN: 0.25, HALTED: 0.0}
+
+Що дозволено в COOLDOWN — `state_machine.cooldown_policy` (risk.config.CooldownPolicy, ENG-14 / RF-01):
+  * scaled_entries (типово, рішення автора): нові входи з κ_mode = 0.25 (множить сайзер), наявну позицію
+    (зокрема відкриту до COOLDOWN) не збільшувати. Капітал може змінюватися, тож DD може впасти до cool_exit —
+    стан не поглинаючий;
+  * reduce_only (буквально §5.12): жодного приросту. Пласка книга не змінює капіталу, тож COOLDOWN, увійдений
+    при DD > cool_exit, поглинаючий (ENG-14) — лишено для відтворення в звіті.
+Сам автомат (таблиця, пороги, витримка) від політики не залежить; її застосовує гейт risk_mode (guard.py).
 
 Шість вхідних подій. Кожне спостереження (бар) класифікується рівно в одну подію відносно поточного
 стану — пріоритет згори донизу:
@@ -27,9 +35,10 @@ dwell — кількість барів, прожитих у поточному 
 risk_event.dwell_bars). Перехід на вищий рівень тяжкості (напр. NORMAL → COOLDOWN на гепі) відбувається
 одразу, повернення — лише на один рівень і лише після витримки.
 
-Після ADMIN_RELEASE автомат переходить у COOLDOWN (reduce-only, κ = 0.25), а трекер перебазовує пік і
-E_open на поточний капітал — інакше засувка спрацювала б знову на наступному ж барі (пласка книга не
-може відіграти історичний пік). Далі — звичайний шлях COOLDOWN →(30 барів)→ WARNING →(15)→ NORMAL.
+Після ADMIN_RELEASE автомат переходить у COOLDOWN (κ = 0.25; нові входи — за cooldown_policy), а трекер
+перебазовує пік і E_open на поточний капітал — інакше засувка спрацювала б знову на наступному ж барі
+(пласка книга не може відіграти історичний пік). Далі — звичайний шлях COOLDOWN →(30 барів)→ WARNING →(15)→
+NORMAL.
 """
 
 from __future__ import annotations
@@ -47,7 +56,7 @@ from fuzzhelm.core.errors import PermissionDeniedError
 from fuzzhelm.core.money import D0
 from fuzzhelm.core.ports import Clock
 from fuzzhelm.features.convert import to_float
-from fuzzhelm.risk.config import StateMachineCfg
+from fuzzhelm.risk.config import CooldownPolicy, StateMachineCfg
 from fuzzhelm.risk.context import EquitySnapshot, EquityTracker
 from fuzzhelm.risk.journal import AuditRecord, AuditSink
 from fuzzhelm.risk.killswitch import KillSwitch
@@ -167,7 +176,21 @@ class RiskStateMachine:
 
     @property
     def reduce_only(self) -> bool:
+        """Наявну позицію збільшувати заборонено (COOLDOWN за будь-якої політики, HALTED)."""
         return self._state in (RiskState.COOLDOWN, RiskState.HALTED)
+
+    @property
+    def cooldown_policy(self) -> CooldownPolicy:
+        return self.cfg.cooldown_policy
+
+    @property
+    def entries_allowed(self) -> bool:
+        """Чи дозволено відкрити НОВУ позицію в поточному стані (розмір — × κ_mode у сайзері)."""
+        if self.killswitch.is_tripped or self._state is RiskState.HALTED:
+            return False
+        if self._state is RiskState.COOLDOWN:
+            return self.cfg.cooldown_policy is CooldownPolicy.SCALED_ENTRIES
+        return True
 
     @property
     def flatten_all(self) -> bool:

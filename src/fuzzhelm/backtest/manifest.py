@@ -18,6 +18,7 @@ journal_head_hash, equity_hash) + унікальна ідентичність п
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
@@ -99,6 +100,10 @@ def read_git_sha(repo: Path = ROOT) -> tuple[str | None, bool | None]:
         status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True,
                                 text=True, timeout=10, check=True).stdout
     except (OSError, subprocess.SubprocessError):
+        # у Docker-образі немає .git: SHA передається під час збирання (ARG GIT_SHA → FUZZHELM_GIT_SHA)
+        env_sha = os.environ.get("FUZZHELM_GIT_SHA", "").strip().lower()
+        if len(env_sha) == 40 and set(env_sha) <= _HEX40:
+            return env_sha, None
         return None, None
     if len(sha) != 40 or not set(sha) <= _HEX40:
         return None, None

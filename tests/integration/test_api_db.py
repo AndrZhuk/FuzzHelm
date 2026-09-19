@@ -242,7 +242,60 @@ async def test_risk_event_exact_factor_survives_numeric_6_4(api: Api) -> None:
                                                                        "factor_exact": "0.99996"}
     analyst = await api.login(Role.ANALYST)
     events = (await api.client.get("/risk/events", params={"run_id": str(run_id)}, headers=analyst)).json()
-    assert events[0]["factor"] == "0.99996"
+    assert events["items"][0]["factor"] == "0.99996" and events["next_cursor"] is None
+
+
+async def test_risk_events_keyset_pages_on_real_db(api: Api) -> None:
+    """Keyset (ts, id) на PostgreSQL: рівні мітки часу (мкс) упорядковує id, кожен рядок досяжний рівно раз,
+    межі since_ns/until_ns і курсор у наносекундах, не кратних мікросекунді, округлюються вгору, а не вниз."""
+    us = 1_000
+    async with session_scope(api.owner) as s:
+        iid = await add_instrument(s)
+        run_id = IDS.next_uuid()
+        await RunRepo(s).create(run_id, kind=RunKind.PAPER, config={}, config_hash=bytes(32),
+                                dataset_hash=b"\x03" * 32, seed=3, engine=EngineKind.MAMDANI,
+                                git_sha="d" * 40)
+        await RiskEventRepo(s).insert_many([
+            RiskEventRecord(ts_ns=T0_NS + (i // 4) * us, rule="stale_data" if i % 3 else "max_daily_loss",
+                            verdict=VerdictKind.VETO if i % 3 == 0 else VerdictKind.ALLOW,
+                            factor=Decimal(0) if i % 3 == 0 else Decimal(1), observed=None, limit_value=None,
+                            instrument=BTC.symbol_canon, run_id=run_id)
+            for i in range(23)
+        ], instrument_ids={BTC.symbol_canon: iid})
+    async with session_scope(api.owner) as s:
+        all_rows = await RiskEventRepo(s).list_for_run(run_id, limit=1000)
+    newest_first = [r.id for r in all_rows]          # list_for_run: ORDER BY ts DESC, id DESC
+    by_id = {r.id: r for r in all_rows}
+    analyst = await api.login(Role.ANALYST)
+
+    async def walk(params: dict[str, Any]) -> tuple[list[int], int]:
+        ids: list[int] = []
+        pages = 0
+        cursor = None
+        while True:
+            q = {"run_id": str(run_id), **params, **({"cursor": cursor} if cursor else {})}
+            r = await api.client.get("/risk/events", params=q, headers=analyst)
+            assert r.status_code == 200, r.text
+            pages += 1
+            ids += [e["id"] for e in r.json()["items"]]
+            cursor = r.json()["next_cursor"]
+            if cursor is None:
+                return ids, pages
+
+    assert await walk({"limit": 5}) == (newest_first, 5)
+    assert await walk({"limit": 4}) == (newest_first, 6)
+    # ts_ns < T0 + 2 мкс + 1 нс ⇔ ts ≤ T0 + 2 мкс (12 рядків); округлення вниз дало б лише 8
+    ids, _ = await walk({"until_ns": T0_NS + 2 * us + 1, "limit": 5})
+    upto_2us = sorted(i for i, r in by_id.items() if (r.ts_ns or 0) <= T0_NS + 2 * us)
+    assert sorted(ids) == upto_2us and len(ids) == 12
+    ids, _ = await walk({"since_ns": T0_NS + us + 1, "until_ns": T0_NS + 2 * us + 1})
+    assert len(ids) == 4 and {by_id[i].ts_ns for i in ids} == {T0_NS + 2 * us}
+    ids, _ = await walk({"only": "veto", "limit": 3})
+    assert ids == [i for i in newest_first if by_id[i].verdict == "VETO"] and len(ids) == 8
+    # курсор не з БД (час між мікросекундами): рівних за часом рядків немає, id не має значення
+    q = {"run_id": str(run_id), "cursor": f"{T0_NS + 2 * us + 500}:1", "limit": 100}
+    r = await api.client.get("/risk/events", headers=analyst, params=q)
+    assert sorted(e["id"] for e in r.json()["items"]) == upto_2us
 
 
 async def test_sse_streams_only_committed_notifications(api: Api, db_url: str) -> None:

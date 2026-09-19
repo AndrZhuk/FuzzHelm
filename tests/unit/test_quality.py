@@ -12,6 +12,7 @@ from __future__ import annotations
 import gzip
 import math
 import re
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,15 @@ from fuzzhelm.features.convert import Bar, bar_from_candle
 from fuzzhelm.ingest.normalize import kline_uid, normalize_exchange_info, normalize_rest_klines, trade_uid
 from fuzzhelm.quality import invariants as inv
 from fuzzhelm.quality.ahp import SAATY_RI, ahp_weights, load_matrix, write_weights_yaml
+from fuzzhelm.quality.anomaly_eval import (
+    DEFAULT_MAGNITUDES,
+    evaluate_injections,
+    feature_drift,
+    plan_injections,
+    structurally_valid,
+)
 from fuzzhelm.quality.anomaly_mlp import (
+    ANOMALY_KINDS,
     FEATURE_NAMES,
     AnomalyAutoencoder,
     AnomalyFeatureExtractor,
@@ -311,6 +320,50 @@ def test_mlp_autoencoder_flags_injected_spike_and_not_normal_bar() -> None:
     again = AnomalyAutoencoder(seed=SEED).fit(train_X)
     assert again.threshold == model.threshold
     assert float(again.score(spike_X[-1])[0]) == s_spike
+
+
+def test_injection_evaluation_is_deterministic_causal_and_uses_only_normal_training_bars() -> None:
+    """Процедура scripts/train_anomaly_mlp.py на малих даних: позиції ін'єкцій — лише в held-out, амплітуди в
+    заданих межах, «ненормальні» бари вилучаються з навчання, результат відтворний за seed, очевидні аномалії
+    (стрибок ціни, застиглий бар) відокремлюються майже ідеально в обох архітектурах."""
+    plan = plan_injections(1500, 2400, per_kind=15, rng=np.random.default_rng(SEED))
+    assert plan.n_positive() == 15 * len(ANOMALY_KINDS)
+    for kind in ANOMALY_KINDS:
+        pos, mag = plan.positions[kind], plan.magnitudes[kind]
+        assert len(set(pos.tolist())) == 15 and pos.min() >= 1500 and pos.max() < 2400
+        lo_m, hi_m = DEFAULT_MAGNITUDES[kind]
+        assert np.all((np.abs(mag) >= lo_m) & (np.abs(mag) <= hi_m))
+    assert (plan.magnitudes["price_spike"] < 0).any() and (plan.magnitudes["price_spike"] > 0).any()
+
+    normal = [structurally_valid(b) for b in BARS[:2400]]
+    assert all(normal)                                              # справжні бари — без порушень
+    normal[1000] = False                                            # імітація синтетичного/невалідного бару
+    kw: dict[str, Any] = {"train": (0, 1500), "holdout": (1500, 2400), "seed": SEED, "per_kind": 15,
+                          "normal": normal}
+    r = evaluate_injections(BARS[:2400], **kw)
+    warm = AnomalyFeatureExtractor().warmup
+    assert (r.train_vectors, r.excluded_train_vectors, r.neg_vectors) == (1500 - (warm - 1) - 1, 1, 900)
+    for label in ("8-3-8", "5-3-5"):
+        a = r.archs[label]
+        assert a.per_kind["price_spike"]["auc"] > 0.95 and a.per_kind["frozen"]["auc"] > 0.95, label
+        assert 0.5 < a.auc_all <= 1.0 and 0.0 <= a.fpr_at_q99 < 0.1 and a.converged
+    assert r.archs["8-3-8"].n_features == 8 and r.archs["5-3-5"].n_features == 5
+    assert set(r.feature_drift) == set(FEATURE_NAMES) and r.sigma_dlogp_holdout > 0
+    again = evaluate_injections(BARS[:2400], **kw, architectures={"8-3-8": 8})   # детермінізм за seed
+    assert again.archs["8-3-8"].auc_all == r.archs["8-3-8"].auc_all
+    assert again.archs["8-3-8"].per_kind == r.archs["8-3-8"].per_kind and set(again.archs) == {"8-3-8"}
+    # однакові дані → σ-відношення 1 і частка хвостів ≈ номінальна
+    X, _ = feature_matrix(BARS[:1500])
+    same = feature_drift(X, X)
+    assert all(math.isclose(d["sd_ratio"], 1.0) and d["tail_share"] <= 0.011 for d in same.values())
+    with pytest.raises(ValueError):
+        evaluate_injections(BARS[:2400], **{**kw, "holdout": (1400, 2400)})      # held-out перекриває train
+    with pytest.raises(ValueError):
+        evaluate_injections(BARS[:2400], **{**kw, "normal": normal[:10]})
+    with pytest.raises(ValueError):
+        plan_injections(1500, 1510, per_kind=11, rng=np.random.default_rng(SEED))
+    broken = replace(BARS[5], h=BARS[5].l - 1.0)
+    assert not structurally_valid(broken) and not structurally_valid(replace(BARS[5], v=-1.0))
 
 
 def test_streaming_scorer_matches_batch_scores() -> None:

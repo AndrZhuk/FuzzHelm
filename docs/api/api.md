@@ -2,7 +2,8 @@
 
 Автор: Андрій Жук, 2026. Джерело вимог — `docs/BRIEF.md` §8.1, §8.2, §6, §7, §10 N, §12 фаза 8, §14 п. 2.9.
 Безпека (STRIDE, матриця доступу, секрети, pip-audit) — `docs/security.md`. Розходження — `docs/deviations.d/api.md`
-(API-01…API-16). Журнал — `docs/journal.d/api.md`.
+(API-01…API-16) і `docs/deviations.d/platform.md` (PLAT-01…, хвиля 3: PyJWT, сторінки `/risk/events`, CLI
+користувачів, compose). Журнал — `docs/journal.d/api.md`, `docs/journal.d/platform.md`.
 
 Запуск: `uvicorn fuzzhelm.api.main:app` (docker-compose, сервіс `api`, порт 8000). OpenAPI 3.1 англійською —
 `/docs` (Swagger UI), `/redoc`, `/openapi.json`. Під час імпорту і старту застосунок **не підключається до БД**:
@@ -34,7 +35,7 @@ engine створюється ліниво, LISTEN запускається з �
 | POST | `/backtests` | `backtest:run` * | ✓ | ✓ | ✗ | ✓ | **202** + `run_id` |
 | GET | `/runs` · `/runs/{id}` · `/runs/{id}/metrics` · `/runs/{id}/equity` | `run:read` | ✓ | ✓ | ✓ | ✓ | паспорт, метрики, капітал |
 | GET | `/decisions/{id}/explain` | `decision:read` | ✓ | ✓ | ✓ | ✓ | формальне виведення рішення |
-| GET | `/risk/state` · `/risk/events` · `/risk/limits` | `risk:read` | ✓ | ✓ | ✓ | ✓ | режим, журнал вердиктів, ліміти + sha256 |
+| GET | `/risk/state` · `/risk/events` · `/risk/limits` | `risk:read` | ✓ | ✓ | ✓ | ✓ | режим, журнал вердиктів (keyset-сторінки ≤ 2 000, `next_cursor`), ліміти + sha256 |
 | PUT | `/risk/limits` | `risk:limits:write` * | ✗ | ✗ | ✗ | ✓ | зміна файлу лімітів + аудит |
 | POST | `/risk/killswitch/release` | `risk:killswitch:release` * | ✗ | ✗ | ✗ | ✓ | **202**: команда воркеру + аудит |
 | GET | `/stream/live` | `stream:read` | ✓ | ✓ | ✓ | ✓ | SSE |
@@ -66,10 +67,16 @@ decode_token(token, *, secret, clock) -> Principal(uid, login, role, jti, exp_s)
 LoginRateLimiter(max_failures=10, window_s=300, now_s=None, max_keys=10_000)
     .retry_after_s(*keys) -> float; .record_failure(*keys); .reset(key)
 ```
-* Claims: `sub` (логін), `uid`, `role`, `iat`, `nbf`, `exp = iat + jwt_ttl_hours·3600`, `iss="fuzzhelm"`, `jti`.
-  Алгоритм — лише HS256 (`algorithms=["HS256"]`): `alg=none` і підміна алгоритму відкидаються (тест).
-* `exp`/`nbf` перевіряються за ін'єктованим `Clock`, а не за `time.time()` бібліотеки, тому тест прострочення
-  детермінований і не потребує sleep. Допуск розсинхронізації годинників — 30 с для `nbf`, для `exp` допуску немає.
+* Бібліотека — **PyJWT** (`import jwt`, з хвилі 3; до того python-jose, PLAT-04). Claims: `sub` (логін), `uid`, `role`,
+  `iat`, `nbf`, `exp = iat + jwt_ttl_hours·3600`, `iss="fuzzhelm"`, `jti` — усі вісім обов'язкові
+  (`REQUIRED_CLAIMS`, `options["require"]`), `uid`/`exp`/`iat`/`nbf` — лише цілі (bool і дріб відкидаються).
+  Алгоритм — лише HS256 (`jwt.decode(..., algorithms=["HS256"])`): `alg=none` (у будь-якому регістрі, з підписом і
+  без), HS384/HS512 тим самим ключем, асиметричні заголовки RS256/ES256 і заголовок без `alg` відкидаються до
+  перевірки підпису (`test_token_with_other_algorithm_or_alg_none_is_rejected`).
+* `exp`/`iat`/`nbf` перевіряються за ін'єктованим `Clock`, а не за `datetime.now()` усередині PyJWT, тому тест
+  прострочення детермінований і не потребує sleep. `leeway = 0` (`JWT_LEEWAY_S`): для `exp` допуску немає (токен
+  недійсний рівно із секунди `exp`); допуск розсинхронізації годинників 30 с (`CLOCK_SKEW_S`) діє лише для
+  «майбутніх» `nbf`/`iat`.
 * `POST /auth/login` приймає OAuth2-форму (кнопка **Authorize** у `/docs`) або JSON `{username, password}`.
   bcrypt (вартість 12) рахується **в окремому потоці** і поза транзакцією (з'єднання пулу БД не тримається
   на час хешування; `routers.auth.check_password`). Для неіснуючого логіна
@@ -244,8 +251,23 @@ detectors прогону. Блок `consistency` чесно показує, чи
 * `GET /risk/state?run_id=`. Без `run_id` береться найсвіжіший RUNNING live-прогін (paper/replay/testnet), інакше
   найсвіжіший live-прогін. Відповідь: `state` з останнього переходу `risk_state` (або `equity_point.risk_state`,
   або `NORMAL`), `kappa_mode` за поточними лімітами, просадка, останній запит на зняття kill-switch.
-* `GET /risk/events?run_id&rule&only=all|veto|transitions&since_ns&limit`. `factor` точний: береться з
-  `payload.factor_exact`, якщо NUMERIC(6,4) його округлила (API-03).
+* `GET /risk/events?run_id&rule&only=all|veto|transitions&since_ns&until_ns&cursor&limit` → **keyset-сторінка**
+  (PLAT-03) `RiskEventPageOut {run_id, items: [RiskEventOut], page_size, next_cursor}`. Порядок — від найновіших,
+  `ORDER BY ts DESC, id DESC`; `since_ns` — включна нижня межа, `until_ns` — виключна верхня межа часу;
+  `limit` — розмір сторінки, **за замовчуванням 500, максимум 2 000** (`schemas.RISK_EVENTS_PAGE_DEFAULT/MAX`).
+  `next_cursor` = `"<ts_ns>:<id>"` останнього запису сторінки (null на останній сторінці); той самий запит із
+  `cursor=<next_cursor>` дає наступну (старшу) сторінку: `(ts, id) < курсор`. Курсор стабільний, коли воркер дописує
+  нові записи (на відміну від OFFSET), тож кожен запис довгого прогону досяжний рівно один раз
+  (напр. 26 979 записів бектесту — 14 сторінок по 2 000). Фільтри `rule`, `only=veto` (verdict = VETO) і
+  `only=transitions` (rule = `risk_state`) діють разом із вікном і курсором. Межі в нс переводяться в мікросекунди
+  колонки TIMESTAMPTZ з округленням **угору** (`ts_ns ≥ since_ns` ⇔ `ts ≥ ⌈since_ns⌉_мкс`). Некоректний курсор
+  (формат `^\d{1,19}:\d{1,19}$`, межі BIGINT) → 422. Репозиторій: `RiskEventRepo.page_for_run(run_id, *, since_ns,
+  until_ns, rule, verdict, before=(ts_ns, id), limit)`. `factor` точний: береться з `payload.factor_exact`, якщо
+  NUMERIC(6,4) його округлила (API-03).
+  ```bash
+  curl -s "localhost:8000/risk/events?run_id=<id>&only=veto&until_ns=1786060800000000000&limit=2000" -H "Authorization: Bearer $TOKEN"
+  curl -s "localhost:8000/risk/events?run_id=<id>&cursor=<next_cursor>&limit=2000" -H "Authorization: Bearer $TOKEN"
+  ```
 * `PUT /risk/limits` (лише admin) приймає тіло у формі файлу (`limits`, `state_machine`, опційно `sizing`,
   `hysteresis`) і `expected_sha256` з `GET /risk/limits` (оптимістичне блокування, 409 при розбіжності).
   Порядок дій: `risk.config.load_risk_config(tree)` (помилка → 422 з `path`), далі в **одній транзакції**
@@ -348,9 +370,10 @@ max_attempts, limit)` і `list_overlapping(instrument_id, lo, hi, *, stream)` в
 
 | Файл | Що перевіряє |
 |---|---|
-| `tests/e2e/test_api.py` (офлайн, `MemoryDb`) | 6 назв групи N дослівно + матриця (92 випадки), токени (підробка, `alg=none`, прострочення), пониження ролі, rate limit, CRUD і версії стратегій, YAML-псевдоніми, `/explain` (узгодженість, fallback), свічки, health, прогони, бектест, kill-switch + Telegram, точний factor, ліміти (422/409/відновлення файлу), SSE, OpenAPI; межі цілих (422 замість 500/503), SQLSTATE 22 → 422, межі обсягу обчислень стратегії, текст помилки прогону без деталей драйвера |
-| `tests/unit/test_auth.py` | JWT, матриця, rate limiter, `check_password` |
+| `tests/e2e/test_api.py` (офлайн, `MemoryDb`) | 6 назв групи N дослівно + матриця (92 випадки), токени (підробка, `alg=none`, прострочення), пониження ролі, rate limit, CRUD і версії стратегій, YAML-псевдоніми, `/explain` (узгодженість, fallback), свічки, health, прогони, бектест, kill-switch + Telegram, точний factor, ліміти (422/409/відновлення файлу), SSE, OpenAPI; межі цілих (422 замість 500/503), SQLSTATE 22 → 422, межі обсягу обчислень стратегії, текст помилки прогону без деталей драйвера; `/risk/events`: кожен запис досяжний курсором без пропусків і дублікатів (рівні ts, дописування під час гортання), `until_ns`/`since_ns`, фільтри з курсором, 422 на поганий курсор (`test_risk_events_keyset_pages_reach_every_record_with_until_ns`) |
+| `tests/unit/test_auth.py` | JWT (PyJWT): обов'язкові й цілі claims, `alg=none`/HS384/HS512/RS256/ES256/без `alg` → 401, матриця, rate limiter, `check_password` |
 | `tests/unit/test_api_backtest_runner.py` | конфігурація рушія, файл фандингу цілком (вікно — рушія), `plan_persistence` на справжньому рушії, `/explain` рішення рушія з `run.config` |
 | `tests/unit/test_notify.py` | no-op, дедуплікація, bucket, 429, некоректна відповідь Telegram → FAILED без винятку, токен не потрапляє в журнал, шаблони |
 | `tests/unit/test_scheduler.py` | добір прогалин, погодинний Q, щоденний звіт, розклад, `serve()` |
-| `tests/integration/test_api_db.py` (маркер `integration`) | вхід + INET, аудит before/after append-only (42501), CRUD на БД, `/explain` на колонках 0004, точний factor, SSE лише після COMMIT, канал керування, планувальник на БД, API без БД, **повний бектест через API на БД**, `dataset_hash` під-вікна = канонічний шлях рушія |
+| `tests/integration/test_api_db.py` (маркер `integration`) | вхід + INET, аудит before/after append-only (42501), CRUD на БД, `/explain` на колонках 0004, точний factor, SSE лише після COMMIT, канал керування, планувальник на БД, API без БД, **повний бектест через API на БД**, `dataset_hash` під-вікна = канонічний шлях рушія; keyset `/risk/events` на PostgreSQL (рівні мікросекунди, округлення меж угору, курсор не з БД — `test_risk_events_keyset_pages_on_real_db`) |
+| `tests/integration/test_cli_db.py` (маркер `integration`) | `fuzzhelm user add/set-role/list` на PostgreSQL роллю fuzzhelm_app: bcrypt-хеш, аудит з актором `cli`, вхід створеного користувача через `/auth/login`, гонка UNIQUE без деталей драйвера (`docs/api/cli.md`) |

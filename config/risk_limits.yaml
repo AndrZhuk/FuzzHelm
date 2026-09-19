@@ -18,6 +18,9 @@ state_machine:
   halt_enter: 0.12
   halt_daily_loss: 0.03
   kappa_mode: {NORMAL: 1.0, WARNING: 0.5, COOLDOWN: 0.25, HALTED: 0.0}
+  # COOLDOWN: scaled_entries — нові входи з κ_mode = 0.25, наявну позицію не збільшувати (рішення автора,
+  # ENG-14 / RF-01); reduce_only — буквально §5.12 (пласка книга в COOLDOWN поглинаюча, для звіту)
+  cooldown_policy: scaled_entries
 sizing:
   ewma_lambda: 0.94
   annualization_bars: 525600      # 1m, 24/7

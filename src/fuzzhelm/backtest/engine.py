@@ -28,7 +28,12 @@
     вето чи відмови брокера повторний вхід потребує |u| ≥ u_enter);
   * виходи: SIGNAL (гістерезис/розворот), STOP/TP/LIQUIDATION (брокер), HALT (flatten-all у HALTED або
     за сигналом halt ланцюга), RISK_VETO (розворот, новий бік якого ризик-ланцюг відхилив цілком — позиція
-    закривається, але не перевертається).
+    закривається, але не перевертається);
+  * COOLDOWN — за `state_machine.cooldown_policy` (ENG-14 / RF-01): типово scaled_entries — нові входи з
+    κ_mode = 0.25 (сайзер), відкриту позицію не збільшувати; reduce_only — буквально §5.12 (поле
+    BacktestConfig.cooldown_policy перекриває дерево і входить у config_hash);
+  * паспорт: специфікація інструмента (tick/step/minNotional/mmr/maint_amount/плече/символ) входить у
+    dataset_hash (Dataset.columns, ENG-13 / RF-02); VaR₉₅/CVaR₉₅ точок кривої — у грошах, W = 500 (RF-03).
 """
 
 from __future__ import annotations
@@ -47,7 +52,7 @@ from uuid import UUID
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from fuzzhelm.backtest.dataset import BARS_PER_YEAR, TF_NS, Dataset, dec_bar_of
+from fuzzhelm.backtest.dataset import BARS_PER_YEAR, TF_NS, Dataset, dec_bar_of, instrument_spec
 from fuzzhelm.backtest.manifest import RunManifest, build_manifest, canonicalize_config, config_hash
 from fuzzhelm.backtest.metrics import compute_metrics, moments, psr, returns_from_equity, sharpe_ratio
 from fuzzhelm.config import load_yaml
@@ -74,12 +79,13 @@ from fuzzhelm.fuzzy.linear import LinearVoteEngine
 from fuzzhelm.fuzzy.mamdani import MamdaniEngine
 from fuzzhelm.fuzzy.membership import load_membership
 from fuzzhelm.fuzzy.rules import load_rulebase
-from fuzzhelm.risk.config import RiskConfig, load_risk_config
+from fuzzhelm.risk.config import CooldownPolicy, RiskConfig, load_risk_config
 from fuzzhelm.risk.context import RiskContext
 from fuzzhelm.risk.guard import GuardResult, RiskGuard
 from fuzzhelm.risk.journal import AuditSink, RiskEventRecord, RiskJournal
 from fuzzhelm.risk.margin import liq_price, side_liq_price
 from fuzzhelm.risk.state import RiskObservation, RiskStateMachine, Transition
+from fuzzhelm.risk.var import var_cvar_money
 from fuzzhelm.sizing.convert import float_to_decimal_exact, to_decimal
 from fuzzhelm.sizing.hysteresis import HysteresisGate
 from fuzzhelm.sizing.sizer import PositionSizer, SizingInput, SizingParams, SizingResult
@@ -88,6 +94,7 @@ from fuzzhelm.sizing.vol_target import VolTarget
 RECORD_MODES: tuple[str, ...] = ("all", "trades", "none")
 ENGINE_KINDS: tuple[str, ...] = ("mamdani", "linear")
 COST_MODES: tuple[str, ...] = ("zero", "sqrt_impact", "full")
+COOLDOWN_POLICIES: tuple[str, ...] = tuple(p.value for p in CooldownPolicy)
 GRID_KEYS: tuple[str, ...] = ("n_atr", "chi", "u_enter", "rho_base", "lam")
 TREE_FILES: dict[str, str] = {
     "engine": "engine", "risk_limits": "risk_limits", "detectors": "detectors",
@@ -180,8 +187,9 @@ class BacktestConfig:
     `trees` — розібрані YAML (engine, risk_limits, detectors, cost_model, membership, rules); відсутні
     дерева читаються з config/ у __post_init__, тож конфіг герметичний: воркер grid отримує його як dict
     (to_dict) і не читає файлів. Параметри сітки (n_atr, χ, u_enter, ρ_base, λ) і перемикачі експерименту
-    (рушій, модель витрат, підмножина/ваги детекторів) перекривають відповідні місця дерев
-    (`resolved_trees`); саме перекриті дерева входять у config_hash.
+    (рушій, модель витрат, підмножина/ваги детекторів, політика COOLDOWN) перекривають відповідні місця
+    дерев (`resolved_trees`); саме перекриті дерева входять у config_hash. `cooldown_policy` пишеться в
+    дерево явно завжди (і типове scaled_entries), тож хеш фіксує фактичну поведінку автомата.
     """
 
     engine: str | None = None
@@ -194,6 +202,7 @@ class BacktestConfig:
     rho_base: float | None = None
     lam: float | None = None
     tp_multiple: float | None = None
+    cooldown_policy: str | None = None
     detectors: tuple[str, ...] | None = None
     detector_weights: tuple[tuple[str, float], ...] = ()
     linear_weights: tuple[tuple[str, float], ...] | None = None
@@ -233,6 +242,8 @@ class BacktestConfig:
         pick("u_enter", _f(hyst.get("enter", 0.25)))
         pick("u_exit", _f(hyst.get("exit", 0.12)))
         pick("tp_multiple", _f((eng.get("take_profit") or {}).get("multiple_of_stop", 2.0)))
+        sm = risk.get("state_machine") or {}
+        pick("cooldown_policy", str(sm.get("cooldown_policy", CooldownPolicy.SCALED_ENTRIES.value)))
         lw = (eng.get("linear") or {}).get("weights", {"T": 0.5, "R": 0.5})
         pick("linear_weights", tuple(sorted((str(k), _f(v)) for k, v in lw.items())))
         warm = (eng.get("warmup") or {}).get("bars")
@@ -250,6 +261,9 @@ class BacktestConfig:
             raise ValueError(f"cost_mode must be one of {COST_MODES}, got {self.cost_mode!r}")
         if self.record_traces not in RECORD_MODES:
             raise ValueError(f"record_traces must be one of {RECORD_MODES}, got {self.record_traces!r}")
+        if self.cooldown_policy not in COOLDOWN_POLICIES:
+            raise ValueError(
+                f"cooldown_policy must be one of {COOLDOWN_POLICIES}, got {self.cooldown_policy!r}")
         if self.tp_multiple is not None and not self.tp_multiple > 0:
             raise ValueError("tp_multiple must be > 0")
         if self.initial_equity is not None and not self.initial_equity > 0:
@@ -335,6 +349,7 @@ class BacktestConfig:
         risk["sizing"] = {**(risk.get("sizing") or {}), "rho_base": self.rho_base, "chi_atr": self.chi,
                           "ewma_lambda": self.lam}
         risk["hysteresis"] = {**(risk.get("hysteresis") or {}), "enter": self.u_enter, "exit": self.u_exit}
+        risk["state_machine"] = {**(risk.get("state_machine") or {}), "cooldown_policy": self.cooldown_policy}
         t["cost_model"] = {**t["cost_model"], "mode": self.cost_mode}
         return t
 
@@ -452,7 +467,13 @@ class PositionRecord:
 
 @dataclass(frozen=True, slots=True)
 class EquityPointRecord:
-    """Рядок `equity_point` (kappa = κ_mode автомата; VaR/CVaR — звітна метрика, рахується окремо)."""
+    """Рядок `equity_point` (kappa = κ_mode автомата).
+
+    var95/cvar95 — звітна метрика §5.13 у ГРОШАХ: E_t · (історичний VaR₉₅/CVaR₉₅ одно-барових дохідностей
+    кривої на вікні W = 500, що закінчується на t включно), risk.var.var_cvar_money; None, поки дохідностей
+    < 500. run_backtest заповнює їх векторизовано після прогону; покроковий StepResult.equity_point (live)
+    має None — там їх рахує workers.persist.LivePersister (risk.var.RollingVarCvar, ті самі числа).
+    """
 
     ts_ns: int
     equity: Decimal
@@ -679,9 +700,14 @@ class TradingLoop:
         стратегії прогону (входять у config_hash, їх перекривають поля BacktestConfig) і посеред прогону
         не змінюються: для них потрібен новий прогін. Стан автомата (режим, пік, dwell) і kill-switch
         зберігаються; нові пороги діють з наступного бару. Невалідне дерево → ConfigValidationError, стан
-        циклу при цьому не змінюється.
+        циклу при цьому не змінюється. Дерево без `state_machine.cooldown_policy` зберігає політику прогону
+        (інакше гаряча заміна порогів мовчки перемкнула б її на типову).
         """
-        merged = {**self._risk_tree, "limits": tree["limits"], "state_machine": tree["state_machine"]}
+        sm = tree["state_machine"]
+        if isinstance(sm, Mapping):          # невалідне дерево відхилить схема (ConfigValidationError) нижче
+            sm = {**sm}
+            sm.setdefault("cooldown_policy", self.risk_cfg.state_machine.cooldown_policy.value)
+        merged = {**self._risk_tree, "limits": tree["limits"], "state_machine": sm}
         new = load_risk_config(merged)
         self._risk_tree = copy.deepcopy(merged)
         self.risk_cfg = new
@@ -1197,6 +1223,8 @@ class BacktestResult:
     halted_at: int | None
     final_state: RiskState
     killswitch_tripped: bool
+    # специфікація інструмента прогону (канонічна; її ж хешує dataset_hash, ENG-13 / RF-02)
+    instrument_spec: dict[str, Any] = field(default_factory=dict)
 
     @property
     def equity_hash(self) -> str:
@@ -1281,12 +1309,23 @@ def run_backtest(dataset: Dataset, cfg: BacktestConfig | None = None, seed: int 
     positions = list(loop.positions)
     if loop.open_position is not None:
         positions.append(loop.open_position)
+    points = _with_var(loop.equity_points)
     return BacktestResult(
         config=cfg, seed=seed, manifest=manifest, metrics=metrics, extras=extras, equity=loop.equity,
-        equity_ts=loop.equity_ts, position_series=loop.position_series, equity_points=loop.equity_points,
+        equity_ts=loop.equity_ts, position_series=loop.position_series, equity_points=points,
         trades=list(loop.portfolio.closed_trades), positions=positions, orders=list(loop.orders),
         fills=loop.fills, funding=loop.funding, decisions=loop.decisions, risk_events=loop.risk_events,
         transitions=loop.transitions, warmup_bars=loop.warmup_bars, eval_start=start,
         halted_at=loop.halted_at, final_state=loop.fsm.state,
         killswitch_tripped=loop.fsm.killswitch.is_tripped,
+        instrument_spec=instrument_spec(dataset.instrument),
     )
+
+
+def _with_var(points: Sequence[EquityPointRecord]) -> list[EquityPointRecord]:
+    """Точки кривої з VaR₉₅/CVaR₉₅ у грошах (W = 500, лише повні вікна) — один векторизований прохід."""
+    if not points:
+        return []
+    var, cvar = var_cvar_money([p.equity for p in points])
+    return [dataclasses.replace(p, var95=v, cvar95=c) if v is not None else p
+            for p, v, c in zip(points, var, cvar, strict=True)]

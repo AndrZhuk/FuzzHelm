@@ -82,11 +82,11 @@ def test_plan_backtest_maps_engine_result_and_journal_chain() -> None:
     assert plan.orders and plan.orders_skipped == 0
     assert {k for _, k in plan.orders} <= set(plan.decision_keys)
     assert all(d.fired_rules and d.narrative for d in plan.decisions)
-    # крива: точка на бар, VaR/CVaR з 21-ї точки
-    assert len(plan.equity) == len(ds)
-    assert all(p.var95 is None for p in plan.equity[:20])
-    assert all(p.var95 is not None for p in plan.equity[20:])
-    assert all(p.cvar95 >= p.var95 for p in plan.equity[20:])  # type: ignore[operator]
+    # крива: точка на бар; VaR/CVaR лише з повного вікна W = 500 (§5.13, RF-03)
+    assert len(plan.equity) == len(ds) > 500
+    assert all(p.var95 is None for p in plan.equity[:500])
+    assert all(p.var95 is not None for p in plan.equity[500:])
+    assert all(p.cvar95 >= p.var95 >= 0 for p in plan.equity[500:])  # type: ignore[operator]
     assert set(res.metrics) | set(res.extras) == set(plan.metrics) and "psr" in plan.metrics
 
 

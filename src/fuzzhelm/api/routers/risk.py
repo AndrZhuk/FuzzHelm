@@ -1,10 +1,10 @@
 """Маршрути ризик-контуру: стан, журнал вердиктів, ліміти (admin) і зняття kill-switch (admin).
 
 Найменування: api/routers/risk.py
-Призначення: GET /risk/state, GET /risk/events, GET /risk/limits — читання; PUT /risk/limits — зміна
-config/risk_limits.yaml (валідація risk.config, атомарний запис, audit_log before/after);
-POST /risk/killswitch/release — команда воркеру зняти HALTED (audit_log + NOTIFY fuzzhelm_control +
-Telegram-нотифікація, якщо налаштовано).
+Призначення: GET /risk/state, GET /risk/events (keyset-сторінки за (ts, id)), GET /risk/limits — читання;
+PUT /risk/limits — зміна config/risk_limits.yaml (валідація risk.config, атомарний запис,
+audit_log before/after); POST /risk/killswitch/release — команда воркеру зняти HALTED (audit_log +
+NOTIFY fuzzhelm_control + Telegram-нотифікація, якщо налаштовано).
 Автор: Андрій Жук, 2026.
 
 Зняття HALTED робить власник автомата — торговий воркер (RiskStateMachine.release(Role.ADMIN)), а не API:
@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from fuzzhelm.api.auth import Permission, Principal
@@ -33,10 +34,12 @@ from fuzzhelm.api.limits import (
 from fuzzhelm.api.live import CONTROL_CHANNEL, LIVE_CHANNEL
 from fuzzhelm.api.schemas import (
     INT64_MAX,
+    RISK_EVENTS_PAGE_DEFAULT,
+    RISK_EVENTS_PAGE_MAX,
     ErrorResponse,
     KillSwitchReleaseAccepted,
     KillSwitchReleaseIn,
-    RiskEventOut,
+    RiskEventPageOut,
     RiskLimitsChanged,
     RiskLimitsIn,
     RiskLimitsOut,
@@ -44,9 +47,10 @@ from fuzzhelm.api.schemas import (
 )
 from fuzzhelm.api.services import resolve_live_run
 from fuzzhelm.api.views import dstr, fnum, risk_event_out
-from fuzzhelm.core.enums import RiskState
+from fuzzhelm.core.enums import RiskState, VerdictKind
 from fuzzhelm.core.errors import ConfigValidationError
 from fuzzhelm.risk.config import load_risk_config
+from fuzzhelm.storage.repositories.risk import STATE_RULE
 
 router = APIRouter(prefix="/risk", tags=["risk"])
 
@@ -54,6 +58,7 @@ RiskRead = Annotated[Principal, Depends(require(Permission.RISK_READ))]
 RELEASE_ACTION = "risk.killswitch.release"
 LIMITS_ACTION = "risk.limits.update"
 LIMITS_TARGET = "config/risk_limits.yaml"
+CURSOR_PATTERN = r"^[0-9]{1,19}:[0-9]{1,19}$"  # keyset-курсор /risk/events: <ts_ns>:<id>
 
 
 @router.get(
@@ -112,11 +117,16 @@ async def risk_state(
 
 @router.get(
     "/events",
-    response_model=list[RiskEventOut],
-    summary="Risk verdict journal",
+    response_model=RiskEventPageOut,
+    summary="Risk verdict journal (keyset pages)",
     description="Every rule verdict (ALLOW/SHRINK/VETO with observed value and limit) and every state "
-    "transition of a run, newest first. `only=veto` gives the rejection log; "
-    "`only=transitions` the state changes. `factor` is exact even where NUMERIC(6,4) rounds.",
+    "transition of a run, newest first (ORDER BY ts DESC, id DESC). `only=veto` gives the rejection log; "
+    "`only=transitions` the state changes. `since_ns` (inclusive) and `until_ns` (exclusive) bound the "
+    f"time window. Pages hold `limit` items (default {RISK_EVENTS_PAGE_DEFAULT}, max "
+    f"{RISK_EVENTS_PAGE_MAX}); pass `next_cursor` back as `cursor` with the same filters to walk the whole "
+    "journal of a long run — the keyset cursor stays stable while the worker appends new records. "
+    "`factor` is exact even where NUMERIC(6,4) rounds.",
+    responses={422: {"model": ErrorResponse}},
 )
 async def risk_events(
     *,
@@ -125,22 +135,61 @@ async def risk_events(
     run_id: Annotated[UUID | None, Query()] = None,
     rule: Annotated[str | None, Query(max_length=64)] = None,
     only: Annotated[Literal["all", "veto", "transitions"], Query()] = "all",
-    since_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX)] = None,
-    limit: Annotated[int, Query(ge=1, le=2000)] = 500,
-) -> list[dict[str, Any]]:
+    since_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX, description="Inclusive lower bound.")] = None,
+    until_ns: Annotated[int | None, Query(ge=0, le=INT64_MAX, description="Exclusive upper bound.")] = None,
+    cursor: Annotated[
+        str | None,
+        Query(max_length=40, pattern=CURSOR_PATTERN, description="`next_cursor` of the previous page."),
+    ] = None,
+    limit: Annotated[
+        int, Query(ge=1, le=RISK_EVENTS_PAGE_MAX, description="Page size.")
+    ] = RISK_EVENTS_PAGE_DEFAULT,
+) -> dict[str, Any]:
+    before = parse_cursor(cursor)
     async with services.uow() as repos:
         run = await resolve_live_run(repos, run_id)
         if run is None:
             if run_id is not None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, detail="run not found")
-            return []
-        if only == "veto":
-            rows = await repos.risk.vetoes(run.id, limit=limit)
-        elif only == "transitions":
-            rows = list(reversed(await repos.risk.transitions(run.id)))[:limit]
+            return {"run_id": None, "items": [], "page_size": limit, "next_cursor": None}
+        if only == "transitions" and rule is not None and rule != STATE_RULE:
+            rows = []
         else:
-            rows = await repos.risk.list_for_run(run.id, since_ns=since_ns, limit=limit, rule=rule)
-    return [risk_event_out(r) for r in rows]
+            # limit + 1: чи є наступна сторінка, видно без зайвого запиту (і без порожньої останньої сторінки)
+            rows = await repos.risk.page_for_run(
+                run.id,
+                since_ns=since_ns,
+                until_ns=until_ns,
+                rule=STATE_RULE if only == "transitions" else rule,
+                verdict=VerdictKind.VETO if only == "veto" else None,
+                before=before,
+                limit=limit + 1,
+            )
+    more = len(rows) > limit
+    rows = rows[:limit]
+    last = rows[-1] if more else None
+    return {
+        "run_id": run.id,
+        "items": [risk_event_out(r) for r in rows],
+        "page_size": limit,
+        "next_cursor": None if last is None or last.ts_ns is None else format_cursor(last.ts_ns, last.id),
+    }
+
+
+def format_cursor(ts_ns: int, row_id: int) -> str:
+    return f"{ts_ns}:{row_id}"
+
+
+def parse_cursor(cursor: str | None) -> tuple[int, int] | None:
+    """`<ts_ns>:<id>` → (ts_ns, id); формат уже перевірив pattern, тут — межі BIGINT (інакше 422)."""
+    if cursor is None:
+        return None
+    ts_txt, _, id_txt = cursor.partition(":")
+    ts_ns, row_id = int(ts_txt), int(id_txt)
+    if ts_ns > INT64_MAX or row_id > INT64_MAX:
+        err = {"type": "value_error", "loc": ("query", "cursor"), "msg": "cursor out of range"}
+        raise RequestValidationError([{**err, "input": cursor}])
+    return ts_ns, row_id
 
 
 @router.get(

@@ -14,6 +14,7 @@ YAML-числа pydantic перетворює на Decimal через str(float)
 from __future__ import annotations
 
 from decimal import Decimal
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -78,6 +79,27 @@ class LimitsCfg(_Frozen):
 # ---------------------------------------------------------------- автомат станів (§5.12)
 
 
+class CooldownPolicy(StrEnum):
+    """Що дозволено в стані COOLDOWN (ENG-14 → RF-01 у docs/deviations.d/riskfix.md).
+
+    Брифінг внутрішньо неузгоджений: §5.12 називає COOLDOWN «reduce-only», але κ_mode(COOLDOWN) = 0.25 і
+    оцінка гіршого випадку v_max(COOLDOWN) = κ_mode·ρ·E·(1+κ_slip) > 0 мають сенс лише тоді, коли в
+    COOLDOWN торгують. Буквальне reduce-only робить COOLDOWN поглинаючим для пласкої книги (капітал, а з ним
+    і DD, не змінюється, умова виходу DD ≤ cool_exit недосяжна) — на реальних даних дефолтна стратегія
+    блокувалась через ~3 доби (93.6% вікна).
+
+    SCALED_ENTRIES (типово; варіант «г», рішення автора): нові входи дозволено — з пласкої книги або новий бік
+        розвороту, розмір множить сайзер на κ_mode(COOLDOWN); збільшувати вже відкриту позицію заборонено
+        (для позицій, відкритих ДО COOLDOWN, це вимога рішення; для відкритих у COOLDOWN — консервативне
+        спрощення: рушій і так не доторговує, ENG-04).
+    REDUCE_ONLY (буквально §5.12): жодного приросту експозиції; лишено для відтворення ENG-14 у звіті.
+    Політика змінює лише те, які прирости VETO-є правило risk_mode; жодне правило не збільшує експозицію.
+    """
+
+    SCALED_ENTRIES = "scaled_entries"
+    REDUCE_ONLY = "reduce_only"
+
+
 class StateMachineCfg(_Frozen):
     warn_enter: Decimal = Field(default=Decimal("0.04"), gt=0, lt=1)
     warn_exit: Decimal = Field(default=Decimal("0.025"), ge=0, lt=1)
@@ -93,6 +115,7 @@ class StateMachineCfg(_Frozen):
         RiskState.NORMAL: Decimal("1.0"), RiskState.WARNING: Decimal("0.5"),
         RiskState.COOLDOWN: Decimal("0.25"), RiskState.HALTED: Decimal("0.0"),
     })
+    cooldown_policy: CooldownPolicy = CooldownPolicy.SCALED_ENTRIES
 
     @model_validator(mode="after")
     def _ordered(self) -> StateMachineCfg:

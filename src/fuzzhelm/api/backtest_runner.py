@@ -182,10 +182,16 @@ async def prepare_backtest(
     )
 
 
-def run_config_json(cfg: Any) -> dict[str, Any]:
+def run_config_json(cfg: Any, instrument: Any | None = None) -> dict[str, Any]:
     """Що саме запускалося (run.config JSONB): identity_dict рушія (скаляри + перекриті дерева, з
-    яких рахується config_hash). З нього /explain відтворює МФ, правила і параметри κ прогону."""
+    яких рахується config_hash). З нього /explain відтворює МФ, правила і параметри κ прогону.
+    `instrument` (ENG-13): специфікація інструмента (tick/step/minNotional/mmr/maint) зберігається явно —
+    хеш dataset_hash її лише перевіряє, а паспорт мусить її показувати."""
     out: dict[str, Any] = cfg.identity_dict()
+    if instrument is not None:
+        from fuzzhelm.backtest.dataset import instrument_spec  # noqa: PLC0415 — рушій імпортується ліниво
+
+        out["instrument"] = instrument_spec(instrument)
     return out
 
 
@@ -406,7 +412,7 @@ class DbBacktestRunner:
                 await runs.create(
                     run_id,
                     kind=RunKind.BACKTEST,
-                    config=run_config_json(cfg),
+                    config=run_config_json(cfg, ds.instrument),
                     config_hash=cfg.config_hash,
                     dataset_hash=ds_hash,
                     seed=prep.seed,

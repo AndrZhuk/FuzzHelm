@@ -39,7 +39,7 @@ from fuzzhelm.api.live import (
     encode_notify_payload,
 )
 from fuzzhelm.config import Settings, get_settings
-from fuzzhelm.core.enums import Role, RunKind, RunStatus
+from fuzzhelm.core.enums import Role, RunKind, RunStatus, VerdictKind
 from fuzzhelm.core.ports import Clock, IdGenerator
 from fuzzhelm.infra.wallclock import RandomIdGenerator, SystemClock
 from fuzzhelm.notify.telegram import TelegramNotifier
@@ -192,6 +192,18 @@ class GapStore(Protocol):
 class RiskStore(Protocol):
     async def list_for_run(
         self, run_id: UUID, *, since_ns: int | None = None, limit: int = 500, rule: str | None = None
+    ) -> list[RiskEventRow]: ...
+
+    async def page_for_run(
+        self,
+        run_id: UUID,
+        *,
+        since_ns: int | None = None,
+        until_ns: int | None = None,
+        rule: str | None = None,
+        verdict: VerdictKind | str | None = None,
+        before: tuple[int, int] | None = None,
+        limit: int = 500,
     ) -> list[RiskEventRow]: ...
 
     async def vetoes(self, run_id: UUID, *, limit: int = 500) -> list[RiskEventRow]: ...

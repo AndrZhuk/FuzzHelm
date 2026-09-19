@@ -535,7 +535,7 @@ def test_guard_always_allows_reduction_and_flattens_when_halted() -> None:
     flip = guard.evaluate(ctx(current_qty=D(50), target_qty=D(-20), **bad))
     assert flip.approved_qty == 0                                  # закрити лонг — так, відкрити шорт — ні
     cool = guard.evaluate(ctx(current_qty=D(10), target_qty=D(20), risk_state=RiskState.COOLDOWN))
-    assert cool.approved_qty == D(10) and cool.verdict is VETO     # reduce-only
+    assert cool.approved_qty == D(10) and cool.verdict is VETO     # наявну позицію в COOLDOWN не збільшують
     halted = guard.evaluate(ctx(current_qty=D(10), target_qty=D(20), risk_state=RiskState.HALTED))
     assert halted.flatten_all and halted.approved_qty == 0 and halted.order_qty == D(-10)
     ks = KillSwitch()

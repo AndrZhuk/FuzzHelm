@@ -25,7 +25,7 @@
 | # | STRIDE | Загроза | Контрзахід | Перевірка |
 |---|---|---|---|---|
 | 1 | **S**poofing | Перебір паролів на `POST /auth/login` | bcrypt вартості 12, перевірка в окремому потоці; ≤ 10 невдалих спроб за 5 хв на IP **і** на логін → 429 + `Retry-After`; кожна спроба пишеться в `audit_log` | `test_login_rate_limited_after_repeated_failures`, `test_login_rate_limiter_window_and_reset` |
-| 2 | **S**poofing | Підроблений або змінений JWT (підвищення ролі в payload, чужий ключ, `alg=none`), прострочений токен | лише HS256 (`algorithms=["HS256"]`), секрет з `.env`, перевірка `iss`, `exp`/`nbf` за годинником сервера; TTL 8 год | `test_expired_tampered_and_alg_none_tokens_are_rejected`, `test_decode_rejects_other_algorithm_other_secret_and_issuer` |
+| 2 | **S**poofing | Підроблений або змінений JWT (підвищення ролі в payload, чужий ключ, `alg=none`, підміна алгоритму HS384/HS512/RS256/ES256), прострочений токен | PyJWT, лише HS256 (`algorithms=["HS256"]`), секрет з `.env`, усі 8 claims обов'язкові й типізовані, перевірка `iss`, `exp`/`iat`/`nbf` за годинником сервера, `leeway = 0` для `exp`; TTL 8 год | `test_expired_tampered_and_alg_none_tokens_are_rejected`, `test_decode_rejects_other_algorithm_other_secret_and_issuer`, `test_token_with_other_algorithm_or_alg_none_is_rejected`, `test_claims_are_required_and_typed` |
 | 3 | **S**poofing / **I**nfo | Перелік логінів за текстом або часом відповіді | однаковий 401 для «немає користувача» і «хибний пароль»; для невідомого логіна виконується `dummy_verify` (той самий bcrypt) | `test_login_returns_jwt_and_role` (однакові тіла відповідей), `test_check_password_same_semantics_as_repo_authenticate` |
 | 4 | **T**ampering | Зміна лімітів ризику, стратегій або зняття kill-switch роллю без права | явна матриця «дозвіл × роль»; `PUT /risk/limits` і `POST /risk/killswitch/release` — лише admin; для змін роль звіряється з БД | `test_put_risk_limits_requires_admin_role_403_for_analyst`, `test_access_matrix_enforced_for_every_route` (92 випадки) |
 | 5 | **T**ampering | Шкідливий YAML стратегії: «billion laughs» через псевдоніми, `!!python/object`, шлях до файлу замість тексту, величезний документ | SafeLoader без якорів і псевдонімів; лише мапінг на верхньому рівні; ≤ 256 KiB; семантична валідація тими самими завантажувачами, що й у рушія; текст ніколи не трактується як шлях | `test_strategy_yaml_aliases_and_path_like_text_rejected`, `test_strategy_post_invalid_yaml_returns_422_with_field_path` |
@@ -35,6 +35,7 @@
 | 9 | **I**nformation disclosure | Секрети в журналах, відповідях чи репозиторії (JWT secret, токен Telegram, ключі testnet) | лише `.env`/оточення (`Settings`, `SecretStr`); токен Telegram замінюється на `***` у логерах httpx/httpcore; помилки містять лише тип винятку; обробники помилок API і текст помилки прогону (`job.error`, `run.error`) не віддають деталей драйвера (SQL, параметри); токен у query-рядку SSE не підтримано | `test_token_never_logged_or_in_errors`, `test_default_services_do_not_touch_db_until_first_request` (503 без деталей), `test_backtest_failure_text_hides_driver_details` |
 | 10 | **D**enial of service | Перевантаження: черга бектестів, великі відповіді, повільні SSE-клієнти, bcrypt в event loop | ≤ 8 незавершених бектестів на процес (429), рушій працює в потоці; `limit` ≤ 5000 свічок; обмежені черги SSE (256) з витісненням найстаріших; bcrypt у потоці й поза транзакцією (не тримає з'єднання пулу); межі довжин полів (YAML ≤ 256 KiB); обсяг обчислень стратегії: `defuzz.grid_nodes` ≤ 2001, ≤ 15 термів на змінну | `test_engine_backtest_service_runs_in_background_and_reports_failures`, `test_live_hub_fanout_filter_overflow_and_replay`, `test_strategy_compute_budget_is_bounded` |
 | 11 | **E**levation of privilege | Користувач із пониженою роллю користується старим токеном (stateless JWT) | для всіх дозволів зміни стану роль перечитується з `app_user` на кожен запит | `test_demoted_user_loses_write_access_before_token_expiry` |
+| 11a | **S**poofing / **I**nfo | Пароль нового користувача потрапляє в `ps`, історію оболонки, журнал або аудит; користувача створюють «повз» аудит | `fuzzhelm user add` бере пароль лише з `getpass` (без відлуння) або `--password-stdin` з каналу (на терміналі — відмова, бо `readline()` показує набране), прапорця `--password` немає і скорочення прапорців вимкнено; ≥ 8 символів, ≤ 72 байти; у БД — лише bcrypt; `user.create`/`user.set_role`/`user.list` пишуться в `audit_log` у тій самій транзакції (актор `cli`); останнього admin понизити не можна й під конкуренцією (`SELECT … FOR UPDATE` рядків admin) | `test_user_add_reads_password_from_stdin_never_echoes_or_logs`, `test_user_add_password_stdin_on_terminal_is_refused_not_echoed`, `test_user_add_rejects_weak_or_unhashable_passwords`, `test_user_cli_creates_bcrypt_user_audits_and_user_can_log_in`, `test_user_set_role_locks_admin_rows_against_concurrent_demotion` (integration) |
 | 12 | **E**levation of privilege | Код або конфігурація спрямовує ордери на mainnet | жорсткий allowlist хостів: `ALLOWED_TESTNET_HOSTS` для виконання, `ALLOWED_READONLY_HOSTS` для даних; порушення зупиняє побудову `Settings`; Telegram — лише `api.telegram.org` | `test_mainnet_host_is_rejected_by_config`, `test_base_url_must_be_telegram_https_host` |
 
 ## 3. Матриця доступу «ендпоінт × роль»
@@ -121,6 +122,12 @@ API --> UI : 200 / 401 / 403
 | `backtest.submit` | POST `/backtests` | — | `run_id` + повна специфікація запуску |
 | `risk.limits.update` | PUT `/risk/limits` | **повна** стара конфігурація | **повна** нова + `_changed` + `_sha256_before` |
 | `risk.killswitch.release` | POST `/risk/killswitch/release` | спостережений стан, `run_id` | команда, причина, `run_id` |
+| `user.create` | `fuzzhelm user add` (CLI) | — | `id`, `login`, `role`, `_actor = {login: "cli", role: null, os_user}` (пароля й хеша немає) |
+| `user.set_role` | `fuzzhelm user set-role` (CLI) | `id`, `login`, стара роль | нова роль, `_actor` |
+| `user.list` | `fuzzhelm user list` (CLI) | — | кількість користувачів, `_actor` |
+
+Дії CLI мають `user_id = NULL` (виконавець — не користувач API) і `ip = NULL`; хто саме запускав команду, видно з
+`_actor.os_user` (обліковий запис ОС).
 
 IP береться з `request.client.host` і пишеться в колонку типу INET. Заголовку `X-Forwarded-For` не довіряємо,
 бо його підробляє будь-який клієнт. За reverse proxy uvicorn запускається з
@@ -195,9 +202,15 @@ fuzzhelm Dependency not found on PyPI and could not be audited: fuzzhelm (0.1.0)
 PYSEC-2026-1325 — часова атака Minerva на **підпис** ECDSA P-256 (`SigningKey.sign_digest`). Виправленої версії
 немає: проєкт python-ecdsa вважає side-channel атаки поза своїм обсягом. FuzzHelm підписує токени лише **HMAC
 HS256**, а список `algorithms=["HS256"]` у `decode_token` не дає використати ECDSA-ключі, тож уразливий код не
-виконується. Ризик прийнято й задокументовано. Альтернатива на майбутнє — замінити `python-jose` на `PyJWT`
-(без `ecdsa`). Це зміна залежностей, тож рішення лишається за автором (API-13). Пакет `fuzzhelm` пропущено,
-бо його немає в PyPI (це сам проєкт).
+виконується. Пакет `fuzzhelm` пропущено, бо його немає в PyPI (це сам проєкт).
+
+**Хвиля 3 (API-13 → PLAT-04): код переведено на PyJWT.** `fuzzhelm.api.auth` і тести імпортують лише `jwt`
+(PyJWT 2.14.0); `grep -rn jose src tests scripts` у Python-коді знаходить тільки згадку в докстрінгу. Проте
+`python-jose` ще лишається в `dependencies` `pyproject.toml`/`uv.lock` (їх змінює провідний розробник, не цей
+компонент), тож `uv tree --invert --package ecdsa` на 2026-09-19 досі показує `ecdsa v0.19.2 ← python-jose v3.5.0 ←
+fuzzhelm`, і `pip-audit` виводитиме той самий запис. **Рекомендація PYSEC-2026-1325 зникне, щойно `python-jose`
+буде вилучено із залежностей** (`uv remove python-jose`) — PyJWT для HS256 не тягне ні `ecdsa`, ні `cryptography`.
+Після вилучення треба повторити `uv run pip-audit` і вписати сюди фактичний вивід (до того часу не вигадувати).
 
 ## 10. Залишкові ризики (чесно)
 

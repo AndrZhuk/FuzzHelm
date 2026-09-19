@@ -9,8 +9,11 @@
 «вищий» і не «нижчий» за оператора), а таблиця дослівно переноситься у звіт (підрозділ 2.9) і
 перевіряється параметризованим тестом по всіх маршрутах застосунку.
 
-Час у токені рахується від ін'єктованого годинника (порт Clock), а не від time.time() у python-jose:
-перевірку exp/nbf робимо самі, тому тести на прострочення детерміновані і без sleep.
+Бібліотека — PyJWT (`import jwt`; до хвилі 3 — python-jose, deviations PLAT-04). Підпис лише HS256:
+`jwt.decode(..., algorithms=["HS256"])` відкидає `alg=none`, HS384/HS512 і асиметричні алгоритми ще до
+перевірки підпису. Час у токені рахується від ін'єктованого годинника (порт Clock), а не від
+`datetime.now()` усередині PyJWT: exp/iat/nbf перевіряємо самі (exp — без допуску, leeway 0), тому
+тести на прострочення детерміновані і без sleep.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
 
 from fuzzhelm.core.enums import Role
 from fuzzhelm.core.ports import Clock
@@ -32,6 +35,9 @@ JWT_ALGORITHM = "HS256"
 JWT_ISSUER = "fuzzhelm"
 NS_PER_S = 1_000_000_000
 CLOCK_SKEW_S = 30  # допуск розсинхронізації годинників для iat/nbf (не для exp)
+JWT_LEEWAY_S = 0  # допуск для exp: жодного (токен недійсний рівно з секунди exp)
+# обов'язкові claims: без будь-якого з них токен відкидається ще в PyJWT (MissingRequiredClaimError)
+REQUIRED_CLAIMS: tuple[str, ...] = ("sub", "uid", "role", "iat", "nbf", "exp", "iss", "jti")
 
 
 class Permission(StrEnum):
@@ -155,23 +161,33 @@ def issue_token(
 
 
 def decode_token(token: str, *, secret: str, clock: Clock) -> Principal:
-    """Перевірити підпис (лише HS256 — alg=none і підміна алгоритму відкидаються), iss, exp/nbf за clock."""
+    """Перевірити підпис (лише HS256: alg=none і підміна алгоритму відкидаються), iss і exp/iat/nbf
+    за ін'єктованим clock."""
     try:
         claims = jwt.decode(
             token,
             secret,
             algorithms=[JWT_ALGORITHM],
             issuer=JWT_ISSUER,
-            options={"verify_exp": False, "verify_nbf": False, "verify_iat": False, "verify_aud": False},
+            leeway=JWT_LEEWAY_S,
+            options={
+                "require": list(REQUIRED_CLAIMS),
+                # час перевіряємо нижче за ін'єктованим годинником (PyJWT узяв би настінний час)
+                "verify_exp": False,
+                "verify_nbf": False,
+                "verify_iat": False,
+                "verify_aud": False,
+            },
         )
-    except JWTError as e:
+    except jwt.PyJWTError as e:
         raise AuthError(f"invalid token: {type(e).__name__}") from e
     now_s = clock.now_ns() // NS_PER_S
     try:
-        exp = int(claims["exp"])
-        nbf = int(claims.get("nbf", claims["iat"]))
+        exp = _int_claim(claims["exp"])
+        iat = _int_claim(claims["iat"])
+        nbf = _int_claim(claims["nbf"])
         principal = Principal(
-            uid=int(claims["uid"]),
+            uid=_int_claim(claims["uid"]),
             login=str(claims["sub"]),
             role=Role(claims["role"]),
             jti=str(claims["jti"]),
@@ -179,11 +195,18 @@ def decode_token(token: str, *, secret: str, clock: Clock) -> Principal:
         )
     except (KeyError, TypeError, ValueError) as e:
         raise AuthError("token misses required claims") from e
-    if now_s >= exp:
+    if now_s >= exp + JWT_LEEWAY_S:
         raise AuthError("token expired")
-    if now_s + CLOCK_SKEW_S < nbf:
+    if now_s + CLOCK_SKEW_S < max(nbf, iat):
         raise AuthError("token not yet valid")
     return principal
+
+
+def _int_claim(v: Any) -> int:
+    """Числовий claim JWT — ціле (bool і дробові відкидаються: exp=1.5 чи uid=true — підробка/помилка)."""
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise TypeError(f"integer claim expected, got {type(v).__name__}")
+    return v
 
 
 class LoginRateLimiter:

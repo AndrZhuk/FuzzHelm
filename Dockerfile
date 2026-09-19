@@ -11,3 +11,6 @@ COPY alembic.ini ./
 COPY fixtures ./fixtures
 RUN uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
+# SHA коміту для паспорта прогону (у образі немає .git): docker compose build --build-arg GIT_SHA=$(git rev-parse HEAD)
+ARG GIT_SHA=""
+ENV FUZZHELM_GIT_SHA=$GIT_SHA

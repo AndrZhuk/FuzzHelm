@@ -2,7 +2,8 @@
 
 Автор: Андрій Жук, 2026. Файли: `src/fuzzhelm/backtest/{dataset,engine,runner}.py`, `config/engine.yaml`,
 ключі рушія в `config/profiles/*.yaml`. Вимоги — `docs/BRIEF.md` §4.1, §4.2, §5.8–5.16, §6, §10 K;
-розходження — `docs/deviations.d/engine.md` (ENG-01…ENG-21).
+розходження — `docs/deviations.d/engine.md` (ENG-01…ENG-21) і `docs/deviations.d/riskfix.md` (RF-01 політика
+COOLDOWN, RF-02 специфікація інструмента в `dataset_hash`, RF-03 VaR/CVaR у точках кривої).
 
 **Головне.** Один покроковий код рішень `TradingLoop.step()` працює і в бектесті (`run_backtest`), і в
 live/replay (`TradingLoop.on_candle`), і в клітинках сітки (`runner.run_cell`). Рушій **не пише в БД**:
@@ -19,6 +20,10 @@ TF_NS = {"1m": 60e9, "5m": …, "15m": …, "1h": …}      # ns на бар
 BARS_PER_YEAR = {"1m": 525_600, …}                       # 24/7
 FLOAT_COLUMNS = ("o","h","l","c","v","qv"); INT_COLUMNS = ("t_ns","n")
 HASH_COLUMNS = ("t_ns","o","h","l","c","v")              # = storage CandleArrays.columns()
+INSTRUMENT_SPEC_COLUMN = "instrument_spec"               # RF-02
+instrument_spec(inst: Instrument) -> dict                # venue, symbol_venue, symbol_canon, base/quote, contract_type,
+    # tick_size, step_size, min_notional, mmr, maint_amount (Decimal → рядок з 18 знаками), max_leverage (int)
+instrument_spec_column(inst) -> uint8[K]                 # байти canonical_json(instrument_spec(inst))
 
 @dataclass(frozen=True, eq=False)
 class Dataset:
@@ -35,7 +40,7 @@ class Dataset:
     with_funding(rates: Sequence[FundingRate]) -> Dataset   # колонки ingest.funding.funding_columns,
                                                             # вікно [t₀ − 1 доба, t_last + 1 хв] (як у slice)
     __len__; tf_ns; bars_per_year; close_time_ns(i)     # close = open + tf − 1 мс (конвенція Binance)
-    columns() -> dict                                   # HASH_COLUMNS (+ funding_t_ns, funding_rate)
+    columns() -> dict                                   # HASH_COLUMNS + instrument_spec (+ funding_t_ns, funding_rate)
     dataset_hash: str                                   # backtest.manifest.dataset_hash(columns())
     bar(i) -> features.convert.Bar;  dec_bar(i) -> execution.paper_broker.DecBar;  dec_bars: list[DecBar]
     slice(start, stop) -> Dataset                       # копії масивів + фандинг за вікном часу
@@ -53,10 +58,12 @@ decimal_ohlc(ds, i) -> (o, h, l, c)
 ```
 
 Інваріанти (тести): `Dataset.from_candles(candles)`, `load_klines_json(...)`, `from_payload(to_payload())` і
-`from_candle_arrays(CandleRepo.load_arrays(...))` дають **той самий** `dataset_hash`, що й
-`manifest.dataset_hash(CandleArrays.columns())` (= `data/dataset_window.json` для свічок без фандингу);
-ряд фандингу входить у хеш (інша ставка — інший датасет). Кеш Decimal-барів процесу ключується
-`(dataset_hash, symbol_canon, str(tick_size))` (ENG-15).
+`from_candle_arrays(CandleRepo.load_arrays(...))` дають **той самий** `dataset_hash` =
+`manifest.dataset_hash({**CandleArrays.columns(), "instrument_spec": instrument_spec_column(inst)})`; ряд фандингу
+входить у хеш (інша ставка — інший датасет), специфікація інструмента теж (інша mmr/tick/step/minNotional/
+maint_amount/плече/символ — інший датасет і інший ключ `ux_run_identity`; масштаб Decimal — ні, RF-02). Хеш лише
+свічок `manifest.dataset_hash(CandleArrays.columns())` = `data/dataset_window.json` (звіряє `load_db_window`) — від
+специфікації не залежить. Кеш Decimal-барів процесу ключується `(dataset_hash, symbol_canon, str(tick_size))` (ENG-15).
 
 **Реальне вікно з БД** (приклад, лише читання):
 ```python
@@ -77,7 +84,8 @@ ds = Dataset.from_candle_arrays(arr, inst, funding=load_funding_json("data/fundi
 ```python
 BacktestConfig(engine=None, cost_mode=None, initial_equity: Decimal | None = None,
                n_atr: int | None = None, chi=None, u_enter=None, u_exit=None, rho_base=None, lam=None,
-               tp_multiple=None, detectors: tuple[str, ...] | None = None,
+               tp_multiple=None, cooldown_policy: "scaled_entries" | "reduce_only" | None = None,
+               detectors: tuple[str, ...] | None = None,
                detector_weights: tuple[tuple[str, float], ...] = (),
                linear_weights: tuple[tuple[str, float], ...] | None = None, warmup_bars: int | None = None,
                funding_fallback_rate: Decimal | None = None, funding_match_ns: int | None = None,
@@ -95,6 +103,7 @@ rules`; відсутні читаються з `config/*.yaml` у `__post_init__
 | `chi`, `rho_base`, `lam` | `risk_limits.yaml: sizing.chi_atr/rho_base/ewma_lambda` | сітка |
 | `u_enter`, `u_exit` | `risk_limits.yaml: hysteresis.enter/exit` | тригер Шмітта (сітка: `u_enter`) |
 | `tp_multiple` | `engine.yaml: take_profit.multiple_of_stop` (2.0) | TP = P_ref ± m·Δ_stop (ENG-01) |
+| `cooldown_policy` | `risk_limits.yaml: state_machine.cooldown_policy` (`scaled_entries`) | що дозволено в COOLDOWN (RF-01); пишеться в дерево явно ⇒ входить у `config_hash` |
 | `detectors`, `detector_weights` | усі 6; ваги з `detectors.yaml` | підмножина / ω_k (ablation) |
 | `warmup_bars` | `engine.yaml: warmup.bars` (null → 523) | барів до першого рішення |
 | `funding_*` | `engine.yaml: funding` (0.0001, ±60 с) | ENG-07 |
@@ -106,7 +115,8 @@ record_traces, check_invariants, initial_equity`), `from_dict(d)` / `to_dict()` 
 == cfg`), `with_params(**fields)` (клітинка сітки), `identity_dict()` (вхід `config_hash`: без перемикачів запису,
 дерева перекриті параметрами), `config_hash: str`, `resolved_trees()`, `risk_config()`, `feature_params()`,
 `build_engine() -> InferenceEngine` (Мамдані кешується в процесі за вмістом дерев, ≤ 16), `resolved_warmup()`.
-Помилки: невідомий `engine`/`cost_mode`/`record_traces`/детектор, `tp_multiple ≤ 0`, `initial_equity ≤ 0` → `ValueError`.
+Помилки: невідомий `engine`/`cost_mode`/`record_traces`/`cooldown_policy`/детектор, `tp_multiple ≤ 0`,
+`initial_equity ≤ 0` → `ValueError`.
 Дерево `engine` (config/engine.yaml) валідується схемою `EngineTreeCfg` (pydantic, `extra="forbid"`):
 `validate_engine_tree(tree) -> EngineTreeCfg`, помилка → `ConfigValidationError(path="engine.take_profit.multiple_of_stop")`
 (невідомий ключ, `multiple_of_stop ≤ 0`, `sigma_base.method ≠ warmup_median`, `warmup.bars < 1`, …).
@@ -125,6 +135,8 @@ loop.on_candle(candle: Candle, *, dq_score=1, last_data_ns=None) -> StepResult
           # live/replay: лише закриті свічки свого інструмента (інакше ValueError); той самий step()
 loop.set_funding_series(t_ns, rates)       # історичні ставки (fundingTime, rate); None → fallback
 loop.release_halt(actor_role, *, actor=None) -> Transition | None   # лише ADMIN (PermissionDeniedError)
+loop.apply_risk_limits(tree) -> RiskConfig   # гаряча заміна limits/state_machine; дерево без cooldown_policy
+                                             # зберігає політику прогону
 loop.refresh_order_statuses()             # фінальні статуси sim_order з брокера (кінець прогону)
 # стан: index, decide_from, warmup_bars, sigma_base, open_position, halted_at, window (BarWindow),
 #       core (DecisionCore), fsm (RiskStateMachine), guard (RiskGuard), broker (PaperBroker), router,
@@ -169,6 +181,9 @@ risk_state))` (6 правил + `risk_mode`, кожна перевірка → `
 | `hold` / `none` | немає наміру, або сайзер сам відмовив у вході (`BELOW_MIN_NOTIONAL`: ризик не оцінюється, ENG-12) | — |
 
 Розмір фіксується на вході (без доторговування, ENG-04). `Δ_stop = χ·ATR_t` (`SizingResult.stop_distance`).
+COOLDOWN (RF-01): за `scaled_entries` намір `enter`/`flip` оцінюється як звичайно — ціль сайзера вже × κ_mode = 0.25,
+гейт `risk_mode` пропускає новий вхід (`limit = 2`); за `reduce_only` новий бік відхиляється (`enter` → немає заявок,
+`flip` → `exit` з `RISK_VETO`). Відкрита позиція при переході в COOLDOWN не зменшується (ENG-04, RF-04).
 Стиснута ланцюгом ціль, нижча за minNotional, не відкривається (`trace.risk.note = BELOW_MIN_NOTIONAL`).
 
 ### 2.4 Записи (форма рядків DDL §6; рушій їх не пише в БД)
@@ -189,7 +204,7 @@ StepResult(index, open_time_ns, close_time_ns, equity, position_qty, risk_state,
 | `Fill` (core.dto) | `sim_order` (агрегати) | уже враховано в `OrderRecord` |
 | `PositionRecord(instrument, side, opened_at_ns, opening_decision_ns, avg_entry, qty, leverage, allocated_margin, stop_price, tp_price, liq_price, closed_at_ns, exit_reason, realized_pnl, funding_paid, fees, max_adverse_excursion, exit_price)` | `position` | `qty` — максимальний `|q|` угоди; `realized_pnl` = валовий − комісії (нетто = `realized_pnl − funding_paid`); `liq_price` — від фактичної ціни входу |
 | `RiskEventRecord` (risk.journal) | `risk_event` | `.to_row()`; `ts_ns → ts`, `instrument → instrument_id` відображає storage |
-| `EquityPointRecord(ts_ns, equity, cash, unrealized, gross_exposure, leverage, drawdown, risk_state, kappa, position_qty, var95=None, cvar95=None)` | `equity_point` | `cash = Portfolio.cash` ⇒ рядки самі задовольняють тотожність; `kappa` = κ_mode автомата; VaR/CVaR — звітна метрика, рушій не рахує |
+| `EquityPointRecord(ts_ns, equity, cash, unrealized, gross_exposure, leverage, drawdown, risk_state, kappa, position_qty, var95=None, cvar95=None)` | `equity_point` | `cash = Portfolio.cash` ⇒ рядки самі задовольняють тотожність; `kappa` = κ_mode автомата; `var95/cvar95` — гроші `E_t · VaR̂₉₅/CVaR̂₉₅(r_{t−499..t})` (RF-03): `run_backtest` заповнює векторизовано (None для точок 0…499), у `StepResult.equity_point` покрокового циклу — None (live рахує `workers.persist.LivePersister`, ті самі числа) |
 
 `record_traces`: `all` — кожне рішення з повним `DecisionTrace` + `equity_point` щобару (paper/replay, /explain);
 `trades` — `DecisionTrace` лише в рішень із заявками (бектест; відхилені наміри лишаються в `risk_event`);
@@ -201,7 +216,8 @@ StepResult(index, open_time_ns, close_time_ns, equity, position_qty, risk_state,
 ```python
 run_backtest(dataset: Dataset, cfg: BacktestConfig | None = None, seed: int = 0, *, eval_start: int = 0,
              git: bool = False, kind: RunKind | str = RunKind.BACKTEST, run_id: UUID | None = None,
-             hash_equity: bool = True, on_step: Callable[[StepResult], None] | None = None) -> BacktestResult
+             hash_equity: bool = True, on_step: Callable[[StepResult], None] | None = None,
+             journal_sink: Callable[[JournalEntry], None] | None = None) -> BacktestResult
 
 BacktestResult(config, seed, manifest: RunManifest, metrics: dict[str, float],   # 17 метрик METRIC_NAMES
                extras: dict[str, float],   # sr_period, skew, kurt, psr, n_obs, n_fills, traded_notional, halted
@@ -209,13 +225,15 @@ BacktestResult(config, seed, manifest: RunManifest, metrics: dict[str, float],  
                positions: list[PositionRecord],  # закриті + остання відкрита
                orders, fills, funding, decisions, risk_events, transitions, warmup_bars,
                eval_start,  # перший бар вікна оцінки = decide_from
-               halted_at: int | None, final_state: RiskState, killswitch_tripped: bool)
+               halted_at: int | None, final_state: RiskState, killswitch_tripped: bool,
+               instrument_spec: dict)   # = dataset.instrument_spec(inst): специфікація, яку хешує dataset_hash
    .equity_hash -> str        # = manifest.equity_hash (ValueError, якщо hash_equity=False)
 deterministic_run_id(cfg_hash, ds_hash, seed) -> UUID     # дефолтний run_id (той самий прогін → той самий id)
 EngineInvariantError(AssertionError)
 ```
 
-`manifest`: `config_hash = cfg.config_hash`, `dataset_hash = dataset.dataset_hash`, `seed`, `engine`,
+`manifest`: `config_hash = cfg.config_hash`, `dataset_hash = dataset.dataset_hash` (свічки + специфікація
+інструмента + фандинг), `seed`, `engine`,
 `journal_head_hash` (хеш-ланцюг `EventJournal`: заявки, виконання, рішення із заявками, кожен `risk_event`;
 `None` при `record_traces="none"`), `equity_hash` (SHA-256 над `(close_ts, E)` кожного бару), `git_sha` при
 `git=True`. Метрики рахуються з бару першого можливого рішення (`decide_from`), `periods_per_year` —
@@ -251,6 +269,16 @@ bench_loop(dataset, cfg=None, seed=0, *, repeats=5) -> {bars, repeats, median_s,
                                                         max_us_per_bar}
 async load_db_window(symbol) -> Dataset            # лише CLI заміру (читає БД, ліниві імпорти)
 ```
+
+CLI: `uv run python -m fuzzhelm.backtest.runner [--db SYMBOL] [--repeats N] [--engine mamdani|linear]
+[--cooldown-policy scaled_entries|reduce_only] [--report] [--grid-workers N] [--seed S]`. `--report` — повний прогін
+з `record_traces=trades` і тотожністю обліку щобару; друкує політику, `config_hash`, `dataset_hash` і специфікацію
+інструмента, угоди/виконання/комісії/валовий PnL/фандинг, дохідність і DD, частки барів у станах, усі переходи
+автомата (бар, доба, подія, DD, day_return), входи в COOLDOWN і їх валовий/нетто результат, кількість VETO
+`risk_mode`, зведення VaR₉₅/CVaR₉₅ (визначені точки, CVaR ≥ VaR, VaR ≥ 0, медіана/максимум, час проходу);
+після рецензії riskfix — ще найбільший приріст DD за бар за станом попереднього бару поруч із κ_mode·ρ_base
+(фактична швидкість просадки проти оцінки §5.12, RF-04) і перевірку на трасах сайзера: кожен вхід/розворот
+отримав κ = κ_mode стану рішення, а схвалена ціль ≤ floor(κ_mode·min(q_atr, q_vt, q_lev)) (RF-01).
 
 Walk-forward: IS-прогін — `dataset.slice(is_start, is_end)` з прогрівом усередині IS; OOS-прогін —
 `slice(oos_start − W, oos_end)` з `eval_start = W` (W = прогрів = 523 бари), тобто прогрів OOS лежить **усередині
@@ -298,9 +326,10 @@ BTC 113 угод, total_return −0.059926, equity_hash `8a82f814e93855ce…` (�
 Додатково: тотожність обліку на кожному барі (незалежна реконструкція з сирих потоків), кожна угода має
 непорожні `fired_rules` у рішенні-відкритті, `LookaheadGuard`/префікс-інваріантність, flash-crash → HALTED без
 людини + засувка, HALTED ⇒ нуль нової експозиції і flatten-all, kill-switch між барами скасовує вхід/розворот у
-черзі (стоп відкритої позиції лишається), зняття HALTED лише admin → COOLDOWN
-reduce-only, вето розвороту → `RISK_VETO`, 7 записів ризику на кожен намір, фандинг з ряду ставок, live-шлях ==
+черзі (стоп відкритої позиції лишається), зняття HALTED лише admin → COOLDOWN (за `reduce_only` —
+кожен вхід VETO, за `scaled_entries` — вхід з κ = 0.25, `tests/unit/test_riskfix_cooldown.py`), вето розвороту → `RISK_VETO`, 7 записів ризику на кожен намір, фандинг з ряду ставок, live-шлях ==
 бектест-шлях, TP → рядок `sim_order`, `order_updates`, швидкий шлях == трасоване рішення, хеш-контракт
 `from_candle_arrays`/фандингу, валідація `Dataset` і схеми `engine.yaml`, ключ кешу Decimal-барів, відмова сайзера не йде в ризик-ланцюг; property: інваріанти
 для будь-якої послідовності намірів/збоїв якості/спрацювань засувки і незалежність минулих рішень від будь-яких
-майбутніх барів.
+майбутніх барів; за обох політик COOLDOWN (з тісними порогами) — наявну позицію в COOLDOWN не збільшено, новий
+вхід лише за `scaled_entries` з κ = 0.25. riskfix: `tests/unit/test_riskfix_{cooldown,passport,var}.py`.

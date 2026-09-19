@@ -154,6 +154,7 @@ class FileLimitsStore:
                 fh.write(text)
                 fh.flush()
                 os.fsync(fh.fileno())
+            os.chmod(tmp, 0o644)  # mkstemp дає 0600 — воркер під іншим користувачем не прочитав би ліміти
             os.replace(tmp, self.path)
         except BaseException:
             with contextlib.suppress(FileNotFoundError):

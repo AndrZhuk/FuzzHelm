@@ -19,9 +19,11 @@ IS-прогін прогрівається всередині IS; OOS-прогі
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 import statistics
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +34,11 @@ from fuzzhelm.backtest.grid import make_grid
 from fuzzhelm.backtest.parallel import run_parallel
 from fuzzhelm.backtest.pareto import pareto_front
 from fuzzhelm.backtest.walkforward import Fold, folds_from_profile
+from fuzzhelm.core.enums import RiskState
+from fuzzhelm.core.money import D0
+from fuzzhelm.features.convert import to_float
+from fuzzhelm.risk.var import var_cvar_money
+from fuzzhelm.sizing.convert import to_decimal
 
 
 def _config(config: Mapping[str, Any] | BacktestConfig | None) -> BacktestConfig:
@@ -260,20 +267,93 @@ async def load_db_window(symbol: str) -> Dataset:  # pragma: no cover — лиш
     return Dataset.from_candle_arrays(arr, inst, funding=rates, source=f"db:{symbol}")
 
 
-def _report_run(ds: Dataset, seed: int) -> None:  # pragma: no cover — CLI заміру
-    """Повний прогін з трасуванням угод і перевіркою тотожності обліку на кожному барі + шлях автомата."""
+def _report_run(ds: Dataset, seed: int, cfg: BacktestConfig | None = None) -> None:  # pragma: no cover
+    """Повний прогін з трасуванням угод і перевіркою тотожності обліку на кожному барі + шлях автомата:
+    угоди, комісії, дохідність, частки барів у станах, перші/останні переходи, входи й VETO в COOLDOWN."""
+    cfg = (cfg or BacktestConfig()).with_params(record_traces="trades", check_invariants=True)
     t0 = time.perf_counter()
-    res = run_backtest(ds, BacktestConfig().with_params(record_traces="trades", check_invariants=True), seed)
+    res = run_backtest(ds, cfg, seed)
     dt = time.perf_counter() - t0
     m = res.metrics
+    fees = sum((f.fee for f in res.fills), D0)
+    gross = sum((t.gross_pnl for t in res.trades), D0)
+    funding = sum((c.amount for c in res.funding), D0)
+    spec = res.instrument_spec
+    print(f"cooldown_policy {cfg.cooldown_policy}; config_hash {cfg.config_hash[:16]}…, "
+          f"dataset_hash {res.manifest.dataset_hash[:16]}… (instrument spec: tick {spec['tick_size']}, "
+          f"step {spec['step_size']}, minNotional {spec['min_notional']}, mmr {spec['mmr']})")
     print(f"full run (trades traces, invariants every bar): {dt:.2f} s; trades {len(res.trades)}, "
           f"fills {len(res.fills)}, funding charges {len(res.funding)}, final state {res.final_state.value}, "
           f"halted_at {res.halted_at}")
+    print(f"fees {fees:.2f}, gross PnL of closed trades {gross:.2f}, funding paid {funding:.2f}, "
+          f"final equity {res.equity[-1]:.2f}")
     print(f"total_return {m['total_return']:.6f}  max_drawdown {m['max_drawdown']:.6f}  "
           f"sharpe {m['sharpe']:.3f}  psr {res.extras['psr']:.4f}  equity_hash {res.equity_hash[:16]}…")
+    states = Counter(p.risk_state.value for p in res.equity_points)
+    n = len(res.equity_points)
+    print("bars per state: " + ", ".join(f"{s} {states.get(s, 0)} ({states.get(s, 0) / n:.1%})"
+                                          for s in ("NORMAL", "WARNING", "COOLDOWN", "HALTED")))
+    # фактична швидкість просадки проти оцінки §5.12 (RF-04): max приросту DD за бар за станом попер. бару
+    dd_up: dict[str, Any] = {}
+    for a, b in itertools.pairwise(res.equity_points):
+        up = b.drawdown - a.drawdown
+        if up > dd_up.get(a.risk_state.value, D0):
+            dd_up[a.risk_state.value] = up
+    rho = cfg.risk_config().sizing.rho_base
+    kap = cfg.risk_config().state_machine.kappa_mode
+    print("max per-bar DD increase by state of the previous bar (vs kappa_mode*rho_base): " + ", ".join(
+        f"{s.value} {dd_up.get(s.value, D0):.5f} ({to_float(kap[s]) * rho:.5f})" for s in RiskState))
+    t_first = ds.t_ns[0].item()
+
+    def bar_of(ts_ns: int) -> int:
+        return int((ts_ns - t_first) // ds.tf_ns)
+
+    state_at = {p.ts_ns: p.risk_state for p in res.equity_points}
+    cool_dec = {d.open_time_ns for d in res.decisions if d.action in ("enter", "flip")
+                and state_at.get(d.decided_at_ns) is RiskState.COOLDOWN}
+    vetoes = sum(1 for e in res.risk_events if e.rule == "risk_mode" and e.verdict is not None
+                 and e.verdict.value == "VETO")
+    print(f"transitions {len(res.transitions)}; entries decided in COOLDOWN {len(cool_dec)}; "
+          f"risk_mode VETOs {vetoes}")
+    # незалежна перевірка RF-01 на трасах сайзера: кожен вхід/розворот отримав κ = κ_mode стану рішення, і
+    # схвалена ціль ≤ floor(κ_mode·min(q_atr, q_vt, q_lev)) — тобто ≤ κ_mode·(розмір NORMAL тих самих входів)
+    step = ds.instrument.step_size
+    k_ok = q_ok = n_ent = 0
+    for d in res.decisions:
+        sz = None if d.trace is None else d.trace.sizing
+        if d.action not in ("enter", "flip") or not sz:
+            continue
+        n_ent += 1
+        k = to_float(kap[state_at[d.decided_at_ns]])
+        k_ok += sz["kappa_mode"] == k
+        q_ok += d.target_qty <= to_decimal(k * min(sz["q_atr"], sz["q_vt"], sz["q_lev"]), step)
+    print(f"entries/flips with sizing traces {n_ent}: sizer kappa == kappa_mode(state) at {k_ok}, "
+          f"target <= floor(kappa_mode*min(q_atr,q_vt,q_lev)) at {q_ok}")
+    closed = [p for p in res.positions if p.closed_at_ns is not None and p.opening_decision_ns in cool_dec]
+    if closed:
+        net = sum((p.realized_pnl or D0) for p in closed)
+        fees_c = sum((p.fees or D0) for p in closed)
+        print(f"trades opened in COOLDOWN: {len(closed)} closed, gross {net + fees_c:.2f}, "
+              f"fees {fees_c:.2f}, net of fees {net:.2f}")
+    for tr in res.transitions:
+        i = bar_of(tr.ts_ns)
+        print(f"  bar {i} (day {i / 1440:.2f}): {tr.state_from.value} -> {tr.state_to.value} "
+              f"[{tr.event.value}], DD {tr.drawdown:.4f}, day_return {tr.day_return:.4f}")
+    t1 = time.perf_counter()
+    var_cvar_money(res.equity)
+    dt_var = time.perf_counter() - t1
+    pts = [p for p in res.equity_points if p.var95 is not None and p.cvar95 is not None]
+    if pts:
+        v = sorted(p.var95 for p in pts if p.var95 is not None)
+        ok = sum(1 for p in pts if p.cvar95 is not None and p.var95 is not None and p.cvar95 >= p.var95)
+        nonneg = sum(1 for x in v if x >= 0)
+        print(f"VaR95/CVaR95 (money, W=500): defined at {len(pts)} of {n} points, first at index "
+              f"{res.equity_points.index(pts[0])}; CVaR>=VaR at {ok}; VaR>=0 at {nonneg}; "
+              f"VaR median {v[len(v) // 2]:.4f}, max {v[-1]:.4f}; rolling pass over {len(res.equity)} "
+              f"points {dt_var:.3f} s")
     if res.transitions:
         last = res.transitions[-1]
-        i_last = int((last.ts_ns - ds.t_ns[0].item()) // ds.tf_ns)
+        i_last = bar_of(last.ts_ns)
         vetoes = sum(1 for e in res.risk_events if e.rule == "risk_mode" and e.ts_ns > last.ts_ns
                      and e.verdict is not None and e.verdict.value == "VETO")
         print(f"last transition at bar {i_last}: {last.state_from.value} -> {last.state_to.value}, "
@@ -293,7 +373,10 @@ def main(argv: Sequence[str] | None = None) -> None:  # pragma: no cover — CLI
                     help="also time the real 108-cell grid with N workers")
     ap.add_argument("--report", action="store_true", help="also do one full checked run and print its path")
     ap.add_argument("--seed", type=int, default=20260918)
+    ap.add_argument("--cooldown-policy", choices=("scaled_entries", "reduce_only"), default=None,
+                    help="override state_machine.cooldown_policy (default: config/risk_limits.yaml)")
     args = ap.parse_args(argv)
+    base = BacktestConfig(engine=args.engine, cooldown_policy=args.cooldown_policy)
     if args.db:
         import asyncio  # noqa: PLC0415
 
@@ -301,17 +384,16 @@ def main(argv: Sequence[str] | None = None) -> None:  # pragma: no cover — CLI
     else:
         ds = load_fixture_dataset()
     print(f"dataset {ds.source}: {len(ds)} bars, dataset_hash {ds.dataset_hash[:16]}…")
-    r = bench_loop(ds, BacktestConfig(engine=args.engine), seed=args.seed, repeats=args.repeats)
+    r = bench_loop(ds, base, seed=args.seed, repeats=args.repeats)
     for k, v in r.items():
         print(f"{k}: {v:.3f}")
     est = r["us_per_bar"] * 1e-6 * args.grid_bars * 108
     print(f"108 cells x {args.grid_bars} bars, 1 core (extrapolated from the median): {est:.1f} s")
     if args.report:
-        _report_run(ds, args.seed)
+        _report_run(ds, args.seed, base)
     if args.grid_workers > 0:
         t0 = time.perf_counter()
-        cells = run_grid(ds, None, args.seed, workers=args.grid_workers,
-                         config=BacktestConfig(engine=args.engine))
+        cells = run_grid(ds, None, args.seed, workers=args.grid_workers, config=base)
         dt = time.perf_counter() - t0
         trades = sorted(c["n_trades"] for c in cells)
         print(f"grid {len(cells)} cells x {len(ds)} bars, workers={args.grid_workers}: wall {dt:.1f} s; "

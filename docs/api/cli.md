@@ -23,7 +23,7 @@ uv run fuzzhelm [--database-url URL] COMMAND [опції]      # URL за зам
 |---|---|
 | 0 | успіх (для `backfill`: gate фази 1 `candle ≥ 60 000` виконано; для `replay-gap`: є FILLED, `zero_loss`, ланцюг цілий; для `verify-journal`: усі ланцюги цілі, якорі збігаються) |
 | 1 | команда відпрацювала, але gate/перевірку не пройдено |
-| 2 | помилка користувача або даних (`CliError`: немає вікна датасету, немає інструмента в БД, неповне вікно, вікно в майбутньому) чи помилка розбору аргументів argparse |
+| 2 | помилка користувача або даних (`CliError`: немає вікна датасету, немає інструмента в БД, неповне вікно, вікно в майбутньому; для `user`: слабкий пароль, розбіжність паролів, немає термінала без `--password-stdin`, дубль логіна, невідомий логін, пониження останнього admin, помилка СУБД — лише клас і SQLSTATE) чи помилка розбору аргументів argparse |
 
 ## Підкоманди
 
@@ -106,9 +106,57 @@ FILLED, 4 REST-запити, `zero_loss = True` і 6 801 запис журнал
 Показує кількість рядків у 15 таблицях, покриття свічок за інструментом, tf і src, статуси `ingest_gap` і
 журнали. Приклад 2026-09-19: `candle=129603`, `ingest_gap` = 3 × FILLED, `event_journal=6801`.
 
+### `user` — користувачі API (add / list / set-role), хвиля 3 (PLAT-01)
+```
+fuzzhelm user add --login L --role operator|analyst|auditor|admin [--password-stdin]
+fuzzhelm user list [--json]
+fuzzhelm user set-role --login L --role R
+```
+* **Пароль ніколи не приходить з argv** (прапорця `--password` немає: він був би видний у `ps` та історії оболонки).
+  Без `--password-stdin` — `getpass` двічі (без відлуння; розбіжність → exit 2); якщо термінала немає, команда
+  відмовляє з підказкою `--password-stdin`, а не читає stdin мовчки. З `--password-stdin` — перший рядок stdin
+  (зрізається лише кінцеве `\n`/`\r\n`); stdin має бути каналом (pipe/файл): якщо це термінал, команда відмовляє
+  (exit 2), бо `readline()` з термінала показав би набраний пароль на екрані. Скорочення прапорців у `user add|list|
+  set-role` вимкнено (`allow_abbrev=False`): `--password` чи `--pass` — помилка розбору, а не мовчазне
+  `--password-stdin`. Пароль читається й перевіряється **до** підключення до БД.
+* Правила пароля (`check_new_password`): ≥ 8 символів, ≤ 72 байтів UTF-8 (bcrypt мовчки обрізав би решту), без
+  керівних символів, не дорівнює логіну (без урахування регістру). Логін — `^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$`.
+  Повідомлення про помилки пароль не містять.
+* Хеш — bcrypt (вартість 12) через `UserRepo.create`; у БД, виводі, журналах і `audit_log` немає ні пароля, ні хеша
+  (`user list` друкує лише `id, login, role, created_at`).
+* Кожна дія пише `audit_log` у **тій самій транзакції**, що й зміна: `user.create` (after = `{id, login, role}`),
+  `user.set_role` (before/after = роль), `user.list` (after = `{count}`); `user_id = NULL` (дію виконав не користувач
+  API), `after._actor = {"login": "cli", "role": null, "os_user": <обліковий запис ОС або null>}`, `target =
+  "user/<login>"`. `set-role` на ту саму роль — «nothing changed», без запису.
+* Останнього `admin` понизити не можна (exit 2): інакше ліміти ризику й зняття kill-switch стали б недоступні.
+  Інваріант тримається й під конкуренцією: пониження admin блокує рядки всіх адміністраторів до COMMIT
+  (`UserRepo.admins_for_update()`, `SELECT … FOR UPDATE ORDER BY id`), тож два паралельні `set-role` не можуть обидва
+  побачити «лишається ще один admin»; якщо роль цілі змінила інша транзакція, поки ця чекала, — exit 2
+  «changed concurrently», без зміни й без аудиту.
+* Дубль логіна — exit 2 «already exists» (перевірка до INSERT; гонку ловить `UNIQUE(login)` СУБД, і тоді назовні
+  йде лише «already exists», без SQL і параметрів драйвера).
+* Роль СУБД — `fuzzhelm_app` (як в усіх командах CLI): INSERT/UPDATE `app_user`, лише INSERT в `audit_log`.
+
+Створення першого адміністратора — крок **[ЛЮДИНА]** (`docs/manuals/user_guide.md` §5):
+```bash
+uv run fuzzhelm user add --login <логін> --role admin          # пароль двічі з клавіатури, без відлуння
+```
+Функції для тестів і скриптів: `user_add(uow, *, login, role, password) -> (UserRow, audit_id)`,
+`user_set_role(uow, *, login, role) -> (old_role, audit_id | None)`, `user_list(uow) -> (rows, audit_id)`,
+`read_new_password(*, from_stdin, stdin=None, prompt=None)`, `check_new_password(password, login)`,
+`UserStores(users, audit)` + `UserUow` (одиниця роботи; робоча — `_db_user_stores(args)`).
+
 ## Тести
 
-`tests/unit/test_cli.py` покриває розбір аргументів, dry-run без мережі й БД (HTTP-клієнт і engine
+`tests/unit/test_cli.py` покриває `fuzzhelm user` на репозиторіях у пам'яті з транзакційною семантикою (пароль зі stdin
+і з getpass не потрапляє ні у вивід, ні в журнал, ні в аудит; getpass двічі й розбіжність; без термінала — вимога
+`--password-stdin`; 6 слабких/нехешованих паролів; дубль; set-role з before/after і захистом останнього admin;
+list без хешів; `--password`, `--pass` в argv — помилка розбору; `--password-stdin` на терміналі — відмова без
+читання stdin (`test_user_add_password_stdin_on_terminal_is_refused_not_echoed`); повторна перевірка цілі після
+блокування admin — `test_user_set_role_rechecks_target_after_locking_admins`). `tests/integration/test_cli_db.py` —
+ті самі команди на PostgreSQL (порт 5443): bcrypt `$2b$12$`, аудит з актором `cli`, вхід створеного користувача через
+`/auth/login`, гонка UNIQUE без деталей драйвера, блокування рядків admin (друга сесія з `lock_timeout` 200 мс
+отримує SQLSTATE 55P03 — `test_user_set_role_locks_admin_rows_against_concurrent_demotion`). Крім того, `tests/unit/test_cli.py` покриває розбір аргументів, dry-run без мережі й БД (HTTP-клієнт і engine
 підмінено «бомбою»), вікно й план, крос-звірку зі збережених сирих відповідей, нормалізацію і файли
 фінансування, нові REST-ендпоінти (respx), шлях «прогалина → ingest_gap → FILLED» на фейкових репозиторіях,
 звіт добору і внесок фінансування в `dataset_hash`. `tests/unit/test_calibration_pipeline.py` покриває

@@ -170,9 +170,9 @@ async def test_replay_worker_persists_run_with_full_passport(
     assert all(dec_ids[o.decision_id].fired_rules for o in orders)            # угоди мають формальний вивід
     assert any(o.status == "FILLED" for o in orders)
     assert positions and all(p.exit_reason is not None for p in positions)
-    # крива: 45 точок, хеш з БД = паспорт, VaR/CVaR з 21-ї точки
+    # крива: 45 точок, хеш з БД = паспорт; 45 < W = 500, тож VaR/CVaR ще не визначені (RF-03)
     assert len(curve) == 45 and equity_hash(eq, ts) == summary.equity_hash
-    assert all(p.var95 is None for p in curve[:20]) and all(p.var95 is not None for p in curve[20:])
+    assert all(p.var95 is None and p.cvar95 is None for p in curve)
     intents = {o.decision_id for o in orders if o.otype == "MARKET"}          # вхід і вихід — наміри
     assert len([r for r in risk if r.rule != "risk_state"]) == 7 * len(intents)
     # SSE: воркер публікував події транзакційно
@@ -304,8 +304,8 @@ async def test_persist_backtest_batch_writes_passport_journal_and_var(
     assert len(orders) == counts.orders and {o.decision_id for o in orders} <= {d.id for d in decisions}
     filled = [o for o in orders if o.status == "FILLED"]
     assert filled and all(o.filled_qty == o.qty and o.avg_fill_price is not None for o in filled)
-    assert all(p.var95 is None for p in curve[:20])
-    assert all(p.cvar95 >= p.var95 for p in curve[20:])  # type: ignore[operator]
+    assert all(p.var95 is None for p in curve[:500])
+    assert all(p.cvar95 >= p.var95 >= 0 for p in curve[500:])  # type: ignore[operator]
     assert n_candles == 0
 
 
@@ -380,4 +380,5 @@ async def test_api_backtest_runner_persists_journal_chain_and_var(
         curve = await EquityRepo(s).curve(rid)
     assert run is not None and run.status == "DONE" and out["journal_entries"] == head.next_seq > 0
     assert bad is None and run.journal_head_hash == head.head
-    assert curve[25].var95 is not None and curve[25].cvar95 is not None
+    assert len(curve) > 500 and curve[499].var95 is None
+    assert curve[600].var95 is not None and curve[600].cvar95 is not None

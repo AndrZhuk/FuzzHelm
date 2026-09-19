@@ -19,7 +19,14 @@ import numpy as np
 import pytest
 from tests.helpers.engine_scripted import base_config, crash_dataset, fixture
 
-from fuzzhelm.backtest.dataset import DEFAULT_KLINES, Dataset, load_exchange_instrument, load_klines_json
+from fuzzhelm.backtest.dataset import (
+    DEFAULT_KLINES,
+    INSTRUMENT_SPEC_COLUMN,
+    Dataset,
+    instrument_spec_column,
+    load_exchange_instrument,
+    load_klines_json,
+)
 from fuzzhelm.backtest.engine import BacktestResult, run_backtest
 from fuzzhelm.backtest.grid import make_grid
 from fuzzhelm.backtest.manifest import dataset_hash, equity_hash
@@ -235,8 +242,10 @@ def test_dataset_from_candle_arrays_and_funding_keep_the_hash_contract() -> None
     arr = SimpleNamespace(**{k: getattr(ds, k) for k in ("t_ns", "o", "h", "l", "c", "v", "qv", "n")})
     cols = {k: getattr(ds, k) for k in ("t_ns", "o", "h", "l", "c", "v")}
     plain = Dataset.from_candle_arrays(arr, ds.instrument)
-    # той самий хеш, що й над CandleRepo.load_arrays().columns() (data/dataset_window.json)
-    assert plain.dataset_hash == dataset_hash(cols) == ds.dataset_hash
+    # свічки (ті самі колонки, що й CandleRepo.load_arrays().columns(), data/dataset_window.json) +
+    # специфікація інструмента (RF-02): хеш набору ≠ хешу лише свічок, але однаковий для DB- і масив-шляху
+    spec = {INSTRUMENT_SPEC_COLUMN: instrument_spec_column(ds.instrument)}
+    assert plain.dataset_hash == dataset_hash({**cols, **spec}) == ds.dataset_hash != dataset_hash(cols)
     inst, t0, hour = ds.instrument, int(ds.t_ns[0]), 3_600 * 10**9
 
     def rate(t: int, r: str) -> FundingRate:
@@ -246,7 +255,8 @@ def test_dataset_from_candle_arrays_and_funding_keep_the_hash_contract() -> None
     with_f = Dataset.from_candle_arrays(arr, inst, funding=[*outside, *inside[::-1]])
     assert with_f.funding_t_ns is not None
     assert with_f.funding_t_ns.tolist() == [r.funding_time_ns for r in inside]
-    assert with_f.dataset_hash == dataset_hash({**cols, **funding_columns(inside)}) != plain.dataset_hash
+    full = dataset_hash({**cols, **spec, **funding_columns(inside)})
+    assert with_f.dataset_hash == full != plain.dataset_hash
     assert with_f.slice(0, 600).dataset_hash == with_f.dataset_hash       # те саме вікно, що й у slice
 
 

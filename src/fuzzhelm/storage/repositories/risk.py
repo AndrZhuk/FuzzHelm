@@ -20,7 +20,7 @@ from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol
 from uuid import UUID
 
-from sqlalchemy import insert, select
+from sqlalchemy import and_, insert, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fuzzhelm.core.enums import VerdictKind
@@ -40,6 +40,7 @@ INSERT_CHUNK = 2_000
 STATE_RULE = "risk_state"       # rule переходу автомата (risk.journal.RiskJournal.record_transition)
 FACTOR_SCALE = Decimal("0.0001")  # масштаб колонки factor NUMERIC(6,4)
 FACTOR_EXACT_KEY = "factor_exact"
+NS_PER_US = 1_000
 
 
 class RiskRecordLike(Protocol):
@@ -111,6 +112,11 @@ def record_values(r: RiskRecordLike, *, run_id: UUID | None = None,
     }
 
 
+def ceil_us_ns(ns: int) -> int:
+    """Найменше кратне 1000 нс, не менше за ns (межа в наносекундах → межа колонки в мікросекундах)."""
+    return ns + (-ns) % NS_PER_US
+
+
 class RiskEventRepo:
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
@@ -137,6 +143,37 @@ class RiskEventRepo:
             q = q.where(_T.c.ts >= ns_to_dt_opt(since_ns))
         if rule is not None:
             q = q.where(_T.c.rule == rule)
+        res = await self.s.execute(q.order_by(_T.c.ts.desc(), _T.c.id.desc()).limit(limit))
+        return [from_mapping(RiskEventRow, m) for m in res.mappings()]
+
+    async def page_for_run(self, run_id: UUID, *, since_ns: int | None = None, until_ns: int | None = None,
+                           rule: str | None = None, verdict: VerdictKind | str | None = None,
+                           before: tuple[int, int] | None = None, limit: int = 500) -> list[RiskEventRow]:
+        """Keyset-сторінка від найновіших: ORDER BY ts DESC, id DESC; `ts_ns ∈ [since_ns, until_ns)`.
+
+        `before=(ts_ns, id)` — останній рядок попередньої сторінки: повертаються рядки строго «старші»,
+        тобто `(ts, id) < (ts_ns, id)`. Рядки з ts IS NULL у сторінки не потрапляють (записувач їх не
+        створює: `record_values` вимагає ts_ns).
+        """
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        q = select(_T).where(_T.c.run_id == run_id, _T.c.ts.is_not(None))
+        if since_ns is not None:
+            q = q.where(_T.c.ts >= ns_to_dt(ceil_us_ns(since_ns)))
+        if until_ns is not None:
+            q = q.where(_T.c.ts < ns_to_dt(ceil_us_ns(until_ns)))
+        if rule is not None:
+            q = q.where(_T.c.rule == rule)
+        if verdict is not None:
+            q = q.where(_T.c.verdict == enum_value(verdict))
+        if before is not None:
+            b_ts, b_id = before
+            if b_ts % NS_PER_US:
+                # курсор не з БД (час не кратний мікросекунді): рівних за часом рядків не буває
+                q = q.where(_T.c.ts < ns_to_dt(ceil_us_ns(b_ts)))
+            else:
+                dt = ns_to_dt(b_ts)
+                q = q.where(or_(_T.c.ts < dt, and_(_T.c.ts == dt, _T.c.id < b_id)))
         res = await self.s.execute(q.order_by(_T.c.ts.desc(), _T.c.id.desc()).limit(limit))
         return [from_mapping(RiskEventRow, m) for m in res.mappings()]
 

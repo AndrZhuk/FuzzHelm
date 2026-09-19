@@ -122,3 +122,25 @@ async def test_explain_of_engine_decision_is_consistent_with_run_config(engine_r
         assert ex["u_raw"] == pytest.approx(rec.u_raw, abs=1e-12)
         assert ex["narrative_source"] == "stored" and ex["narrative_uk"] == rec.narrative
         assert ex["sizing"]["binding_constraint"] == ex["target"]["binding_constraint"]
+
+
+def test_run_config_json_stores_instrument_spec_explicitly() -> None:
+    # ENG-13: паспорт мусить показувати, з якими tick/step/mmr рахувався прогін, а не лише хешувати їх
+    from decimal import Decimal
+
+    from fuzzhelm.api.backtest_runner import run_config_json
+    from fuzzhelm.backtest.engine import BacktestConfig
+    from fuzzhelm.core.dto import Instrument
+    from fuzzhelm.core.enums import ContractType, Venue
+
+    inst = Instrument(venue=Venue.BINANCE_USDM, symbol_venue="BTCUSDT", symbol_canon="BTC-USDT-PERP",
+                      base_asset="BTC", quote_asset="USDT", contract_type=ContractType.PERP,
+                      tick_size=Decimal("0.10"), step_size=Decimal("0.001"), min_notional=Decimal(50),
+                      mmr=Decimal("0.004"))
+    cfg = BacktestConfig()
+    out = run_config_json(cfg, inst)
+    assert out["instrument"]["symbol_canon"] == "BTC-USDT-PERP"
+    assert Decimal(out["instrument"]["mmr"]) == Decimal("0.004")
+    assert Decimal(out["instrument"]["tick_size"]) == Decimal("0.1")
+    assert "instrument" not in run_config_json(cfg)
+    assert {k: v for k, v in out.items() if k != "instrument"} == run_config_json(cfg)

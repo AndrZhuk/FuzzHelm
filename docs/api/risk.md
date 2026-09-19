@@ -1,7 +1,8 @@
 # API модулів `sizing` і `risk` (фактичний, хвиля 1)
 
 Автор: Андрій Жук, 2026. Джерело вимог — `docs/BRIEF.md` §5.8–§5.13, `docs/contracts.md` §10–§11.
-Розходження з брифінгом і контрактом — `docs/deviations.d/risk.md` (R-01…R-12).
+Розходження з брифінгом і контрактом — `docs/deviations.d/risk.md` (R-01…R-13) і `docs/deviations.d/riskfix.md`
+(RF-01 політика COOLDOWN, RF-03 ковзні VaR/CVaR кривої, RF-04 припущення оцінки гіршого випадку).
 
 Домени типів: математика сайзера — `float`; усе, що йде в облік/журнал/БД (кількості, ціни, капітал,
 множники вердиктів, пороги ризику) — `Decimal` (або точний `Fraction` усередині алгебри вердиктів).
@@ -20,9 +21,14 @@ RiskConfig(limits: LimitsCfg, state_machine: StateMachineCfg, sizing: SizingCfg,
 LimitsCfg: max_position_notional(value: Decimal), max_gross_leverage(value), max_daily_loss(value, reset),
            max_drawdown_halt(value), liquidation_buffer(min_dtl_atr, b), stale_data(max_lag_s, min_dq)
 StateMachineCfg: warn_enter/warn_exit/cool_enter/cool_exit/halt_enter/cool_daily_loss/halt_daily_loss: Decimal,
-                 warn_dwell/cool_dwell: int, warn_vol_ratio: float, kappa_mode: dict[RiskState, Decimal]
+                 warn_dwell/cool_dwell: int, warn_vol_ratio: float, kappa_mode: dict[RiskState, Decimal],
+                 cooldown_policy: CooldownPolicy = SCALED_ENTRIES
                  # валідація: warn_exit < warn_enter ≤ cool_exit < cool_enter < halt_enter,
                  #            cool_daily < halt_daily, κ ∈ [0,1] незростає, κ(HALTED) = 0
+class CooldownPolicy(StrEnum): SCALED_ENTRIES = "scaled_entries" | REDUCE_ONLY = "reduce_only"   # RF-01
+    # scaled_entries (типово, рішення автора): у COOLDOWN новий вхід (з пласкої книги / новий бік розвороту)
+    #   дозволено, розмір × κ_mode(COOLDOWN) у сайзері; наявну позицію (зокрема відкриту до COOLDOWN) — не збільшувати
+    # reduce_only (буквально §5.12): жодного приросту; пласка книга в COOLDOWN при DD > cool_exit — поглинаюча (ENG-14)
 SizingCfg (float): ewma_lambda, annualization_bars, sigma_target, scale_min, scale_max, filter_gamma,
                    rho_base, chi_atr, max_leverage
 HysteresisCfg (float): enter, exit  (exit ≤ enter)
@@ -145,22 +151,30 @@ cap_increase(ctx, q_max_post) -> Verdict     # «post ≤ q_max» → ALLOW / SH
 ### 3.4 Ланцюг — `guard`
 ```python
 RiskGuard(rules: Sequence[RiskRule], journal: RiskJournal | None = None, *,
-          killswitch: KillSwitch | None = None, mode_gate: bool = True)
-RiskGuard.from_config(cfg: RiskConfig | None = None, journal=None, *, killswitch=None)   # 6 лімітів + gate
+          killswitch: KillSwitch | None = None, mode_gate: bool = True,
+          cooldown_policy: CooldownPolicy | str = "scaled_entries")    # лише для вбудованого RiskModeGate
+RiskGuard.from_config(cfg: RiskConfig | None = None, journal=None, *, killswitch=None)
+    # 6 лімітів + gate; cooldown_policy = cfg.state_machine.cooldown_policy
 default_rules(cfg: RiskConfig) -> list[RiskRule]
 guard.evaluate(ctx) -> GuardResult
 GuardResult(verdict, records: tuple[RuleVerdict, ...], approved_qty: Decimal,   # ЦІЛЬОВА позиція зі знаком
             requested_qty, current_qty, increase_requested, increase_approved, flatten_all: bool, halt: bool)
    .order_qty -> Decimal   # approved − current (що відправити в роутер)
    .to_dict() -> dict      # канонічний (Decimal → str), для DecisionTrace.risk
-RiskModeGate(killswitch=None)   # name="risk_mode", додається останнім у ланцюг автоматично
+RiskModeGate(killswitch=None, cooldown_policy="scaled_entries")   # name="risk_mode", останнім у ланцюгу
 ```
 Порядок `default_rules`: `stale_data` (скор якості — перший вхід ланцюга, §15), `max_position_notional`,
 `max_gross_leverage`, `max_daily_loss`, `max_drawdown_halt`, `liquidation_buffer`; далі `risk_mode`.
 Порядок впливає лише на порядок записів у журналі, не на вердикт (комутативність `compose`).
 Алгоритм: кожне правило → `journal.record_rule(...)` (КОЖНА перевірка, не лише VETO) → `compose` →
 `increase_approved = floor_qty(exposure(V, increase), step_size)` → `approved = side·(base + inc)`.
-`RiskModeGate`: COOLDOWN — reduce-only (VETO приросту), HALTED або спрацьований kill-switch — VETO приросту.
+`RiskModeGate` (лише ALLOW/VETO приросту; зменшення/закриття — завжди): `observed` = тяжкість стану (NORMAL 0,
+WARNING 1, COOLDOWN 2, HALTED 3; kill-switch → 3), `limit` = найвищий рівень, у якому дозволено **цей вид** приросту:
+збільшення наявної позиції (`base_qty > 0`) — 1 за будь-якої політики; новий вхід (`base_qty = 0`: з пласкої книги або
+новий бік розвороту) — 2 за `scaled_entries`, 1 за `reduce_only`. VETO ⇔ приріст > 0 ∧ observed > limit.
+`payload`: `state, kill_switch, cooldown_policy, new_entry, reduce_only` (наявну позицію не збільшувати: COOLDOWN,
+HALTED), `entries_allowed, flatten_all, increase_qty`. Множина VETO за `reduce_only` ⊇ множини за `scaled_entries`;
+решта шести правил від політики не залежить (property `test_risk_chain_never_exceeds_requested_or_kappa_scaled_size`).
 `flatten_all = halt ∨ kill-switch ∨ ctx.risk_state == HALTED` ⇒ `approved_qty = 0` (рушій має закрити **всі**
 позиції). Сигнал halt від правила тригерить переданий `killswitch`. Дублікати `name` у ланцюгу → ValueError.
 Вартість: ≈ 9 мкс/виклик без споживачів журналу, ≈ 21 мкс із `keep=True` (виміряно на машині розробки 2026-09-18) —
@@ -183,8 +197,11 @@ fsm.release(actor_role: Role | str, *, actor=None) -> Transition | None
    # не admin → PermissionDeniedError; поза HALTED → None (без запису risk.release), АЛЕ якщо засувка вже
    #   спрацювала, а автомат ще не латчив HALTED, — знімає засувку (аудит "killswitch.release"), пік не перебазує;
    # HALTED → COOLDOWN + tracker.rebase() + AuditRecord("risk.release", before/after) + killswitch.release
+   #   (у COOLDOWN після зняття — κ = 0.25; нові входи — за cooldown_policy)
 fsm.state, fsm.kappa_mode (Decimal), fsm.kappa_mode_float, fsm.dwell_bars, fsm.snapshot, fsm.reduce_only,
-fsm.flatten_all, fsm.transitions (list), fsm.tracker, fsm.killswitch
+fsm.flatten_all, fsm.transitions (list), fsm.tracker, fsm.killswitch, fsm.cooldown_policy
+fsm.reduce_only       # наявну позицію збільшувати заборонено: COOLDOWN (за обох політик) або HALTED
+fsm.entries_allowed   # новий вхід дозволено: NORMAL/WARNING; COOLDOWN — лише за scaled_entries; HALTED/засувка — ні
 fsm.classify(snap, vol_ratio, state=None, dwell=None) -> RiskEvent
 ```
 Класифікація (пріоритет): HALT_BREACH (kill-switch ∨ DD ≥ 0.12 ∨ PnL_day ≤ −0.03·E_open) → [HALTED: STEADY]
@@ -193,8 +210,10 @@ STEADY] → WARN_BREACH (DD ≥ 0.04 ∨ vol_ratio > 1.6) → [WARNING: RECOVERY
 `dwell` — барів у поточному стані (скидається лише при зміні стану). Вхід у HALTED тригерить `fsm.killswitch`;
 ручний `killswitch.trip()` ⇒ HALTED на наступному барі; `killswitch.release(ADMIN)` напряму ⇒ автомат
 синхронізується на наступному барі (actor="kill_switch"). **σ_base** брифінг не визначає — `vol_ratio`
-рахує викликач (R-08). Рекомендоване з'єднання: `RiskGuard(..., killswitch=fsm.killswitch)` і
-`ctx.risk_state = fsm.state`, `SizingInput.kappa_mode = fsm.kappa_mode_float`.
+рахує викликач (R-08). Рекомендоване з'єднання: `RiskGuard.from_config(cfg, …, killswitch=fsm.killswitch)` (та
+сама `cooldown_policy`, що й у `cfg.state_machine`) і `ctx.risk_state = fsm.state`,
+`SizingInput.kappa_mode = fsm.kappa_mode_float`. Автомат (класифікація, таблиця, витримка) від `cooldown_policy` не
+залежить — політика діє лише в гейті `risk_mode` (тест `test_state_machine_path_is_independent_of_cooldown_policy`).
 
 ### 3.6 Маржа — `margin` (усе Decimal)
 ```python
@@ -211,6 +230,9 @@ reduced_max_leverage(stop_distance, entry, mmr, b)       # 1/(Δ_stop/(P_e(1−b
 max_qty_for_dtl(side, *, wallet, price, atr, min_dtl, mmr, maint_amount=0)   # найбільша |q| з DTL ≥ min_dtl
 leverage(q_abs, price, wallet)                           # q·P/W
 per_bar_loss_bound(kappa_mode, rho_base, kappa_slip) -> Decimal            # v_max = κ·ρ·(1+κ_slip)
+   # κ — κ_mode НА ВХОДІ відкритої позиції (розмір фіксується на вході, ENG-04), не поточного стану; E — капітал
+   # на вході; відкат нереалізованого прибутку (до (1+m+κ_slip)·κ·ρ за бар при тейку m·Δ_stop) не враховано (RF-04);
+   # комісії/імпакт/фандинг теж поза межею: до f_taker·κ·L_max·E на бік (0.12 %·κ·E при 0.0004 і L_max = 3)
 min_bars_to_drawdown(dd0, dd_max, v_max) -> DrawdownSpeedBound(dd0, dd_max, v_max, n_min)
    # n_min = (DD_max − DD₀)/v_max — ОЦІНКА гіршого випадку за припущень у докстрінгу, НЕ доведення стійкості
 ```
@@ -227,7 +249,19 @@ rolling_var_breaches(returns, window=500, alpha=0.05, chunk=4096) -> VarBacktest
    # alpha ∉ (0,1) або window ≤ 0 → ValueError
    # VaR_t лише за r[t−W:t]; пробій: r_t < −VaR_t; вхід для kupiec_pof(breaches, n)
 tail_count(n, alpha) -> int
+
+# ковзні VaR/CVaR кривої капіталу (RF-03): точка t — на вікні r_{t−W+1..t} (закінчується на t включно)
+rolling_var_cvar(returns, window=500, alpha=0.05, *, min_obs=None (= W), chunk=4096) -> (var[n+1], cvar[n+1])
+   # частки капіталу; NaN до min_obs дохідностей; повні вікна — векторизовано блоками np.partition (O(W) на точку
+   # в C, без матриці N×W); 0 < min_obs ≤ W, інакше ValueError; CVaR ≥ VaR у кожній точці (у float)
+var_cvar_money(equity: Sequence[Decimal], window=500, alpha=0.05, *, min_obs=None)
+   -> (list[Decimal | None], list[Decimal | None])     # гроші: E_t · частка; None до 500 дохідностей; не обрізано до 0
+RollingVarCvar(window=500, alpha=0.05, *, min_obs=None).update(E_t) -> (VaR_t, CVaR_t) | (None, None)
+   # покроково (live), те саме ядро _tail_stats ⇒ ті самі числа до біта, що й var_cvar_money на тій самій кривій
 ```
+Конвенція `equity_point.var95/cvar95`: `E_t · VaR̂₉₅(r_{t−499..t})` у валюті котирування (USDT), додатне = збиток;
+`None` для точок 0…499; значення не обрізаються до 0 (на вікні майже з самих виграшів VaR < 0, R-04). Виміряно:
+прохід над 64 800 точками — 0.098–0.105 с (`runner --db … --report`, `docs/figures/riskfix_cooldown_policy.md`).
 
 ### 3.8 Тест Купця — `kupiec`
 ```python

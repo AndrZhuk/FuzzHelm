@@ -13,12 +13,16 @@
   replay-gap      — реплей fixtures/ws/pathological/gap.jsonl.gz через IngestPipeline з БД-стоками і
                     справжнім REST-добором → реальні рядки ingest_gap зі статусом FILLED;
   verify-journal  — перерахунок ланцюга хешів event_journal (і звірка з run.journal_head_hash, якщо є);
-  db-stats        — кількості рядків, покриття свічок, статуси прогалин, журнали.
+  db-stats        — кількості рядків, покриття свічок, статуси прогалин, журнали;
+  user            — керування користувачами API: add (пароль лише з --password-stdin або getpass, bcrypt),
+                    list, set-role; кожна дія пише audit_log з актором «cli».
 Автор: Андрій Жук, 2026.
 
 Мережа — лише allow-listed read-only хости: базові URL валідує Settings, а клієнти перевіряють їх
 вдруге (`assert_readonly_url`); ордерних ендпоінтів тут немає. Асинхронний код — через asyncio.run.
 `--dry-run` мережевих підкоманд друкує план без мережі й БД (так їх перевіряє tests/unit/test_cli.py).
+Пароль користувача ніколи не береться з аргументів командного рядка (видно в `ps` та історії оболонки),
+не друкується і не пишеться в журнали чи audit_log — лише bcrypt-хеш у app_user (PLAT-01).
 Модуль поза межею детермінізму (настінний годинник для міток запуску і заміру часу), але все, що
 потрапляє в дані й хеші, від нього не залежить.
 """
@@ -27,18 +31,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import getpass
 import gzip
 import hashlib
 import json
 import math
+import re
 import sys
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, TextIO
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import numpy as np
@@ -46,7 +53,7 @@ import numpy.typing as npt
 import orjson
 
 from fuzzhelm.config import CONFIG_DIR, FIXTURES_DIR, ROOT, Settings, get_settings, load_yaml
-from fuzzhelm.core.enums import GapStatus, Venue
+from fuzzhelm.core.enums import GapStatus, Role, Venue
 from fuzzhelm.core.money import dec, dec_str
 from fuzzhelm.features.convert import Bar
 from fuzzhelm.ingest.ratelimit import USED_WEIGHT_HEADER, klines_weight, request_weight
@@ -57,6 +64,7 @@ if TYPE_CHECKING:
 
     from fuzzhelm.core.dto import Candle, Instrument
     from fuzzhelm.ingest.crosscheck import CrosscheckReport
+    from fuzzhelm.storage.repositories import UserRow
 
 DAY_MS: Final = 86_400_000
 MIN_MS: Final = 60_000
@@ -1749,6 +1757,229 @@ async def cmd_db_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+# ================================================================== user
+
+LOGIN_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")
+MIN_PASSWORD_CHARS: Final = 8          # NIST SP 800-63B: щонайменше 8 символів для пароля, обраного людиною
+BCRYPT_MAX_BYTES: Final = 72           # storage.repositories.user: довший пароль bcrypt мовчки обрізав би
+CLI_ACTOR: Final = "cli"
+SQLSTATE_UNIQUE_VIOLATION: Final = "23505"
+
+
+class UserStoreLike(Protocol):
+    """Підмножина storage.repositories.UserRepo, потрібна CLI."""
+
+    async def create(self, login: str, password: str, role: Role | str) -> UserRow: ...
+
+    async def get_by_login(self, login: str) -> UserRow | None: ...
+
+    async def set_role(self, user_id: int, role: Role | str) -> None: ...
+
+    async def admins_for_update(self) -> list[UserRow]: ...
+
+    async def list(self) -> list[UserRow]: ...
+
+
+class AuditStoreLike(Protocol):
+    """Підмножина storage.repositories.AuditRepo."""
+
+    async def append(self, action: str, target: str, *, before: Mapping[str, Any] | None = None,
+                     after: Mapping[str, Any] | None = None, user_id: int | None = None,
+                     ip: str | None = None, ts_ns: int | None = None) -> int: ...
+
+
+@dataclass(frozen=True, slots=True)
+class UserStores:
+    """Репозиторії однієї транзакції: зміна користувача і її запис в audit_log комітяться разом."""
+
+    users: UserStoreLike
+    audit: AuditStoreLike
+
+
+UserUow = Callable[[], contextlib.AbstractAsyncContextManager[UserStores]]
+
+
+def _db_user_stores(args: argparse.Namespace) -> tuple[UserUow, Callable[[], Awaitable[None]]]:
+    """Одиниця роботи над PostgreSQL (роль fuzzhelm_app) і функція закриття engine."""
+    from fuzzhelm.storage.repositories import AuditRepo, UserRepo  # noqa: PLC0415
+    from fuzzhelm.storage.session import session_scope  # noqa: PLC0415
+
+    engine = _engine(_db_url(args, get_settings()))
+    factory = _factory(engine)
+
+    @contextlib.asynccontextmanager
+    async def uow() -> AsyncIterator[UserStores]:
+        async with session_scope(factory) as s:
+            yield UserStores(UserRepo(s), AuditRepo(s))
+
+    return uow, engine.dispose
+
+
+def cli_actor() -> dict[str, Any]:
+    """Хто виконав дію: логін «cli» (не користувач API) і обліковий запис ОС, якщо його можна визначити."""
+    try:
+        os_user: str | None = getpass.getuser()
+    except (OSError, KeyError, ImportError):  # контейнер без USER/LOGNAME і без запису в /etc/passwd
+        os_user = None
+    return {"login": CLI_ACTOR, "role": None, "os_user": os_user}
+
+
+def check_login(login: str) -> str:
+    if not LOGIN_RE.fullmatch(login):
+        raise CliError("login must be 1–64 characters [A-Za-z0-9_.@-] starting with a letter or digit")
+    return login
+
+
+def check_new_password(password: str, login: str) -> None:
+    """Правила нового пароля; повідомлення ніколи не містять самого пароля."""
+    if not password:
+        raise CliError("password must not be empty")
+    if len(password) < MIN_PASSWORD_CHARS:
+        raise CliError(f"password must be at least {MIN_PASSWORD_CHARS} characters")
+    if len(password.encode("utf-8")) > BCRYPT_MAX_BYTES:
+        raise CliError(f"password longer than {BCRYPT_MAX_BYTES} bytes is not supported by bcrypt")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in password):
+        raise CliError("password must not contain control characters")
+    if password.casefold() == login.casefold():
+        raise CliError("password must differ from the login")
+
+
+def read_new_password(*, from_stdin: bool, stdin: TextIO | None = None,
+                      prompt: Callable[[str], str] | None = None) -> str:
+    """Пароль з першого рядка stdin (`--password-stdin`) або з термінала без відлуння (getpass, двічі)."""
+    stream = sys.stdin if stdin is None else stdin
+    if from_stdin:
+        if stream.isatty():
+            # readline() з термінала показує набрані символи (відлуння) — пароль лишився б на екрані
+            raise CliError("--password-stdin expects a pipe, not a terminal: "
+                           "run without it to be prompted without echo")
+        line = stream.readline()
+        return line.removesuffix("\n").removesuffix("\r")
+    if not stream.isatty():
+        # getpass без термінала відкотився б до читання stdin з попередженням — робимо це явним
+        raise CliError("no terminal to prompt for the password: pipe it with --password-stdin")
+    ask = prompt or getpass.getpass
+    first = ask("Password: ")
+    if ask("Repeat password: ") != first:
+        raise CliError("passwords do not match")
+    return first
+
+
+def _role(text: str) -> Role:
+    try:
+        return Role(text.strip().lower())
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"role must be one of {', '.join(r.value for r in Role)}, got {text!r}") from None
+
+
+def _login(text: str) -> str:
+    try:
+        return check_login(text)
+    except CliError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
+def _user_public(u: UserRow) -> dict[str, Any]:
+    """Рядок користувача для виводу: без pwd_hash."""
+    created = None if u.created_at_ns is None else datetime.fromtimestamp(
+        u.created_at_ns // 1_000_000_000, tz=UTC).isoformat().replace("+00:00", "Z")
+    return {"id": u.id, "login": u.login, "role": u.role, "created_at": created}
+
+
+async def user_add(uow: UserUow, *, login: str, role: Role, password: str) -> tuple[UserRow, int]:
+    """Створити користувача (bcrypt у UserRepo) і запис аудиту `user.create` в одній транзакції."""
+    check_login(login)
+    check_new_password(password, login)
+    async with uow() as st:
+        if await st.users.get_by_login(login) is not None:
+            raise CliError(f"user {login!r} already exists (use `fuzzhelm user set-role` to change the role)")
+        row = await st.users.create(login, password, role)
+        audit_id = await st.audit.append(
+            "user.create", f"user/{login}", before=None,
+            after={"id": row.id, "login": login, "role": role.value, "_actor": cli_actor()})
+    return row, audit_id
+
+
+async def user_set_role(uow: UserUow, *, login: str, role: Role) -> tuple[str | None, int | None]:
+    """Змінити роль; повертає (стара роль, id запису аудиту | None, якщо роль уже така)."""
+    async with uow() as st:
+        row = await st.users.get_by_login(login)
+        if row is None:
+            raise CliError(f"no user {login!r}")
+        old = row.role
+        if old == role.value:
+            return old, None
+        if old == Role.ADMIN.value:
+            # рядки адміністраторів блокуються до COMMIT: паралельне пониження іншого admin не проскочить
+            admins = await st.users.admins_for_update()
+            if all(a.id != row.id for a in admins):
+                # поки чекали на блокування, роль цього користувача вже змінила інша транзакція
+                raise CliError(f"the role of {login!r} was changed concurrently; run the command again")
+            if len(admins) <= 1:
+                raise CliError(f"refusing to demote {login!r}: it is the last admin "
+                               "(create another admin first)")
+        await st.users.set_role(row.id, role)
+        audit_id = await st.audit.append(
+            "user.set_role", f"user/{login}", before={"id": row.id, "login": login, "role": old},
+            after={"id": row.id, "login": login, "role": role.value, "_actor": cli_actor()})
+    return old, audit_id
+
+
+async def user_list(uow: UserUow) -> tuple[list[UserRow], int]:
+    """Усі користувачі (без хешів) + запис аудиту `user.list` (хто переглядав облікові записи)."""
+    async with uow() as st:
+        rows = await st.users.list()
+        audit_id = await st.audit.append("user.list", "user/*",
+                                         after={"count": len(rows), "_actor": cli_actor()})
+    return rows, audit_id
+
+
+def _unique_violation(e: BaseException) -> bool:
+    return getattr(getattr(e, "orig", None), "sqlstate", None) == SQLSTATE_UNIQUE_VIOLATION
+
+
+async def cmd_user(args: argparse.Namespace) -> int:
+    from sqlalchemy.exc import DBAPIError  # noqa: PLC0415 — sqlalchemy лише для БД-команд
+
+    password = ""
+    if args.user_command == "add":
+        # пароль читаємо ДО підключення до БД: помилка вводу не відкриває з'єднань
+        password = read_new_password(from_stdin=args.password_stdin)
+        check_new_password(password, args.login)
+    uow, close = _db_user_stores(args)
+    try:
+        if args.user_command == "add":
+            row, audit_id = await user_add(uow, login=args.login, role=args.role, password=password)
+            print(f"created user id={row.id} login={row.login!r} role={row.role} (audit_log #{audit_id})")
+        elif args.user_command == "set-role":
+            old, changed_id = await user_set_role(uow, login=args.login, role=args.role)
+            if changed_id is None:
+                print(f"user {args.login!r} already has role {old}; nothing changed")
+            else:
+                print(f"user {args.login!r}: role {old} -> {args.role.value} (audit_log #{changed_id})")
+        else:
+            rows, _ = await user_list(uow)
+            out = [_user_public(u) for u in rows]
+            if args.json:
+                print(json.dumps(out, indent=2, ensure_ascii=False))
+            else:
+                print(f"{'id':>4}  {'login':<24} {'role':<9} created_at")
+                for u in out:
+                    created = u["created_at"] or "—"
+                    print(f"{u['id']:>4}  {u['login'] or '':<24} {u['role'] or '':<9} {created}")
+                print(f"{len(out)} user(s)")
+    except DBAPIError as e:
+        # текст драйвера містить SQL і параметри (bcrypt-хеш) — назовні лише клас і SQLSTATE
+        if _unique_violation(e):
+            raise CliError(f"user {args.login!r} already exists") from None
+        state = getattr(getattr(e, "orig", None), "sqlstate", None)
+        raise CliError(f"database error {type(e).__name__} (SQLSTATE {state})") from None
+    finally:
+        await close()
+    return 0
+
+
 # ================================================================== argparse
 
 
@@ -1884,6 +2115,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("db-stats", help="row counts, candle coverage, gap statuses, journals")
     s.add_argument("--json", action="store_true")
+
+    u = sub.add_parser("user", help="API users: add / list / set-role (every action goes to audit_log)")
+    usub = u.add_subparsers(dest="user_command", required=True, metavar="ACTION")
+    # allow_abbrev=False: інакше argparse мовчки приймав би `--password` / `--pass` як скорочення
+    # `--password-stdin` і читав би пароль з термінала з відлунням
+    ua = usub.add_parser("add", allow_abbrev=False,
+                         help="create a user; the password is read with getpass or from stdin, "
+                              "never from the command line")
+    ua.add_argument("--login", type=_login, required=True)
+    ua.add_argument("--role", type=_role, required=True, help="operator | analyst | auditor | admin")
+    ua.add_argument("--password-stdin", action="store_true",
+                    help="read the password from the first line of stdin, which must be a pipe "
+                         "(for scripts; never from argv)")
+    ul = usub.add_parser("list", allow_abbrev=False,
+                         help="list users (id, login, role, created_at; never password hashes)")
+    ul.add_argument("--json", action="store_true")
+    ur = usub.add_parser("set-role", allow_abbrev=False, help="change the role of an existing user")
+    ur.add_argument("--login", type=_login, required=True)
+    ur.add_argument("--role", type=_role, required=True, help="operator | analyst | auditor | admin")
     return p
 
 
@@ -1895,6 +2145,7 @@ HANDLERS: Final[dict[str, Callable[[argparse.Namespace], Coroutine[Any, Any, int
     "replay-gap": cmd_replay_gap,
     "verify-journal": cmd_verify_journal,
     "db-stats": cmd_db_stats,
+    "user": cmd_user,
 }
 
 

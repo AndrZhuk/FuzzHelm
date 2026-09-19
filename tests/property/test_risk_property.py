@@ -1,4 +1,4 @@
-"""Property-тести ризик-контуру: алгебра вердиктів (§5.11), ланцюг лімітів, CVaR ≥ VaR (§5.13).
+"""Property-тести ризик-контуру: алгебра вердиктів (§5.11), ланцюг лімітів, політика COOLDOWN, CVaR ≥ VaR.
 
 Найменування: tests/property/test_risk_property.py
 Автор: Андрій Жук, 2026.
@@ -14,11 +14,12 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from fuzzhelm.core.enums import Side, VerdictKind
+from fuzzhelm.core.enums import RiskState, Side, VerdictKind
 from fuzzhelm.core.money import setup_decimal_context
-from fuzzhelm.risk.config import load_risk_config
+from fuzzhelm.features.convert import to_float
+from fuzzhelm.risk.config import CooldownPolicy, load_risk_config
 from fuzzhelm.risk.context import RiskContext
-from fuzzhelm.risk.guard import RiskGuard, default_rules
+from fuzzhelm.risk.guard import GuardResult, RiskGuard, default_rules
 from fuzzhelm.risk.journal import RiskJournal
 from fuzzhelm.risk.margin import (
     dtl_atr,
@@ -30,6 +31,8 @@ from fuzzhelm.risk.margin import (
 from fuzzhelm.risk.rules.liquidation_buffer import LiquidationBufferGuard
 from fuzzhelm.risk.var import historical_var_cvar, tail_count
 from fuzzhelm.risk.verdict import ALLOW, VETO, Verdict, compose, exposure, shrink
+from fuzzhelm.sizing.convert import float_to_decimal_exact, to_decimal
+from fuzzhelm.sizing.sizer import PositionSizer, SizingInput, SizingParams
 
 pytestmark = pytest.mark.property
 
@@ -167,3 +170,69 @@ def test_liquidation_guard_alone_never_approves_dtl_below_limit(lev: Decimal, at
     if side is Side.LONG and liq <= 0:
         return                                                  # ліквідація недосяжна
     assert signed_dtl_atr(side, price, liq, atr) >= D(6) - D("1e-20")
+
+
+# ---------------------------------------------------------------- сайзер × κ_mode → ланцюг × політика (RF-01)
+
+_SIZER = PositionSizer(SizingParams.from_config(_CFG.sizing))
+_GUARDS = {p: RiskGuard(default_rules(_CFG), RiskJournal(keep=False), cooldown_policy=p)
+           for p in CooldownPolicy}
+
+
+@settings(max_examples=300)
+@given(
+    u=st.floats(min_value=-1.0, max_value=1.0, allow_nan=False),
+    equity=st.decimals(min_value=D(1_000), max_value=D(1_000_000), places=2),
+    price=st.decimals(min_value=D(10), max_value=D(100_000), places=1),
+    atr_frac=st.floats(min_value=0.0002, max_value=0.02),
+    s_t=st.floats(min_value=0.25, max_value=3.0),
+    # мала поточна позиція того самого боку — частий «приріст наявної позиції» (заборонений у COOLDOWN)
+    cur_frac=st.one_of(st.decimals(min_value=D(-1), max_value=D(1), places=3),
+                       st.decimals(min_value=D("-0.05"), max_value=D("0.05"), places=4)),
+    state=st.sampled_from(list(RiskState)),
+    dd=st.decimals(min_value=D(0), max_value=D("0.11"), places=4),
+)
+def test_risk_chain_never_exceeds_requested_or_kappa_scaled_size(
+        u: float, equity: Decimal, price: Decimal, atr_frac: float, s_t: float, cur_frac: Decimal,
+        state: RiskState, dd: Decimal) -> None:
+    """Сайзер (× κ_mode стану) → ланцюг (6 лімітів + risk_mode) за обох політик COOLDOWN:
+    * дозволений приріст ≤ запитаного, |ціль| ≤ |запит|; нова експозиція ≤ розміру сайзера з κ_mode стану, а
+      той = floor(κ_mode · q_raw(NORMAL)) — тобто ≤ κ_mode·(розмір NORMAL для тих самих входів);
+    * у COOLDOWN приріст можливий лише як новий вхід (base = 0) і лише за scaled_entries; за reduce_only — 0;
+      HALTED — ціль 0 (flatten-all);
+    * політика впливає лише на вердикт risk_mode; reduce_only ніколи не дозволяє більше за scaled_entries."""
+    setup_decimal_context()
+    step = D("0.001")
+    kappa = _CFG.state_machine.kappa_mode[state]
+    atr = to_float(price) * atr_frac
+    common = {"u_final": u, "equity": equity, "price": price, "atr": atr, "s_t": s_t, "step_size": step,
+              "min_notional": D(0)}
+    sized = _SIZER.size(SizingInput(kappa_mode=to_float(kappa), **common))
+    normal = _SIZER.size(SizingInput(kappa_mode=1.0, **common))
+    if kappa > 0:
+        assert sized.qty == to_decimal(to_float(kappa) * normal.q_raw, step)
+        assert sized.qty <= float_to_decimal_exact(normal.q_raw) * kappa
+    side = (u > 0) - (u < 0)
+    target = sized.qty * side
+    cur = (equity * cur_frac / price).quantize(step)
+    atr_d = to_decimal(atr, D("0.0001"))
+    ctx = RiskContext(ts_ns=0, instrument="X", price=price, equity=equity, current_qty=cur, target_qty=target,
+                      atr=atr_d, stop_distance=2 * atr_d, drawdown=dd, risk_state=state, step_size=step)
+    res = {p: g.evaluate(ctx) for p, g in _GUARDS.items()}
+    for pol, r in res.items():
+        assert 0 <= r.increase_approved <= r.increase_requested == ctx.increase_qty
+        assert abs(r.approved_qty) <= abs(target) or abs(r.approved_qty) <= abs(cur)
+        if r.increase_approved > 0:
+            assert abs(r.approved_qty) <= sized.qty                  # ≤ κ_mode-масштабованого розміру
+            assert state is not RiskState.HALTED
+            if state is RiskState.COOLDOWN:
+                assert pol is CooldownPolicy.SCALED_ENTRIES and ctx.base_qty == 0
+        if state is RiskState.HALTED:
+            assert r.flatten_all and r.approved_qty == 0
+    lit, scaled = res[CooldownPolicy.REDUCE_ONLY], res[CooldownPolicy.SCALED_ENTRIES]
+    assert lit.increase_approved <= scaled.increase_approved
+    def rest(r: GuardResult) -> list[tuple[object, ...]]:
+        return [(a.rule, a.verdict, a.observed, a.limit) for a in r.records if a.rule != "risk_mode"]
+    assert rest(lit) == rest(scaled)
+    if state is not RiskState.COOLDOWN:
+        assert lit.approved_qty == scaled.approved_qty                # поза COOLDOWN політика не діє

@@ -15,23 +15,38 @@ services:
       timeout: 3s
       retries: 30
   api:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-}
     command: ["uvicorn", "fuzzhelm.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file:
       - path: .env
         required: false
     environment:
       FUZZHELM_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@db:5432/fuzzhelm
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]   # лише localhost: API з дефолтним JWT-секретом не світимо в LAN
+    # ./config — спільний з worker: PUT /risk/limits атомарно замінює config/risk_limits.yaml у цій теці,
+    # а воркер після NOTIFY fuzzhelm_control перечитує той самий файл (гаряча заміна лімітів, PLAT-02).
+    # ./data — ставки фандингу для POST /backtests (той самий dataset_hash, що в CLI, API-15).
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data:ro
     depends_on: {db: {condition: service_healthy}}
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-}
     command: ["python", "-m", "fuzzhelm.workers.trading_worker", "--profile", "replay"]
     env_file:
       - path: .env
         required: false
     environment:
       FUZZHELM_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@db:5432/fuzzhelm
+    # той самий ./config, що в api, лише для читання: воркер ліміти не пише, а бачить кожну заміну API
+    volumes:
+      - ./config:/app/config:ro
     depends_on: {db: {condition: service_healthy}}
   ui:
     profiles: ["ui"]

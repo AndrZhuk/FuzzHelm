@@ -96,6 +96,17 @@ class UserRepo:
     async def set_role(self, user_id: int, role: Role | str) -> None:
         await self.s.execute(update(_T).where(_T.c.id == user_id).values(role=Role(role).value))
 
+    async def admins_for_update(self) -> list[UserRow]:
+        """Адміністратори з блокуванням їхніх рядків до кінця транзакції (SELECT … FOR UPDATE, за id).
+
+        Без блокування дві паралельні зміни ролі (READ COMMITTED) обидві бачили б «лишається ще один admin» і
+        разом прибрали б останнього. З блокуванням друга чекає на першу, а тоді PostgreSQL перечитує умову
+        `role = 'admin'` для оновлених рядків і бачить уже меншу множину. Порядок за id — без взаємоблокувань.
+        """
+        q = select(_T).where(_T.c.role == Role.ADMIN.value).order_by(_T.c.id).with_for_update()
+        res = await self.s.execute(q)
+        return [from_mapping(UserRow, m) for m in res.mappings()]
+
     async def list(self) -> list[UserRow]:
         res = await self.s.execute(select(_T).order_by(_T.c.id))
         return [from_mapping(UserRow, m) for m in res.mappings()]

@@ -21,11 +21,11 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+import jwt
 import numpy as np
 import pytest
 import respx
 import yaml
-from jose import jwt
 from pydantic import SecretStr
 from sqlalchemy.exc import DBAPIError
 from tests.helpers.api_fakes import JWT_SECRET, NS_PER_MIN, T0_NS, MemoryDb, memory_services
@@ -492,12 +492,12 @@ def test_matrix_encodes_brief_rules() -> None:
 async def test_expired_tampered_and_alg_none_tokens_are_rejected(env: Env) -> None:
     good = env.tokens[Role.ANALYST]
     header, payload, sig = good.split(".")
-    claims = jwt.get_unverified_claims(good)
+    claims = jwt.decode(good, options={"verify_signature": False})
     # підвищення ролі в payload: підпис не сходиться
     forged_payload = base64.urlsafe_b64encode(json.dumps({**claims, "role": "admin"}).encode()).rstrip(b"=")
     forged = f"{header}.{forged_payload.decode()}.{sig}"
     # той самий payload, підписаний чужим ключем
-    wrong_key = jwt.encode({**claims, "role": "admin"}, "attacker-key", algorithm="HS256")
+    wrong_key = jwt.encode({**claims, "role": "admin"}, "attacker-key-" + "k" * 32, algorithm="HS256")
     # alg=none без підпису (класична атака на бібліотеки JWT)
     none_header = base64.urlsafe_b64encode(b'{"alg":"none","typ":"JWT"}').rstrip(b"=").decode()
     none_alg = f"{none_header}.{forged_payload.decode()}."
@@ -663,6 +663,9 @@ async def test_out_of_range_integers_are_422_not_500(env: Env) -> None:
         f"/dq/score?instrument_id={i32}",
         f"/runs/{run_id}/equity?from_ns={big}",
         f"/risk/events?since_ns={big}",
+        f"/risk/events?until_ns={i64}",
+        f"/risk/events?cursor={i64}:1",
+        f"/risk/events?cursor=1:{i64}",
         f"/decisions/{i64}/explain",
         f"/strategies/demo/versions/{i32}",
         f"/audit?user_id={i32}",
@@ -950,14 +953,89 @@ async def test_risk_events_keep_exact_shrink_factor(env: Env) -> None:
         observed=Decimal("6.5"),
         limit_value=Decimal("5"),
     )
-    events = (await env.client.get("/risk/events", headers=env.h(Role.ANALYST))).json()
+    events = (await env.client.get("/risk/events", headers=env.h(Role.ANALYST))).json()["items"]
     shrink = next(e for e in events if e["rule"] == "max_gross_leverage")
     assert shrink["factor"] == "0.99996"  # колонка NUMERIC(6,4) дала б 1.0000
     assert env.db.state.risk_events[0].factor == Decimal("1.0000")
     vetoes = (
         await env.client.get("/risk/events", params={"only": "veto"}, headers=env.h(Role.ANALYST))
-    ).json()
+    ).json()["items"]
     assert [v["rule"] for v in vetoes] == ["stale_data"] and vetoes[0]["payload"] == {}
+
+
+async def walk_risk_events(env: Env, params: Mapping[str, Any]) -> tuple[list[int], list[dict[str, Any]]]:
+    """Пройти всі сторінки /risk/events курсором; повертає id записів і самі сторінки."""
+    ids: list[int] = []
+    pages: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        q = {**params, **({"cursor": cursor} if cursor is not None else {})}
+        r = await env.client.get("/risk/events", params=q, headers=env.h(Role.AUDITOR))
+        assert r.status_code == 200, r.text
+        page = r.json()
+        pages.append(page)
+        ids += [e["id"] for e in page["items"]]
+        cursor = page["next_cursor"]
+        if cursor is None:
+            return ids, pages
+        assert len(pages) < 100, "pagination does not terminate"
+
+
+async def test_risk_events_keyset_pages_reach_every_record_with_until_ns(env: Env) -> None:
+    """Довгий журнал: кожен запис досяжний курсором (ts, id) без пропусків і дублікатів, зокрема при рівних
+    ts і при дописуванні нових записів під час гортання; until_ns — виключна верхня межа, since_ns —
+    включна."""
+    run_id = add_run(env.db, kind=RunKind.PAPER, status=RunStatus.RUNNING)
+    risk = env.db.repos().risk
+    rows = [
+        risk.add(
+            run_id=run_id,
+            ts_ns=T0_NS + (i // 3) * NS_PER_MIN,  # по 3 записи на один ts: порядок усередині — за id
+            rule="stale_data" if i % 2 else "max_daily_loss",
+            verdict=VerdictKind.VETO if i % 5 == 0 else VerdictKind.ALLOW,
+            factor=Decimal(0) if i % 5 == 0 else Decimal(1),
+        )
+        for i in range(25)
+    ]
+    newest_first = [r.id for r in sorted(rows, key=lambda r: (r.ts_ns or 0, r.id), reverse=True)]
+    ids, pages = await walk_risk_events(env, {"limit": 4})
+    assert ids == newest_first and len(pages) == 7  # 6 × 4 + 1, без порожньої останньої сторінки
+    assert all(p["page_size"] == 4 and p["run_id"] == str(run_id) for p in pages)
+    assert [len(p["items"]) for p in pages] == [4] * 6 + [1]
+    first = pages[0]["items"][-1]
+    assert pages[0]["next_cursor"] == f"{first['ts_ns']}:{first['id']}"
+    ids5, pages5 = await walk_risk_events(env, {"limit": 5})
+    assert ids5 == newest_first and len(pages5) == 5 and pages5[-1]["next_cursor"] is None
+    # запис, дописаний під час гортання, не зсуває сторінок: старші сторінки ті самі, дублікатів немає
+    p1 = (await env.client.get("/risk/events", params={"limit": 4}, headers=env.h(Role.ANALYST))).json()
+    risk.add(run_id=run_id, ts_ns=T0_NS + 60 * NS_PER_MIN, rule="stale_data", verdict=VerdictKind.VETO)
+    rest, _ = await walk_risk_events(env, {"limit": 4, "cursor": p1["next_cursor"]})
+    assert [e["id"] for e in p1["items"]] + rest == newest_first
+    # вікно часу: until_ns — виключно, since_ns — включно; ранні записи досяжні без гортання всього журналу
+    lo, hi = T0_NS + 2 * NS_PER_MIN, T0_NS + 5 * NS_PER_MIN
+    in_window = [r.id for r in rows if lo <= (r.ts_ns or 0) < hi]
+    got, _ = await walk_risk_events(env, {"since_ns": lo, "until_ns": hi, "limit": 2})
+    assert sorted(got) == sorted(in_window) and len(got) == 9
+    early, _ = await walk_risk_events(env, {"until_ns": T0_NS + NS_PER_MIN, "limit": 2000})
+    assert sorted(early) == sorted(r.id for r in rows[:3])
+    # фільтри діють разом із курсором і вікном (очікування — з усіх 26 записів сховища)
+    def expected(pred: Any) -> list[int]:
+        ordered = sorted(env.db.state.risk_events, key=lambda r: (r.ts_ns or 0, r.id), reverse=True)
+        return [r.id for r in ordered if pred(r)]
+
+    vetoes, _ = await walk_risk_events(env, {"only": "veto", "until_ns": hi, "limit": 2})
+    assert vetoes == expected(lambda r: r.verdict == "VETO" and (r.ts_ns or 0) < hi) == [11, 6, 1]
+    rule_ids, _ = await walk_risk_events(env, {"rule": "stale_data", "limit": 3})
+    assert rule_ids == expected(lambda r: r.rule == "stale_data") and len(rule_ids) == 13
+    none = await env.client.get(
+        "/risk/events", params={"only": "transitions", "rule": "stale_data"}, headers=env.h(Role.ANALYST)
+    )
+    assert none.status_code == 200 and none.json()["items"] == [] and none.json()["next_cursor"] is None
+    for bad in ("abc", "1:2:3", "-1:5", "1", ":1", f"{2**63}:1"):
+        r = await env.client.get("/risk/events", params={"cursor": bad}, headers=env.h(Role.ANALYST))
+        assert r.status_code == 422, (bad, r.text)
+    too_big = await env.client.get("/risk/events", params={"limit": 2001}, headers=env.h(Role.ANALYST))
+    assert too_big.status_code == 422
 
 
 async def test_limits_rejected_with_path_and_conflict_on_stale_hash(env: Env) -> None:

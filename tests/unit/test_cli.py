@@ -1,5 +1,6 @@
 """CLI `fuzzhelm`: розбір аргументів, dry-run без мережі й БД, вікно датасету, план добору, крос-звірка
-зі збережених сирих відповідей, нормалізація і файли історії фінансування, REST-ендпоінти хвилі 2.
+зі збережених сирих відповідей, нормалізація і файли історії фінансування, REST-ендпоінти хвилі 2,
+керування користувачами (`fuzzhelm user`) на репозиторіях у пам'яті.
 
 Найменування: tests/unit/test_cli.py
 Призначення: усе, що CLI робить БЕЗ мережі й БД, — детерміновано і швидко; мережеві шляхи — лише через respx.
@@ -9,7 +10,16 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import copy
+import getpass
 import gzip
+import io
+import json
+import logging
+import sys
+from collections.abc import AsyncIterator, Iterator, Mapping
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -20,11 +30,12 @@ import numpy as np
 import orjson
 import pytest
 import respx
+from passlib.context import CryptContext
 
 from fuzzhelm import cli
 from fuzzhelm.backtest.manifest import dataset_hash
 from fuzzhelm.core.clock import ManualClock
-from fuzzhelm.core.enums import Venue
+from fuzzhelm.core.enums import Role, Venue
 from fuzzhelm.core.errors import NormalizationError
 from fuzzhelm.ingest.funding import (
     fetch_funding_history,
@@ -38,6 +49,8 @@ from fuzzhelm.ingest.ratelimit import binance_request_bucket, request_weight
 from fuzzhelm.ingest.rest_client import BinanceRestClient
 from fuzzhelm.ingest.retry import RetryPolicy
 from fuzzhelm.ingest.symbols import BTC_USDT_PERP, ETH_USDT_PERP
+from fuzzhelm.storage.repositories import UserRow
+from fuzzhelm.storage.repositories.user import hash_password, verify_password
 
 ROOT = Path(__file__).resolve().parents[2]
 REST = ROOT / "fixtures" / "rest"
@@ -86,6 +99,16 @@ def test_parser_backfill_defaults_and_symbol_parsing() -> None:
     ["backfill", "--limit", "1"], ["backfill", "--limit", "1501"],
     ["crosscheck", "--threshold-bps", "-1"], ["crosscheck", "--threshold-bps", "NaN"],
     ["verify-journal", "--run-id", "not-a-uuid"], ["calibrate", "--is-days", "0"], [], ["nope"],
+    ["user"], ["user", "add", "--login", "a"], ["user", "add", "--role", "admin"],
+    ["user", "add", "--login", "bad login", "--role", "admin"],
+    ["user", "add", "--login", "a", "--role", "root"],
+    ["user", "add", "--login", "-x", "--role", "admin"], ["user", "set-role", "--login", "a"],
+    # пароля в argv не буває: такого прапорця немає (він був би видний у `ps` та історії оболонки)
+    ["user", "add", "--login", "a", "--role", "admin", "--password", "s3cret-pass"],
+    # і скорочення `--password-stdin` не приймаються (інакше `--password` мовчки вмикав би читання stdin)
+    ["user", "add", "--login", "a", "--role", "admin", "--password"],
+    ["user", "add", "--login", "a", "--role", "admin", "--pass"],
+    ["user", "list", "--js"],
 ])
 def test_parser_rejects_bad_arguments(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as e:
@@ -98,9 +121,15 @@ def test_every_subcommand_has_a_handler_and_parses() -> None:
     p = cli.build_parser()
     sub = next(a for a in p._actions if isinstance(a, argparse._SubParsersAction))
     assert set(sub.choices) == set(cli.HANDLERS) == {
-        "backfill", "crosscheck", "fetch-funding", "calibrate", "replay-gap", "verify-journal", "db-stats"}
-    for name in cli.HANDLERS:
+        "backfill", "crosscheck", "fetch-funding", "calibrate", "replay-gap", "verify-journal", "db-stats",
+        "user"}
+    for name in set(cli.HANDLERS) - {"user"}:
         assert p.parse_args([name]).command == name
+    a = p.parse_args(["user", "add", "--login", "olena", "--role", "Operator", "--password-stdin"])
+    assert (a.command, a.user_command, a.login, a.role, a.password_stdin) == (
+        "user", "add", "olena", Role.OPERATOR, True)
+    assert p.parse_args(["user", "list", "--json"]).json is True
+    assert p.parse_args(["user", "set-role", "--login", "olena", "--role", "admin"]).role is Role.ADMIN
     rid = "7d441046-5916-59d6-9ba7-3971dc3b1caa"
     assert str(p.parse_args(["verify-journal", "--run-id", rid]).run_id) == rid
     assert p.parse_args(["--database-url", "postgresql+asyncpg://x@h/db", "db-stats", "--json"]).json is True
@@ -612,3 +641,253 @@ def test_funding_columns_enter_the_backtest_dataset_hash() -> None:
     other = type(ds).from_arrays(ds.instrument, **base, funding_t_ns=cols2["funding_t_ns"],
                                  funding_rate=cols2["funding_rate"])
     assert other.dataset_hash != with_f.dataset_hash
+
+
+# ================================================================== user (без БД: репозиторії в пам'яті)
+
+FAST_BCRYPT = CryptContext(schemes=["bcrypt"], bcrypt__rounds=4)   # швидкий bcrypt лише для тестів
+PASSWORD = "Str0ng-pass-ph4se"
+
+
+class _MemUsers:
+    def __init__(self) -> None:
+        self.rows: dict[int, UserRow] = {}
+
+    async def create(self, login: str, password: str, role: Role | str) -> UserRow:
+        row = UserRow(id=len(self.rows) + 1, login=login, pwd_hash=hash_password(password, FAST_BCRYPT),
+                      role=Role(role).value, created_at_ns=1_789_776_000 * 10**9)
+        self.rows[row.id] = row
+        return row
+
+    async def get_by_login(self, login: str) -> UserRow | None:
+        return next((u for u in self.rows.values() if u.login == login), None)
+
+    async def set_role(self, user_id: int, role: Role | str) -> None:
+        self.rows[user_id] = replace(self.rows[user_id], role=Role(role).value)
+
+    async def admins_for_update(self) -> list[UserRow]:
+        return [self.rows[k] for k in sorted(self.rows) if self.rows[k].role == Role.ADMIN.value]
+
+    async def list(self) -> list[UserRow]:
+        return [self.rows[k] for k in sorted(self.rows)]
+
+
+class _MemAudit:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    async def append(self, action: str, target: str, *, before: Mapping[str, Any] | None = None,
+                     after: Mapping[str, Any] | None = None, user_id: int | None = None,
+                     ip: str | None = None, ts_ns: int | None = None) -> int:
+        self.rows.append({"id": len(self.rows) + 1, "action": action, "target": target,
+                          "before": None if before is None else dict(before),
+                          "after": None if after is None else dict(after), "user_id": user_id, "ip": ip})
+        return len(self.rows)
+
+
+class UserDb:
+    """Сховище користувачів і аудиту з транзакційною семантикою: виняток усередині uow — відкат обох."""
+
+    def __init__(self) -> None:
+        self.users = _MemUsers()
+        self.audit = _MemAudit()
+        self.opened = 0
+        self.closed = 0
+
+    def stores(self, _args: argparse.Namespace) -> tuple[cli.UserUow, Any]:
+        self.opened += 1
+
+        @contextlib.asynccontextmanager
+        async def uow() -> AsyncIterator[cli.UserStores]:
+            snap = (copy.deepcopy(self.users.rows), copy.deepcopy(self.audit.rows))
+            try:
+                yield cli.UserStores(self.users, self.audit)
+            except BaseException:
+                self.users.rows, self.audit.rows = snap
+                raise
+
+        async def close() -> None:
+            self.closed += 1
+
+        return uow, close
+
+    def actions(self) -> list[str]:
+        return [r["action"] for r in self.audit.rows]
+
+
+class _Tty(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.fixture
+def user_db(monkeypatch: pytest.MonkeyPatch) -> UserDb:
+    db = UserDb()
+    monkeypatch.setattr(cli, "_db_user_stores", db.stores)
+    return db
+
+
+@pytest.fixture
+def no_getpass(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_: Any, **__: Any) -> str:
+        raise AssertionError("getpass must not be called")
+
+    monkeypatch.setattr(getpass, "getpass", boom)
+
+
+def _add(login: str, role: str, password: str, monkeypatch: pytest.MonkeyPatch) -> int:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(password + "\n"))
+    return cli.main(["user", "add", "--login", login, "--role", role, "--password-stdin"])
+
+
+def test_user_add_reads_password_from_stdin_never_echoes_or_logs(
+        user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    assert _add("olena", "admin", PASSWORD, monkeypatch) == 0
+    out, err = capsys.readouterr()
+    assert "created user id=1 login='olena' role=admin (audit_log #1)" in out
+    (user,) = user_db.users.rows.values()
+    assert user.pwd_hash is not None and user.pwd_hash.startswith("$2b$04$")
+    assert verify_password(PASSWORD, user.pwd_hash, FAST_BCRYPT)            # збережено лише bcrypt-хеш
+    audit_text = json.dumps(user_db.audit.rows, ensure_ascii=False)
+    for text in (out, err, caplog.text, audit_text):
+        assert PASSWORD not in text and user.pwd_hash not in text
+    (rec,) = user_db.audit.rows
+    assert (rec["action"], rec["target"], rec["user_id"], rec["before"]) == (
+        "user.create", "user/olena", None, None)
+    assert rec["after"]["role"] == "admin" and rec["after"]["id"] == 1
+    assert rec["after"]["_actor"]["login"] == "cli" and rec["after"]["_actor"]["role"] is None
+    assert user_db.opened == user_db.closed == 1                             # engine закрито
+
+
+def test_user_add_prompts_twice_without_echo_and_rejects_mismatch(
+        user_db: UserDb, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    answers: Iterator[str] = iter([PASSWORD, PASSWORD, PASSWORD, PASSWORD + "x"])
+    prompts: list[str] = []
+
+    def fake_getpass(prompt: str = "Password: ") -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    monkeypatch.setattr(getpass, "getpass", fake_getpass)
+    monkeypatch.setattr(sys, "stdin", _Tty(""))
+    assert cli.main(["user", "add", "--login", "ivan", "--role", "analyst"]) == 0
+    assert prompts == ["Password: ", "Repeat password: "]
+    assert cli.main(["user", "add", "--login", "petro", "--role", "analyst"]) == 2
+    out, err = capsys.readouterr()
+    assert "passwords do not match" in err and PASSWORD not in out + err
+    assert [u.login for u in user_db.users.rows.values()] == ["ivan"] and user_db.actions() == ["user.create"]
+    assert user_db.opened == 1                  # невдалий ввід пароля не відкриває з'єднання з БД
+
+
+def test_user_add_without_terminal_requires_password_stdin(
+        user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(PASSWORD + "\n"))       # pipe, але без --password-stdin
+    assert cli.main(["user", "add", "--login", "ivan", "--role", "analyst"]) == 2
+    out, err = capsys.readouterr()
+    assert "--password-stdin" in err and PASSWORD not in out + err
+    assert not user_db.users.rows and user_db.opened == 0
+
+
+def test_user_add_password_stdin_on_terminal_is_refused_not_echoed(
+        user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """`--password-stdin`, коли stdin — термінал: readline() показав би набраний пароль на екрані, тож
+    команда відмовляє (exit 2) і нічого не читає зі stdin, не відкриває БД."""
+    tty = _Tty(PASSWORD + "\n")
+    monkeypatch.setattr(sys, "stdin", tty)
+    assert cli.main(["user", "add", "--login", "ivan", "--role", "analyst", "--password-stdin"]) == 2
+    out, err = capsys.readouterr()
+    assert "expects a pipe" in err and PASSWORD not in out + err
+    assert tty.tell() == 0                                  # зі stdin не прочитано жодного символу
+    assert not user_db.users.rows and not user_db.audit.rows and user_db.opened == 0
+
+
+@pytest.mark.parametrize("bad", [
+    "", "short7!", "x" * 73, "пароль-ю" * 5, "with\ttab-1234", "Olena-Login",
+])
+def test_user_add_rejects_weak_or_unhashable_passwords(
+        bad: str, user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """Порожній, < 8 символів, > 72 байтів UTF-8 (bcrypt обрізав би; кирилиця — 2 байти на літеру), з
+    керівними символами, рівний логіну — відхиляються до підключення до БД; сам пароль у повідомлення
+    не потрапляє."""
+    assert _add("olena-login", "operator", bad, monkeypatch) == 2
+    out, err = capsys.readouterr()
+    assert err.startswith("fuzzhelm user: password") and (not bad or bad not in out + err)
+    assert not user_db.users.rows and not user_db.audit.rows and user_db.opened == 0
+
+
+def test_user_add_duplicate_login_is_a_clean_error(
+        user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    assert _add("olena", "operator", PASSWORD, monkeypatch) == 0
+    assert _add("olena", "admin", PASSWORD + "-2", monkeypatch) == 2
+    assert "already exists" in capsys.readouterr().err
+    assert [u.role for u in user_db.users.rows.values()] == ["operator"]
+    assert user_db.actions() == ["user.create"]
+
+
+def test_user_set_role_audits_before_after_and_keeps_last_admin(
+        user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    assert _add("root", "admin", PASSWORD, monkeypatch) == 0
+    assert _add("ann", "analyst", PASSWORD, monkeypatch) == 0
+    assert cli.main(["user", "set-role", "--login", "ann", "--role", "operator"]) == 0
+    rec = user_db.audit.rows[-1]
+    assert (rec["action"], rec["target"]) == ("user.set_role", "user/ann")
+    assert rec["before"] == {"id": 2, "login": "ann", "role": "analyst"}
+    assert rec["after"]["role"] == "operator" and rec["after"]["_actor"]["login"] == "cli"
+    assert "role analyst -> operator" in capsys.readouterr().out
+    # та сама роль — нічого не змінюється і не пишеться
+    assert cli.main(["user", "set-role", "--login", "ann", "--role", "operator"]) == 0
+    assert "nothing changed" in capsys.readouterr().out and len(user_db.audit.rows) == 3
+    # останнього адміністратора понизити не можна (інакше ліміти й kill-switch стали б недоступні)
+    assert cli.main(["user", "set-role", "--login", "root", "--role", "analyst"]) == 2
+    assert "last admin" in capsys.readouterr().err and user_db.users.rows[1].role == "admin"
+    assert cli.main(["user", "set-role", "--login", "ann", "--role", "admin"]) == 0
+    assert cli.main(["user", "set-role", "--login", "root", "--role", "auditor"]) == 0
+    assert user_db.users.rows[1].role == "auditor"
+    assert cli.main(["user", "set-role", "--login", "ghost", "--role", "admin"]) == 2
+    assert "no user 'ghost'" in capsys.readouterr().err
+    assert user_db.actions() == ["user.create"] * 2 + ["user.set_role"] * 3
+
+
+def test_user_set_role_rechecks_target_after_locking_admins(
+        user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """Поки set-role чекав на блокування рядків admin, інша транзакція вже понизила цього ж користувача:
+    після блокування ціль перевіряється ще раз — exit 2 без зміни і без запису аудиту."""
+    assert _add("root", "admin", PASSWORD, monkeypatch) == 0
+    assert _add("second", "admin", PASSWORD, monkeypatch) == 0
+    real = user_db.users.admins_for_update
+
+    async def after_concurrent_demotion() -> list[UserRow]:
+        user_db.users.rows[2] = replace(user_db.users.rows[2], role=Role.ANALYST.value)
+        return await real()
+
+    monkeypatch.setattr(user_db.users, "admins_for_update", after_concurrent_demotion)
+    capsys.readouterr()
+    assert cli.main(["user", "set-role", "--login", "second", "--role", "auditor"]) == 2
+    assert "changed concurrently" in capsys.readouterr().err
+    assert user_db.actions() == ["user.create", "user.create"]
+
+
+def test_user_list_shows_no_hashes_and_is_audited(
+        user_db: UserDb, no_getpass: None, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    assert _add("root", "admin", PASSWORD, monkeypatch) == 0
+    assert _add("ann", "auditor", PASSWORD, monkeypatch) == 0
+    capsys.readouterr()
+    assert cli.main(["user", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "root" in out and "auditor" in out and "2 user(s)" in out and "$2b$" not in out
+    assert cli.main(["user", "list", "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [(r["id"], r["login"], r["role"]) for r in rows] == [(1, "root", "admin"), (2, "ann", "auditor")]
+    assert all(set(r) == {"id", "login", "role", "created_at"} for r in rows)
+    assert rows[0]["created_at"] == "2026-09-19T00:00:00Z"
+    assert user_db.actions()[-2:] == ["user.list", "user.list"]
+    assert user_db.audit.rows[-1]["after"]["count"] == 2

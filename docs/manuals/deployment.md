@@ -47,19 +47,49 @@ fuzzhelm -Atc "select version_num from alembic_version"`). Застосунок 
 (`make_engine(role=…)`): UPDATE/DELETE журналу подій і аудиту відхиляє СУБД. Для продакшн-розгортання окрема
 LOGIN-роль `IN ROLE fuzzhelm_app` створюється адміністратором **[ЛЮДИНА]** (`docs/deviations.d/storage.md` ST-02).
 
-**Гаряча заміна лімітів у контейнерах.** PUT /risk/limits атомарно переписує `config/risk_limits.yaml` у файловій системі
-процесу API і будить воркер каналом `fuzzhelm_control`, а воркер перечитує СВІЙ `config/risk_limits.yaml`. З хоста (API і
-воркер в одному дереві) це працює; у поточному `docker-compose.yml` кожен контейнер має власну копію `config/` з образу,
-тож зміна до воркера не дійде. Обхід — спільний bind-mount для обох сервісів:
+**Гаряча заміна лімітів у контейнерах.** PUT /risk/limits атомарно переписує `config/risk_limits.yaml` (tmp →
+`os.replace` у тій самій теці) і будить воркер каналом `fuzzhelm_control`; воркер перечитує `config/risk_limits.yaml`.
+З хвилі 3 обидва контейнери бачать **один** файл — bind-mount теки `./config` хоста (PLAT-02):
 ```yaml
-  api:    {volumes: ["./config:/app/config"]}
-  worker: {volumes: ["./config:/app/config:ro"]}
+  api:    {volumes: ["./config:/app/config", "./data:/app/data:ro"]}   # api пише ліміти; data — фандинг для POST /backtests
+  worker: {volumes: ["./config:/app/config:ro"]}                        # воркер лише читає
 ```
-(у compose цієї хвилі не внесено — перевірка всіх сервісів у контейнерах ще попереду; `docs/deviations.d/workers.md`).
+Наслідок: PUT /risk/limits у контейнері змінює `config/risk_limits.yaml` робочого дерева хоста (це той самий файл, що
+в git) — так і задумано: зміна видна воркеру, `git diff` і `audit_log`.
 
-Образи `api`/`worker` будуються з `Dockerfile` (`uv sync --frozen --no-dev`, у образ копіюються `src`, `config`,
-`alembic`, `fixtures`). Збирання образу й запуск усіх чотирьох сервісів однією командою в цій хвилі **не перевірялися**
-(перевірено: `db`, API та воркери з хоста; `docker compose exec` без `.env` — працює).
+## 3a. Збирання образів і запуск у контейнерах (перевірено 2026-09-19)
+
+Образи `api`/`worker` будуються з `Dockerfile` (`uv sync --frozen --no-dev`; у образ копіюються `src`, `config`,
+`alembic`, `fixtures`); `.dockerignore` не пускає в контекст `.env`, `.venv`, `.git`, тести й документацію.
+```bash
+docker compose build api worker                 # 85 с з порожнім кешем; контекст 15.57 МБ; образи по 852 МБ
+docker compose up -d --build db api worker      # db не перестворюється: хеш конфігурації db не змінився
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/docs      # 200
+docker compose logs worker                      # JSON-підсумок реплею
+docker compose stop api worker                  # db лишається запущеною
+```
+Фактичний результат (2026-09-19, 12:45 UTC): `db` — той самий контейнер `fuzzhelm-db-1` («Up 17 hours», volume
+`fuzzhelm_pgdata` не чіпався; `docker compose config --hash db` = мітка контейнера `db19a781…`). `api`: `/healthz` 200,
+`/docs` 200, `/openapi.json` 200 (OpenAPI 3.1.0, 22 шляхи, у `/risk/events` — `until_ns`, `cursor`, відповідь
+`RiskEventPageOut`), захищений маршрут без токена — 401; у журналі старту — попередження про типовий
+`FUZZHELM_JWT_SECRET` (`.env` на стенді немає). `worker` (профіль replay, ×30): прогрів 523 барами з БД, 9 111 кадрів,
+45 барів, 2 виконання, 1 закрита угода, режим NORMAL, капітал 10000 → 9992.72088640, `status: DONE`, вихід з кодом 0
+за 93 с (12:45:47 → 12:47:20 UTC); `equity_hash d0f45aa3…` збігся з реплеєм `c1dbbdf6…`, запущеним раніше з хоста
+(відтворюваність хост ↔ контейнер). Спільний `config/`: sha256 `risk_limits.yaml` однаковий на хості й в обох
+контейнерах (`a5d212b57856aec9…`); в `api` тека `config` rw, `data` ro, у `worker` `config` ro (`touch` → «Read-only
+file system»). Після перевірки `docker compose stop api worker`; `db` працює далі.
+
+Обмеження перевірки: (1) наскрізно «PUT /risk/limits у контейнері → воркер перечитав» не проганялось — у робочій БД
+немає адміністратора (створює людина: `docker compose run --rm -it api fuzzhelm user add --login <логін> --role admin`
+або `uv run fuzzhelm user add …` з хоста). (2) Прогони з контейнера мають `run.git_sha = NULL`: у образі немає `.git`,
+а `backtest.manifest` бере SHA лише з `git rev-parse` (відкрите питання власнику `backtest`: змінна оточення / build-arg).
+(3) Якщо `docker compose build` зависає на `load metadata for docker.io/library/python:3.12-slim`, винен
+credential-helper Docker Desktop у неінтерактивній сесії (`docker-credential-desktop get` не повертається). Обхід для
+публічних образів — тимчасовий `DOCKER_CONFIG` без `credsStore`:
+```bash
+mkdir -p /tmp/dcfg && echo '{"auths": {}}' > /tmp/dcfg/config.json && ln -sfn ~/.docker/cli-plugins /tmp/dcfg/cli-plugins
+DOCKER_CONFIG=/tmp/dcfg DOCKER_HOST=unix://$HOME/.docker/run/docker.sock docker compose build api worker
+```
 
 ## 4. Тести
 
