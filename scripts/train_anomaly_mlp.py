@@ -180,8 +180,11 @@ def write_md(main: EvalReport, extra: list[EvalReport], meta: dict[str, Any], *,
         f"o, t_ns, v) `{meta['train_hash']}`.",
     ]
     if cal is not None and meta["source"].startswith("робоча"):
+        # FIN-05: МФ калібровано на BTCUSDT; для іншого символу збіг хешів не очікується
+        tail = ("це ті самі бари." if same == "збігається"
+                else "МФ калібровано на іншому наборі барів, тож збіг і не очікується.")
         lines.append(f"  Хеш {same} з хешем вікна калібрування МФ у `data/calibration_manifest.json` "
-                     f"(`{cal[:16]}…`): це ті самі бари.")
+                     f"(`{cal[:16]}…`): {tail}")
     lines += [
         f"* Відкладений відрізок (held-out): {meta['holdout_label']} — {n_ho} барів; `dataset_hash` "
         f"`{meta['holdout_hash']}`. На ньому нічого не підбирається: архітектура 8-3-8 задана наперед "
@@ -286,7 +289,8 @@ def train_production_model(bars: list[Bar], normal: list[bool], n_train: int, n_
 
 def build_artifact(model: AnomalyAutoencoder, train_X: np.ndarray, excluded: int, meta: dict[str, Any],
                    main: EvalReport, extra: list[EvalReport], *, arch: str, seed: int, command: str,
-                   window_ms: tuple[int, int] | None) -> dict[str, Any]:
+                   window_ms: tuple[int, int] | None, report: str = "docs/figures/quality_mlp_rocauc.md"
+                   ) -> dict[str, Any]:
     import sklearn  # noqa: PLC0415
 
     other = next(a for a in ARCHITECTURES if a != arch)
@@ -309,7 +313,7 @@ def build_artifact(model: AnomalyAutoencoder, train_X: np.ndarray, excluded: int
         training["from_ms"], training["to_ms"] = window_ms
     evaluation: dict[str, Any] = {
         "procedure": "fuzzhelm.quality.anomaly_eval.evaluate_injections",
-        "report": "docs/figures/quality_mlp_rocauc.md", "holdout": meta["holdout_label"],
+        "report": report, "holdout": meta["holdout_label"],
         "holdout_dataset_hash": meta["holdout_hash"], "per_kind_injections": main.per_kind, "seed": main.seed,
         "same_threshold_as_evaluated_model": float(model.threshold) == ev_arch.threshold,
         arch: {"roc_auc_all": ev_arch.auc_all, "fpr_at_q99": ev_arch.fpr_at_q99,
@@ -417,7 +421,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd += f" --model-out {a.model_out}"
     model, train_X, excluded = train_production_model(bars, normal, n_train, ARCHITECTURES[a.arch], seed)
     doc = build_artifact(model, train_X, excluded, meta, reports[0], reports[1:], arch=a.arch, seed=seed,
-                         command=cmd, window_ms=window_ms)
+                         command=cmd, window_ms=window_ms,
+                         report=str(out.relative_to(ROOT)) if out.is_relative_to(ROOT) else str(out))
     same = doc["evaluation"]["same_threshold_as_evaluated_model"]
     bit_identical = verify_roundtrip(doc, model, train_X)
     if not (same and bit_identical):

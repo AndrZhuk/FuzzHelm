@@ -1,7 +1,8 @@
 # Карта документації FuzzHelm
 
-Автор: Андрій Жук, 2026. Стан: HEAD `b933802` + документація, додана 2026-09-19 (ще не закомічена). Один рядок на файл або групу
-однотипних файлів.
+Автор: Андрій Жук, 2026. Стан: HEAD `415acbd` (2026-09-19 20:54 +03:00) + фінальний прохід документації (ще не закомічено).
+Один рядок на файл або групу однотипних файлів. Кореневі файли: [`README.md`](../README.md), [`README.en.md`](../README.en.md),
+[`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Вимоги, план, трасування
 
@@ -10,11 +11,13 @@
 | [`BRIEF.md`](BRIEF.md) | нормативна виконавча специфікація (§0–§17): місія, архітектура, формули, модель даних, тести, фази, план звіту |
 | [`contracts.md`](contracts.md) | публічні інтерфейси між модулями хвилі 0: DTO, порти, правила меж детермінізму й типів |
 | [`tz/technical_specification.md`](tz/technical_specification.md) | технічне завдання за ГОСТ 19.201-78: FR-01…FR-24, NFR-01…NFR-09, ролі, стадії, таблиця приймальних випробувань |
-| [`risk_register.md`](risk_register.md) | реєстр ризиків **проєкту** (ФК15): 20 ризиків з імовірністю, впливом, мітигацією і фактичним статусом |
+| [`results.md`](results.md) | **результати обчислювальних експериментів** (підрозділ 2.11 звіту): калібрування, паспорт фази 6, сітки, walk-forward, чутливість, витрати, ablation, VaR/Купець, гістерезис, Амдал, MLP, висновок, таблиця трасування §2 |
+| [`checklist_status.md`](checklist_status.md) | стан фінального чек-листа брифінгу §17 пункт за пунктом (виконано / частково / не виконано) з командою чи файлом-доказом |
+| [`risk_register.md`](risk_register.md) | реєстр ризиків **проєкту** (ФК15): 21 ризик з імовірністю, впливом, мітигацією і фактичним статусом |
 | [`deviations.md`](deviations.md) | зведені розходження «спека ↔ реальність»: таблиця всіх ідентифікаторів, наукові результати-розходження, пункти за модулями |
-| [`deviations.d/`](deviations.d/) | первинні записи розходжень по модулях (повні числа і команди): `ingest_rest`, `ingest_ws`, `data`, `storage`, `features`, `decision`, `fuzzy`, `risk`, `riskfix`, `execution`, `engine`, `api`, `workers`, `platform`, `exp_search`, `exp_analysis` |
-| [`journal.md`](journal.md) | щоденний журнал робіт (чернетка звіту): хронологія комітів, 2026-09-18 і 2026-09-19 за модулями |
-| [`journal.d/`](journal.d/) | первинні журнали модулів (ті самі 16 компонентів, що й у `deviations.d/`), з командами й замірами |
+| [`deviations.d/`](deviations.d/) | первинні записи розходжень по модулях (повні числа і команди): `ingest_rest`, `ingest_ws`, `data`, `storage`, `features`, `decision`, `fuzzy`, `risk`, `riskfix`, `execution`, `engine`, `api`, `workers`, `platform`, `exp_search`, `exp_analysis`, `quality_pass`, `wiring`, `final_docs` |
+| [`journal.md`](journal.md) | щоденний журнал робіт (чернетка звіту): хронологія комітів, 2026-09-18 і 2026-09-19 за модулями, фінальні хвилі |
+| [`journal.d/`](journal.d/) | первинні журнали модулів (ті самі 19 компонентів, що й у `deviations.d/`), з командами й замірами |
 
 ## Архітектура і модулі
 
@@ -80,20 +83,22 @@
 | `figures/fuzzy_membership.png`, `figures/fuzzy_control_surface.png` | функції належності (4 панелі) і поверхня керування |
 | [`figures/quality_mlp_rocauc.md`](figures/quality_mlp_rocauc.md) | ROC-AUC MLP-автокодувальника на справжньому IS-вікні (8-3-8 проти 5-3-5) |
 | [`figures/riskfix_cooldown_policy.md`](figures/riskfix_cooldown_policy.md) | політики COOLDOWN на 45 днях: `scaled_entries` проти `reduce_only` |
-| [`figures/first_run_metrics.md`](figures/first_run_metrics.md), `first_run_equity.png` | прогін фази 6 з рядків БД; переписується кроком `run_backtest_btc` оркестратора фази 7 (див. `risk_register.md` RR-19) |
-| `figures/plot_*`, `figures/equity_*`, `figures/var_hist_*` | виводи фази 7 (VaR, криві капіталу), які пише оркестратор; зміст — `<<TBD:phase7_results>>` |
-| `report_tables/raw/*` | сирі виводи аналітичних експериментів фази 7 (моделі витрат, ablation, гістерезис, VaR); зведені таблиці — `<<TBD:report_tables>>` |
+| [`figures/first_run_metrics.md`](figures/first_run_metrics.md), `first_run_equity.png` | прогін фази 6 з рядків БД: чистий run `4e5be0de-…` на `415acbd`, `git_dirty = 0` (FIN-01) |
+| [`figures/quality_mlp_rocauc_ETHUSDT.md`](figures/quality_mlp_rocauc_ETHUSDT.md) | ROC-AUC MLP-автокодувальника для ETHUSDT (застереження FIN-05) |
+| `figures/plot_*`, `figures/equity_*`, `figures/var_hist_*` | виводи фази 7: криві капіталу робочих точок сітки (`equity_run_b0638bf7` — BTCUSDT, `equity_run_2c9344ad` — ETHUSDT), криві OOS з VaR, гістограми доходностей з VaR₉₅/CVaR₉₅; числа — `docs/results.md` |
+| `report_tables/raw/*` | сирі виводи фази 7: `exp_search/{amdahl,grid,walkforward,sensitivity}`, `cost_models_*`, `ablation_*`, `hysteresis_*`, `var_*`, `experiments_summary.tsv`; виводи фази 10: `test_runs.txt`, `coverage_{default,combined}.txt`, `coverage_packages.md`, `lint.txt`, `pip_audit.txt`, `verify_journal.txt`, `ram_profile.txt` |
+| [`report_tables/index.md`](report_tables/index.md) | зведені таблиці звіту (`scripts/export_report_tables.py`): метрики + PSR/DSR, IS/OOS, Парето, чутливість, Амдал, витрати, ablation, VaR/Купець, гістерезис, патологічні сесії, MLP, калібрування, групи тестів, трасування, розходження; ручні правки після генерації |
 
-## Чернетки кореневих файлів (`_pending_root/`, переносить провідний розробник)
+## Що не виконано (фази 9–11)
 
-| Файл | Зміст |
-|---|---|
-| [`_pending_root/README.md`](_pending_root/README.md) | README українською: безпека, архітектура, швидкий старт, CLI, make, дані, відтворення за `run_id`, тести |
-| [`_pending_root/README.en.md`](_pending_root/README.en.md) | англомовна версія README (ЗК5) |
-| [`_pending_root/CHANGELOG.md`](_pending_root/CHANGELOG.md) | журнал змін за SemVer: 0.1.0 (Додано / Змінено / Безпека) за хвилями |
+Кожен пункт — «не виконано: причина; що потрібно і ким». Докладно — `docs/deviations.md` FIN-07, `docs/risk_register.md`.
 
-## Чого ще немає (план фаз 9–11)
-
-`teo/cost_estimate.md` (ТЕО) — `<<TBD:teo_cost_estimate>>`; WBS, діаграма Ганта, сітьовий графік — `<<TBD:gantt>>`; IDEF0, BPMN,
-блок-схеми ДСТУ ISO 5807 — `<<TBD:idef0_bpmn_flowcharts>>`; англомовний abstract — `<<TBD:abstract_en>>`; звіт (фаза 11) — за
-окремою командою.
+| Артефакт | Причина | Що потрібно і ким |
+|---|---|---|
+| Веб-панель Vue (3 екрани, i18n) | порядок робіт D-06: спершу бекенд | автор реалізує окремим етапом, першою — `ExplainView` поверх `/decisions/{id}/explain` |
+| `teo/cost_estimate.md` (ТЕО: трудомісткість, кошторис, TCO) | потрібні вхідні дані автора (ставка, тривалість практики, вартість обладнання), у репозиторії їх немає | автор складає документ; виміряні ресурсні параметри — ТЗ §4.4 |
+| WBS, діаграма Ганта, сітьовий графік | план-графік практики для звіту §1.6; фактична хронологія є лише в `journal.md` | автор будує з датами практики і фактичними датами з `git log` |
+| IDEF0, BPMN, блок-схеми ДСТУ ISO 5807 | діаграми звіту §2.1–§2.7 поза наявними PlantUML | автор малює для звіту |
+| Англомовний abstract | додаток Ж звіту фази 11, яку запускають окремою командою | автор пише разом зі звітом; англомовний опис системи — `README.en.md` |
+| Testnet-ордер, Telegram, Fly.io, адміністратор API, LOGIN-роль БД, скрінкаст, офлайн-репетиція, бланки | креденшли, облікові записи, підписи, присутність людини (§12.9) | студент **[ЛЮДИНА]** |
+| Звіт (фаза 11) | запускається окремо, за явною командою (брифінг §12) | — |

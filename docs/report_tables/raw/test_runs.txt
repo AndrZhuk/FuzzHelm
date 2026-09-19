@@ -1,0 +1,40 @@
+# Прогони тестів для звіту (фаза 10). Дата: 2026-09-19. HEAD 415acbd (дерево коду чисте).
+# Машина: Apple M3 (8 ядер: 4 продуктивні + 4 енергоефективні), 24 GiB RAM; Python 3.12.12; pytest 9.1.1.
+# Час "real" — /usr/bin/time -p (охоплює запуск uv і збирання тестів); "in N s" — власний замір pytest.
+
+## 1. make test (паралельно, pytest-xdist, 6 воркерів)
+$ uv run pytest -q -n 6
+979 passed in 12.83s
+real 13.11
+user 58.96
+sys 4.30
+
+## 2. Послідовно
+$ uv run pytest -q
+979 passed, 55 deselected in 29.90s
+real 31.20
+user 30.62
+sys 1.37
+
+## 3. Типовий набір з покриттям (docs/report_tables/raw/coverage_default.txt)
+$ uv run pytest -q -n 6 --cov=fuzzhelm --cov-report=term
+979 passed in 25.61s
+TOTAL                                              19237   2692   4606    556    84%
+Required test coverage of 80.0% reached. Total coverage: 83.72%
+
+## 4. Разом з інтеграційними (PostgreSQL 16 з docker-compose.test.yml, порт 5443; docs/report_tables/raw/coverage_combined.txt)
+$ FUZZHELM_TEST_DATABASE_URL=postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5443/fuzzhelm_test uv run pytest -q -m 'integration or not integration' --cov=fuzzhelm --cov-report=term
+1034 passed in 108.17s (0:01:48)
+TOTAL                                              19237   1612   4606    633    89%
+Required test coverage of 80.0% reached. Total coverage: 89.38%
+# склад: 979 типових + 54 integration + 1 slow (tests/unit/test_experiments_search.py::test_walkforward_search_end_to_end_on_fixture_matches_runner_cells)
+# property-тестів (маркер property) серед 1034 зібраних: 40 (uv run pytest --collect-only -q -m property)
+# за пакетами: docs/report_tables/raw/coverage_packages.md (uv run python -m tests.helpers.cov_packages)
+
+## 5. Лише unit + property послідовно (ціль брифінгу §10: < 25 с)
+$ uv run pytest -q tests/unit tests/property
+807 passed, 1 deselected in 23.37s
+real 24.56
+user 24.09
+sys 1.35
+# load average після прогону: 2.44 2.99 3.25 (uptime)

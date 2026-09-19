@@ -484,7 +484,7 @@ def section_tests(rep: Report, no_collect: bool, collect_file: Path | None) -> d
         default_ids: list[str] | None = None
         tail_all, tail_int, tail_def = f"з файлу `{collect_file}`", "—", "—"
     elif no_collect:
-        rep.write("test_groups", "Тести за групами A–N брифінгу (§10)", f"{ea.tbd('pytest_collect')}")
+        rep.write("test_groups_summary", "Тести за групами A–N брифінгу (§10), зведення", f"{ea.tbd('pytest_collect')}")
         return {"total": None}
     else:
         all_ids, tail_all = collect("")
@@ -519,7 +519,7 @@ def section_tests(rep: Report, no_collect: bool, collect_file: Path | None) -> d
         *(["* немає"] if not any(r["missing"] for r in rows) else []),
         "",
     ]
-    rep.write("test_groups", "Тести за групами A–N брифінгу (§10)", "\n".join(body),
+    rep.write("test_groups_summary", "Тести за групами A–N брифінгу (§10), зведення", "\n".join(body),
               [{k: (", ".join(v) if isinstance(v, list) else v) for k, v in r.items()} for r in rows])
     return {"total": len(all_ids), "integration": len(integ_set), "named": total_named, "present": present,
             "ids": all_ids, "default": None if default_ids is None else len(default_ids)}
@@ -537,7 +537,8 @@ def section_traceability(rep: Report, found: dict[str, list[dict[str, Any]]], db
         arts = [f"`{c}`" for c in cands if (ROOT / c).exists()]
         extra: list[str] = []
         if no == 2:
-            extra.append(ea.tbd("testnet_order_screenshot") + " (EXE-07: живий ордер — крок [ЛЮДИНА])")
+            extra.append("живий testnet-ордер — не виконано: немає testnet-ключів; крок [ЛЮДИНА] "
+                         "(`scripts/testnet_one_order.py --confirm` зі своїми ключами в `.env`, EXE-07)")
         if no == 3 and db:
             for rid, m in db.get("metrics", {}).items():
                 extra.append(f"`risk_event` прогону `{rid[:8]}…`: {m.get('risk_events')} рядків")
@@ -565,14 +566,17 @@ def section_traceability(rep: Report, found: dict[str, list[dict[str, Any]]], db
         if no == 9:
             rules = load_yaml("rules_mamdani").get("rules", [])
             extra.append(f"{len(rules)} правил у `config/rules_mamdani.yaml`")
-            extra.append(ea.tbd("ui_rules_crud") + " (UI — окремий етап, D-06)")
+            extra.append("CRUD правил через UI — не виконано: Vue-панель — окремий етап (D-06); "
+                         "API `/strategies` з валідацією і версіонуванням уже є")
         if no == 10:
             for t in ("test_risk_chain_never_increases_exposure", "test_risk_fsm_transition_table_is_total"):
                 if tests.get("total") is None:
                     extra.append(f"`{t}` — {ea.tbd('pytest_collect')}")
                 else:
                     extra.append(f"`{t}` {'є' if t in ids else ea.tbd(t)}")
-            extra.append(ea.tbd("statechart_diagram"))
+            fsm = ROOT / "docs/diagrams/risk_fsm.puml"
+            extra.append(f"`{rel(fsm)}` (згенеровано з `risk/state.py::TRANSITIONS`)" if fsm.exists()
+                         else ea.tbd("statechart_diagram"))
         if no == 11:
             if tests.get("total") is not None:
                 extra.append(f"{tests['total']} тест-вузлів ({tests['integration']} інтеграційних, у "

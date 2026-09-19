@@ -26,7 +26,7 @@ cov:         ; $(PY) pytest -q -n 6 --cov --cov-report=term-missing && $(PY) pyt
 lint:        ; $(PY) ruff check src tests scripts && $(PY) mypy src/fuzzhelm/core src/fuzzhelm/fuzzy src/fuzzhelm/risk
 audit:       ; $(PY) pip-audit --skip-editable --progress-spinner off
 # таблиці звіту з виводів експериментів і фактів БД (лише читання); відсутнє → <<TBD:…>>
-report:      ; $(PY) python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw --results-dir artifacts/exp_search --out docs/report_tables
+report:      ; $(PY) python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw --out docs/report_tables   # raw/ уже містить exp_search (FIN-02)
 # MLP-автокодувальник: ROC-AUC на ін'єкціях (docs/figures/quality_mlp_rocauc.md) + артефакт data/anomaly_mlp_$(SYMBOL).json
 anomaly:     ; $(PY) python scripts/train_anomaly_mlp.py --symbol $(SYMBOL)
 # користувачів API створює людина: пароль вводиться інтерактивно (getpass), ніколи не в argv [ЛЮДИНА]
@@ -35,5 +35,5 @@ users:
 	@echo "  uv run fuzzhelm user add --login <логін> --role admin|operator|analyst|auditor"
 	@echo "  docker compose run --rm -it api fuzzhelm user add --login <логін> --role admin   # у контейнері"
 	@echo "Переглянути / змінити роль:  uv run fuzzhelm user list  |  uv run fuzzhelm user set-role --help"
-backup:      ; docker compose exec -T db pg_dump -U fuzzhelm -Fc fuzzhelm > backups/fuzzhelm_$$(date +%Y%m%d_%H%M%S).dump
+backup:      ; mkdir -p backups && docker compose exec -T db pg_dump -U fuzzhelm -Fc fuzzhelm > backups/fuzzhelm_$$(date +%Y%m%d_%H%M%S).dump
 restore:     ; docker compose exec -T db pg_restore -U fuzzhelm -d fuzzhelm --clean --if-exists < $(FILE)

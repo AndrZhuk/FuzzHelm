@@ -1,0 +1,109 @@
+{
+ "passport": {
+  "experiment": "export_report_tables",
+  "command": "uv run python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw --run-id 4e5be0de-a4b7-4ef1-b84e-4a563b248be3 --run-id b0638bf7-56a2-4ad7-8d62-11bad97cb2d6 --run-id 2c9344ad-726e-400a-80fc-cb8f98371099 --cov-file docs/report_tables/raw/coverage_combined.txt --out docs/report_tables",
+  "git_sha": "415acbd2d9137655d90a48476170ac1d0dab21e8",
+  "git_dirty": false,
+  "git_dirty_any": true,
+  "git_dirty_paths": [],
+  "seed": 20260918,
+  "results_dirs": [
+   "docs/report_tables/raw"
+  ],
+  "db": true
+ },
+ "tables": [
+  [
+   "metrics.md",
+   "17 метрик бектесту + PSR/DSR",
+   0
+  ],
+  [
+   "wf_folds.md",
+   "Walk-forward: IS/OOS по фолдах",
+   0
+  ],
+  [
+   "pareto.md",
+   "Парето-фронт (SR_OOS ↑, MaxDD_OOS ↓, Turnover ↓)",
+   0
+  ],
+  [
+   "sensitivity.md",
+   "Аналіз чутливості до 8 параметрів",
+   0
+  ],
+  [
+   "amdahl.md",
+   "Прискорення S(p) проти межі Амдала",
+   0
+  ],
+  [
+   "cost_models.md",
+   "Три моделі витрат виконання (§5.14)",
+   0
+  ],
+  [
+   "ablation.md",
+   "Ablation: детектори, Мамдані/лінійне, κ, гістерезис",
+   0
+  ],
+  [
+   "var_kupiec.md",
+   "VaR₉₅/CVaR₉₅: історичний проти параметричного, тест Купця",
+   0
+  ],
+  [
+   "hysteresis.md",
+   "Ціна відсутності гістерезису (виміряно) проти твердження §5.9",
+   0
+  ],
+  [
+   "pathological.md",
+   "Патологічні WS-сесії: втрачено / дублів / час відновлення",
+   0
+  ],
+  [
+   "mlp_rocauc.md",
+   "MLP-автокодувальник: ROC-AUC на ін'єкціях",
+   0
+  ],
+  [
+   "calibration.md",
+   "Калібрування функцій належності (KMeans, перцентилі)",
+   0
+  ],
+  [
+   "test_groups.md",
+   "Тести за групами A–N брифінгу (§10): поіменний перелік (tests/helpers/brief_test_groups.py, FIN-03)",
+   0
+  ],
+  [
+   "traceability.md",
+   "Таблиця трасування індивідуального завдання (брифінг §2)",
+   0
+  ],
+  [
+   "deviations.md",
+   "Перелік розходжень «спека ↔ реальність»",
+   0
+  ],
+  [
+   "index.md",
+   "Таблиці звіту: зміст і походження",
+   0
+  ],
+  [
+   "test_groups_summary.md",
+   "Тести за групами A–N брифінгу (§10): короткий підсумок експорту (перейменовано вручну, FIN-03)",
+   0
+  ]
+ ],
+ "tbd_total": 3,
+ "post_edits": [
+  "traceability.md/.csv: 3 жорстко закодовані маркери TBD (рядки 2, 9, 10) переписано вручну — statechart docs/diagrams/risk_fsm.puml, решта «не виконано: …» (docs/deviations.d/final_docs.md FIN-04)",
+  "test_groups.md: вихід експорту перейменовано на test_groups_summary.md; test_groups.md — поіменний перелік `uv run python -m tests.helpers.brief_test_groups` на HEAD 415acbd (FIN-03)",
+  "один --results-dir docs/report_tables/raw: вкладений raw/exp_search дублював таблиці (FIN-02)",
+  "deviations.md/.csv: перегенеровано тією самою командою 2026-09-19 після появи docs/deviations.d/final_docs.md — 227 ідентифікаторів (було 218, додано FIN-01…FIN-09); інші числові таблиці повторного експорту побайтово збіглися з наявними (фінальний аудит)"
+ ]
+}

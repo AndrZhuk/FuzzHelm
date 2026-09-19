@@ -12,3 +12,5 @@ htmlcov/
 *.part
 .DS_Store
 artifacts/
+backups/
+*.dump

@@ -1,6 +1,6 @@
 # Тести за групами A–N брифінгу (§10)
 
-Автор: Андрій Жук, 2026. Згенеровано `uv run python -m tests.helpers.brief_test_groups` на `HEAD ca1a6b0 + незакомічені зміни tests/`. Жодне число не введено вручну.
+Автор: Андрій Жук, 2026. Згенеровано `uv run python -m tests.helpers.brief_test_groups` на `HEAD 415acbd`. Жодне число не введено вручну.
 
 ## Підсумок
 

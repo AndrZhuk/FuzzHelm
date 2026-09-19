@@ -1,0 +1,15 @@
+group,title,declared,named,named_present,named_items,missing,files,file_items
+A,Архітектурні,3,3,3,6,,"tests/arch/test_decimal_float_boundary.py, tests/arch/test_determinism_boundary.py, tests/arch/test_mainnet_allowlist.py",7
+B,Канонічна серіалізація і журнал,8,8,8,8,,"tests/property/test_dedup_property.py, tests/unit/test_core_digest_journal.py",11
+C,Нормалізація та інжест,13,13,13,29,,"tests/property/test_retry_property.py, tests/unit/test_crosscheck.py, tests/unit/test_normalize.py, tests/unit/test_rest_ingest.py",69
+D,Якість даних,7,7,7,7,,"tests/property/test_quality_property.py, tests/unit/test_quality.py",20
+E,Індикатори,9,9,9,9,,"tests/property/test_features_property.py, tests/unit/test_indicators.py",21
+F,Детектори,8,8,8,8,,"tests/property/test_detectors_property.py, tests/unit/test_detectors.py",16
+G,Нечітке ядро,17,17,17,17,,"tests/property/test_fuzzy_property.py, tests/unit/test_fuzzy.py",65
+H,Агрегація і κ,8,8,8,8,,"tests/property/test_decision_property.py, tests/unit/test_decision.py",76
+I,Сайзинг,9,9,9,13,,"tests/property/test_sizing_property.py, tests/unit/test_sizing.py",24
+J,Ризик,16,18,18,43,,"tests/property/test_risk_property.py, tests/unit/test_margin_var.py, tests/unit/test_risk.py",75
+K,Виконання і бектест,13,13,13,17,,"tests/property/test_portfolio_property.py, tests/unit/test_backtest_engine.py, tests/unit/test_execution.py, tests/unit/test_walkforward_pareto.py, tests/unit/test_window.py",66
+L,Метрики,6,6,6,6,,tests/unit/test_metrics.py,15
+M,Інтеграційні,6,6,6,14,,"tests/integration/test_candles.py, tests/integration/test_journal.py, tests/integration/test_migrations.py, tests/integration/test_trading.py",31
+N,API та e2e,8,8,8,13,,"tests/e2e/test_api.py, tests/e2e/test_pathological_sessions.py, tests/e2e/test_replay_e2e.py",139

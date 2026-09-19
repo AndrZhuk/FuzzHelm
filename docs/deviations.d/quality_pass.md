@@ -235,8 +235,10 @@
 ## Відкрите після рецензії
 - `make cov` не друкує таблицю по пакетах і не перевіряє поріг 90 % на чотирьох ключових пакетах (Makefile і CI — зона
   wiring): додати `&& $(PY) python -m tests.helpers.cov_packages` до цілі `cov` і відповідного кроку CI.
-- `docs/` містить інші `<<TBD:…>>` (risk_register, deviations, journal, index, security, exp_analysis, _pending_root) —
-  гейт фази 10 «жодного <<TBD>>» ще не виконано; це не зона quality_pass.
+- `docs/` містить інші маркери TBD (risk_register, deviations, journal, index, security, exp_analysis, _pending_root) —
+  гейт фази 10 «жодного маркера TBD» ще не виконано; це не зона quality_pass. **Стан на `415acbd` + FIN-07: закрито** — кожен
+  маркер замінено числом з джерелом або «не виконано: …»; поіменний `test_groups.md` відновлено (FIN-03); `make cov` і CI
+  викликають `cov_packages` (`2f77c82`, `415acbd`).
 - `scripts/export_report_tables.py` (`make report`) і далі перезапише `docs/report_tables/test_groups.md` своєю,
   коротшою версією без поіменного переліку (QP-04).
 - Три БД-читачі `experiments_analysis` і `runner.load_db_window` під `pragma: no cover` можна покрити інтеграційними

@@ -9,7 +9,8 @@ plot_var,export_report_tables}.py`, тести `tests/unit/test_experiments_anal
 **Головне.** Хвиля будує лише ІНСТРУМЕНТ: скрипти, перевірені димовими прогонами на малих входах
 (`artifacts/tmp/`, у git не потрапляє). Жодного числа результатів тут немає — повні прогони робить наступна хвиля
 закомітченим кодом (паспорт кожного виводу несе `git_sha` + `git_dirty`). Відсутній вхід у зведенні таблиць —
-маркер `<<TBD:назва>>`, а не підставлене число.
+маркер TBD з назвою входу, а не підставлене число. Повні прогони виконано на `b933802`; виводи — `docs/report_tables/raw/`,
+зведені таблиці — `docs/report_tables/`, результати — `docs/results.md`.
 
 ---
 
@@ -133,7 +134,7 @@ churn_cost_pct_per_day(fee_rate, fills_per_bar, notional_over_equity) = 100·144
 
 # таблиці, вивід, паспорт
 fmt(x), pct(x), md_table(headers, rows), sanitize(obj), passport(...), passport_md(p), write_outputs(dir, stem, …)
-tbd(name) -> "<<TBD:name>>"; METRIC_LABELS_UK
+tbd(name) -> маркер TBD:name у подвійних кутових дужках (TBD_FMT); METRIC_LABELS_UK
 GIT_DIRTY_IGNORED = ("artifacts", "docs"); git_state(repo) -> {sha, dirty, dirty_any, dirty_paths}
 sr0_expected_max(trial_srs)                 # N — усі прогони (і з невизначеним SR), Var — по скінченних (ddof=1)
 dsr_for(metrics, trial_srs) -> {dsr, n_trials, n_finite, sr0, reason}   # PSR з SR* = SR₀

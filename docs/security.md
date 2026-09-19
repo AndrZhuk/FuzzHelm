@@ -214,8 +214,11 @@ fuzzhelm`, і `pip-audit` виводитиме той самий запис. **�
 
 **Стан на HEAD `b933802` (перевірено grep при рецензії документації, 2026-09-19):** залежність уже вилучено в коміті
 `4ef69ab` («PyJWT (python-jose removed)»): у `pyproject.toml` є `pyjwt>=2.14.0`, а `python-jose` немає; в `uv.lock` немає
-ні `python-jose`, ні пакета `ecdsa`. Попередній абзац описує стан до цього коміту. Повторний `uv run pip-audit` ще не
-виконано: `<<TBD:pip_audit_after_jose_removal>>`.
+ні `python-jose`, ні пакета `ecdsa`. Попередній абзац описує стан до цього коміту.
+
+**Повторний аудит на HEAD `415acbd` (2026-09-19):** `uv run pip-audit` → «No known vulnerabilities found». Пропущено лише сам
+пакет `fuzzhelm`, бо його немає в PyPI (`docs/report_tables/raw/pip_audit.txt`). PYSEC-2026-1325 (`ecdsa`) зник разом з
+`python-jose`. Той самий аудит виконує задача `audit` CI (`.github/workflows/ci.yml`) і ціль `make audit`.
 
 ## 10. Залишкові ризики (чесно)
 

@@ -7,8 +7,9 @@ bench_amdahl,sensitivity,plot_walkforward,plot_pareto,plot_amdahl,plot_sensitivi
 `docs/journal.d/exp_search.md`.
 
 **Статус:** інструментарій готовий і перевірений швидкими прогонами (`--smoke`, вивід у `artifacts/tmp/`, gitignored).
-Повні 45-денні прогони — наступна хвиля ПІСЛЯ коміту цього коду (паспорти несуть `git_sha` + `git_dirty`). Чисел
-експерименту тут немає: `<<TBD:walkforward_full>>`, `<<TBD:grid_108>>`, `<<TBD:amdahl_bench>>`, `<<TBD:sensitivity_8>>`.
+Повні 45-денні прогони виконано наступною хвилею після коміту цього коду: `b933802`, `git_dirty = False` у кожному паспорті.
+Виводи — `docs/report_tables/raw/exp_search/{amdahl,grid,walkforward,sensitivity}/`, зведення з числами — `docs/results.md`
+§3–§5, §10. Цей документ описує API і чисел не дублює.
 
 ---
 

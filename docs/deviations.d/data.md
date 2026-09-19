@@ -201,7 +201,7 @@
 scratch-каталог, а не в репозиторій:
 - **Gate фаз 1–3 (SQL напряму):** `SELECT count(*) FROM candle` = 129 603 (BTC src=2: 64 802, BTC src=3: 1,
   ETH src=2: 64 800). `ingest_gap` = 3 × FILLED (2 × klines/time, 1 × trades/seq, 1 235 угод).
-  `verify-journal`: 6 801 запис, ланцюг цілий. `membership.yaml` без `<<TBD>>`, V `provisional: false`.
+  `verify-journal`: 6 801 запис, ланцюг цілий. `membership.yaml` без маркерів TBD, V `provisional: false`.
 - **Хеші:** `dataset_hash` обох символів, перерахований з БД за `CandleRepo.load_arrays` на вікні
   `data/dataset_window.json`, збігся із записаним. Хеш IS-вікна калібрування (21 600 барів, останній
   2026-08-18T23:59Z) збігся з маніфестом, тож калібрування бачило лише дні 1–15.

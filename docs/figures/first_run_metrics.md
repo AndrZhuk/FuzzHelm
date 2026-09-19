@@ -8,14 +8,14 @@
 
 | поле | значення |
 |---|---|
-| run_id | `a848fa56-9759-4a6a-9fad-4fb5d461279d` |
+| run_id | `4e5be0de-a4b7-4ef1-b84e-4a563b248be3` |
 | kind / status | backtest / **DONE** |
 | вікно | 2026-08-04 00:00 — 2026-09-18 00:00 UTC (кінець виключно), 64800 барів 1m |
 | config_hash | `48e2a5d88b321d31c7b415370de5ed6505a2af4175883ddb245fbdcf9dfaa1c6` |
 | dataset_hash | `99382675fda6dcab9be0fa566ac6c602686bf19685aa9c5557f5b7cdf3b8c345` (= `data/dataset_window.json` + ряд фандингу) |
-| git_sha | `b93380254e142a2766ecfb4ea875819ef6955567` — **дерево мало незакомічені зміни** (`run_metric.git_dirty = 1`) |
+| git_sha | `415acbd2d9137655d90a48476170ac1d0dab21e8` |
 | seed / engine | 20260918 / mamdani |
-| journal_head_hash | `67f0e130d41b6b2c65544acf6146994c9b338d4df9daf6e491b324a226626f27` |
+| journal_head_hash | `028bc57a4afb572a4dcfb1bd7fede23038fbda7022358c2624e414df99e03fba` |
 | equity_hash | `3b5009cd6577676c0035d3eb6a0b06a2f0fdec2fe2784c13fd7d7fe93c629986` |
 
 Перевірка з БД: `equity_hash`, перерахований з 64800 рядків `equity_point`, **збігається** з паспортом; хеш-ланцюг `event_journal` (5959 записів) цілий, голова = паспорт.
@@ -43,7 +43,7 @@
 | Tail ratio (`tail_ratio`) | 0 |
 | PSR (SR* = 0) (`psr`) | 0 |
 
-Інші величини `run_metric`: `git_dirty` = 1, `halted` = 1, `kurt` = 448.12, `n_fills` = 586, `n_obs` = 64 277, `skew` = -14.2328, `sr_period` = -0.063621, `traded_notional` = 3 158 679.
+Інші величини `run_metric`: `git_dirty` = 0, `halted` = 1, `kurt` = 448.12, `n_fills` = 586, `n_obs` = 64 277, `skew` = -14.2328, `sr_period` = -0.063621, `traded_notional` = 3 158 679.
 
 ## Що записано
 
@@ -83,7 +83,7 @@
 
 ## Час прогону (заміряно під час запису; паралельно працювали інші процеси)
 
-* engine_s: 4.29 с
+* engine_s: 4.26 с
 * load_db_s: 0.31 с
 * persist_s: 1.24 с
 
