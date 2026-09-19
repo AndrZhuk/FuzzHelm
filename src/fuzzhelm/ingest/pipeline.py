@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import re
 from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
@@ -40,7 +39,6 @@ from pathlib import Path
 from typing import Any, Final
 
 import httpx
-import orjson
 
 from fuzzhelm.config import assert_readonly_url
 from fuzzhelm.core.digest import to_canonical
@@ -55,13 +53,19 @@ from fuzzhelm.ingest.backfill import backfill_klines
 from fuzzhelm.ingest.candles import AggregatorStats, CandleAggregator
 from fuzzhelm.ingest.dedup import Deduplicator, DedupOutcome
 from fuzzhelm.ingest.gap_detector import GapDetector, GapRecord, GapStats
-from fuzzhelm.ingest.normalize import NS_PER_MS, InstrumentLike, normalize_binance, tf_ms, trade_uid
-from fuzzhelm.ingest.ratelimit import USED_WEIGHT_HEADER, binance_request_bucket
+from fuzzhelm.ingest.normalize import (
+    NS_PER_MS,
+    InstrumentLike,
+    normalize_binance,
+    normalize_rest_agg_trade,  # реекспорт: історичне місце імпорту (tests, скрипти)
+    tf_ms,
+)
+from fuzzhelm.ingest.ratelimit import ENDPOINT_WEIGHTS, binance_request_bucket
 from fuzzhelm.ingest.reconnect import CloseClass, Disconnect, HeartbeatWatchdog
 from fuzzhelm.ingest.recorder import ControlRecord, RawFrame, SessionItem
 from fuzzhelm.ingest.replay import FixtureRestHandler, FrameClock, ReplayFeed, RestFixture
-from fuzzhelm.ingest.rest_client import BinanceRestClient
-from fuzzhelm.ingest.retry import NonRetryableHttpError, RetryPolicy, error_for_response, header_int
+from fuzzhelm.ingest.rest_client import AGG_TRADES, MAX_AGG_TRADES_LIMIT, BinanceRestClient
+from fuzzhelm.ingest.retry import RetryPolicy
 from fuzzhelm.quality.anomaly_mlp import AnomalyScorer, AnomalyVerdict
 from fuzzhelm.quality.dq_score import DqAccumulator, DqScore, dq_score, load_dq_weights, load_tau0_ms
 from fuzzhelm.quality.health import HealthSnapshot, PipelineHealth
@@ -71,9 +75,9 @@ type Sink[T] = Callable[[T], Any]  # синхронний або async колб�
 SleepFn = Callable[[float], Awaitable[None]]
 
 HOUR_NS: Final = 3_600 * 1_000_000_000
-AGG_TRADES_PATH: Final = "/fapi/v1/aggTrades"
-AGG_TRADES_WEIGHT: Final = 20       # вага /fapi/v1/aggTrades за документацією Binance USDⓈ-M
-AGG_TRADES_MAX_LIMIT: Final = 1000
+AGG_TRADES_PATH: Final = AGG_TRADES                       # REST aggTrades живе в rest_client (WS-04)
+AGG_TRADES_WEIGHT: Final = ENDPOINT_WEIGHTS[AGG_TRADES]      # 20 — виміряно за X-MBX-USED-WEIGHT-1M
+AGG_TRADES_MAX_LIMIT: Final = MAX_AGG_TRADES_LIMIT
 MARKET_CONN: Final = "market"
 PUBLIC_CONN: Final = "public"
 
@@ -477,78 +481,29 @@ def _parse_class(detail: str) -> CloseClass:
 
 # ---------------------------------------------------------------- REST-добір (klines + aggTrades)
 
-_DEC_RE: Final = re.compile(r"-?\d+(?:\.\d+)?")
-REST_AGG_TRADE_FIELDS: Final = frozenset({"a", "p", "q", "f", "l", "T", "m", "nq"})
-REST_AGG_TRADE_REQUIRED: Final = frozenset({"a", "p", "q", "f", "l", "T", "m"})
-
-
-def normalize_rest_agg_trade(row: Mapping[str, Any], instrument: InstrumentLike, ts_ingest_ns: int) -> Trade:
-    """Рядок GET /fapi/v1/aggTrades → Trade (той самий event_uid, що й у WS aggTrade: дедуплікація)."""
-    venue = instrument.venue.value
-    if not isinstance(row, Mapping):
-        raise NormalizationError("aggTrade row must be an object", field="$", venue=venue)
-    unknown = row.keys() - REST_AGG_TRADE_FIELDS
-    if unknown:
-        raise NormalizationError(f"unknown field {sorted(unknown)[0]}", field=sorted(unknown)[0], venue=venue)
-    missing = REST_AGG_TRADE_REQUIRED - row.keys()
-    if missing:
-        raise NormalizationError(f"missing field {sorted(missing)[0]}", field=sorted(missing)[0], venue=venue)
-    for k in ("a", "f", "l", "T"):
-        if type(row[k]) is not int:
-            raise NormalizationError(f"expected integer at {k}", field=k, venue=venue)
-    for k in ("p", "q", *(("nq",) if "nq" in row else ())):
-        if type(row[k]) is not str or _DEC_RE.fullmatch(row[k]) is None:
-            raise NormalizationError(f"expected decimal string at {k}", field=k, venue=venue)
-    if type(row["m"]) is not bool:
-        raise NormalizationError("expected bool at m", field="m", venue=venue)
-    a = int(row["a"])
-    try:
-        return Trade(instrument=instrument.symbol_canon, venue=instrument.venue, agg_id=a,
-                     first_trade_id=int(row["f"]), last_trade_id=int(row["l"]), price=dec(row["p"]),
-                     qty=dec(row["q"]), is_buyer_maker=bool(row["m"]), ts_event_ns=int(row["T"]) * NS_PER_MS,
-                     ts_ingest_ns=ts_ingest_ns,
-                     event_uid=trade_uid(instrument.venue, instrument.symbol_canon, a))
-    except ValueError as e:
-        raise NormalizationError(f"Trade: {e}", field="$", venue=venue) from e
-
-
 async def _no_sleep(_: float) -> None:
     return None
 
 
 async def fetch_agg_trades(client: BinanceRestClient, symbol: str, from_id: int, to_id: int,
                            instrument: InstrumentLike, *, limit: int = AGG_TRADES_MAX_LIMIT,
-                           sleep: SleepFn = asyncio.sleep) -> tuple[list[Trade], int]:
-    """Угоди з a ∈ [from_id, to_id] через GET /fapi/v1/aggTrades?fromId (пагінація по 1000).
-    Той самий token bucket і RetryPolicy, що в клієнта; повертає (угоди, кількість запитів)."""
+                           sleep: SleepFn | None = None) -> tuple[list[Trade], int]:
+    """Угоди з a ∈ [from_id, to_id] через `client.agg_trades(fromId)` (пагінація по ≤ 1000).
+
+    Запити йдуть звичайним транспортом клієнта (token bucket з виміряною вагою 20, RetryPolicy, облік
+    `requests_sent`/`last_used_weight`), тож паузи повторів задає `sleep` самого клієнта; параметр `sleep`
+    лишено для сумісності викликів (не використовується). Повертає (угоди, кількість запитів).
+    """
+    del sleep
     if not 1 <= limit <= AGG_TRADES_MAX_LIMIT:
         raise ValueError(f"limit must be in [1, {AGG_TRADES_MAX_LIMIT}]")
-    url = client.base_url + AGG_TRADES_PATH
     out: list[Trade] = []
     requests = 0
     cursor = from_id
     while cursor <= to_id:
         want = min(limit, to_id - cursor + 1)
-        params = {"symbol": symbol, "fromId": cursor, "limit": want}
-
-        async def attempt(p: dict[str, Any] = params) -> Any:
-            await client.bucket.acquire(AGG_TRADES_WEIGHT)
-            resp = await client.http.get(url, params=p)
-            used = header_int(resp.headers, USED_WEIGHT_HEADER)
-            if used is not None:
-                client.bucket.observe_used_weight(used, client.weight_limit_per_min)
-            if resp.status_code >= 400:
-                retryable = error_for_response(resp, client.clock.now_ns())
-                if retryable is not None:
-                    raise retryable
-                raise NonRetryableHttpError(resp.status_code, resp.text)
-            return orjson.loads(resp.content)
-
-        rows = await client.retry.execute(attempt, sleep=sleep)
+        rows = await client.agg_trades(symbol, from_id=cursor, limit=want)
         requests += 1
-        if not isinstance(rows, list):
-            raise NormalizationError("aggTrades response is not a JSON array", field="$",
-                                     venue=instrument.venue.value)
         now = client.clock.now_ns()
         page = [normalize_rest_agg_trade(r, instrument, now) for r in rows]
         out.extend(t for t in page if from_id <= t.agg_id <= to_id)

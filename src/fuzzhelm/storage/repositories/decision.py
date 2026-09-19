@@ -8,6 +8,10 @@
 float ядра (u, κ, T/R/V) перетворюються в NUMERIC через найкоротше repr (common.to_numeric);
 PostgreSQL округлює їх до масштабу колонки (NUMERIC(8,5) / NUMERIC(6,4)). Точні значення лишаються
 в JSONB (detector_outputs/memberships/fired_rules — float як є).
+
+Ревізія 0004 (deviations API-02) додала `sizing` (SizingResult.to_dict()), `risk` (GuardResult.to_dict()
++ стан автомата) і `narrative` (decision.narrative_uk.narrate) — усе nullable, щоб /explain мав
+повну розкладку сайзера з binding_constraint і готовий україномовний текст.
 """
 
 from __future__ import annotations
@@ -53,15 +57,21 @@ class DecisionRecord:
     stop_price: Decimal | None = None
     tp_price: Decimal | None = None
     liq_price: Decimal | None = None
+    sizing: dict[str, Any] | None = None       # 0004: SizingResult.to_dict() (q_atr, q_vt, q_lev, ...)
+    risk: dict[str, Any] | None = None         # 0004: GuardResult.to_dict() + стан автомата
+    narrative: str | None = None               # 0004: decision.narrative_uk.narrate(trace)
 
     @classmethod
     def from_trace(cls, trace: Any, *, run_id: UUID, instrument_id: int | None,
                    target_side: int | None = None, target_qty: Decimal | None = None,
                    binding_constraint: str | None = None, stop_price: Decimal | None = None,
-                   tp_price: Decimal | None = None, liq_price: Decimal | None = None) -> DecisionRecord:
+                   tp_price: Decimal | None = None, liq_price: Decimal | None = None,
+                   narrative: str | None = None) -> DecisionRecord:
         """З decision.trace.DecisionTrace (або його to_dict()) — без імпорту пакета decision.
 
         agreement := A_g (1 − нормована ентропія), kappa := κ; ціль сайзера береться з явних аргументів.
+        `sizing`/`risk` трасування (with_sizing/with_risk) пишуться в JSONB-колонки 0004 як є;
+        binding_constraint, якщо його не передано явно, береться з sizing.
         """
         d: Mapping[str, Any] = trace.to_dict() if hasattr(trace, "to_dict") else trace
         inputs = d.get("inputs") or {}
@@ -74,6 +84,11 @@ class DecisionRecord:
             {k: r.get(k) for k in ("rule_id", "alpha", "consequent", "antecedent")}
             for r in d.get("fired_rules") or []
         ]
+        sizing = d.get("sizing")
+        risk = d.get("risk")
+        if binding_constraint is None and isinstance(sizing, Mapping):
+            bc = sizing.get("binding_constraint")
+            binding_constraint = None if bc is None else str(getattr(bc, "value", bc))
         return cls(
             run_id=run_id, instrument_id=instrument_id, open_time_ns=d.get("open_time_ns"),
             detector_outputs=outputs, memberships=dict(d.get("memberships") or {}), fired_rules=fired,
@@ -81,6 +96,8 @@ class DecisionRecord:
             agreement=agr.get("A_g"), kappa=d.get("kappa"), u_raw=d.get("u_raw"), u_final=d.get("u_final"),
             target_side=target_side, target_qty=target_qty, binding_constraint=binding_constraint,
             stop_price=stop_price, tp_price=tp_price, liq_price=liq_price,
+            sizing=None if sizing is None else dict(sizing), risk=None if risk is None else dict(risk),
+            narrative=narrative,
         )
 
     def to_values(self) -> dict[str, Any]:
@@ -94,6 +111,7 @@ class DecisionRecord:
             "fired_rules": self.fired_rules, "target_side": self.target_side,
             "target_qty": self.target_qty, "binding_constraint": self.binding_constraint,
             "stop_price": self.stop_price, "tp_price": self.tp_price, "liq_price": self.liq_price,
+            "sizing": self.sizing, "risk": self.risk, "narrative": self.narrative,
         }
 
 
@@ -119,6 +137,9 @@ class DecisionRow:
     stop_price: Decimal | None
     tp_price: Decimal | None
     liq_price: Decimal | None
+    sizing: dict[str, Any] | None = None
+    risk: dict[str, Any] | None = None
+    narrative: str | None = None
 
 
 class DecisionRepo:

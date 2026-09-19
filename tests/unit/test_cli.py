@@ -1,0 +1,435 @@
+"""CLI `fuzzhelm`: розбір аргументів, dry-run без мережі й БД, вікно датасету, план добору, крос-звірка
+зі збережених сирих відповідей, нормалізація і файли історії фінансування, REST-ендпоінти хвилі 2.
+
+Найменування: tests/unit/test_cli.py
+Призначення: усе, що CLI робить БЕЗ мережі й БД, — детерміновано і швидко; мережеві шляхи — лише через respx.
+Автор: Андрій Жук, 2026.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import httpx
+import numpy as np
+import orjson
+import pytest
+import respx
+
+from fuzzhelm import cli
+from fuzzhelm.backtest.manifest import dataset_hash
+from fuzzhelm.core.clock import ManualClock
+from fuzzhelm.core.enums import Venue
+from fuzzhelm.core.errors import NormalizationError
+from fuzzhelm.ingest.funding import (
+    fetch_funding_history,
+    funding_columns,
+    funding_document,
+    load_funding_json,
+    write_funding_json,
+)
+from fuzzhelm.ingest.normalize import FundingRate, normalize_funding_rate, normalize_funding_rates
+from fuzzhelm.ingest.ratelimit import binance_request_bucket, request_weight
+from fuzzhelm.ingest.rest_client import BinanceRestClient
+from fuzzhelm.ingest.retry import RetryPolicy
+from fuzzhelm.ingest.symbols import BTC_USDT_PERP, ETH_USDT_PERP
+
+ROOT = Path(__file__).resolve().parents[2]
+REST = ROOT / "fixtures" / "rest"
+DAY = 86_400_000
+BASE = "https://fapi.binance.com"
+
+
+async def _no_sleep(_: float) -> None:
+    return None
+
+
+@pytest.fixture
+def offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Будь-яка спроба відкрити HTTP-клієнт або БД у dry-run — провал тесту (доказ «без мережі й БД»)."""
+
+    def boom(*_: Any, **__: Any) -> Any:
+        raise AssertionError("dry-run must not touch the network or the database")
+
+    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    monkeypatch.setattr(cli, "_engine", boom)
+
+
+def _window_json(tmp_path: Path, end: date = date(2026, 9, 18), days: int = 45) -> Path:
+    w = cli.DatasetWindow.ending_at(cli.utc_date_ms(end), days)
+    path = tmp_path / "dataset_window.json"
+    path.write_bytes(orjson.dumps({"v": 1, "window": w.to_dict()}))
+    return path
+
+
+# ================================================================== argparse
+
+
+def test_parser_backfill_defaults_and_symbol_parsing() -> None:
+    a = cli.build_parser().parse_args(["backfill"])
+    assert a.command == "backfill" and a.days == 45 and a.symbols == ("BTCUSDT", "ETHUSDT")
+    assert a.limit == 1500 and a.end_date is None and a.dry_run is False
+    a = cli.build_parser().parse_args(["backfill", "--days", "3", "--symbols", " btcusdt, ethusdt ,",
+                                       "--end-date", "2026-09-18", "--limit", "500", "--dry-run"])
+    assert a.days == 3 and a.symbols == ("BTCUSDT", "ETHUSDT") and a.end_date == date(2026, 9, 18)
+    assert a.limit == 500 and a.dry_run is True
+
+
+@pytest.mark.parametrize("argv", [
+    ["backfill", "--days", "0"], ["backfill", "--days", "x"], ["backfill", "--symbols", ","],
+    ["backfill", "--symbols", "BTC/USDT"], ["backfill", "--end-date", "18.09.2026"],
+    ["backfill", "--limit", "1"], ["backfill", "--limit", "1501"],
+    ["crosscheck", "--threshold-bps", "-1"], ["crosscheck", "--threshold-bps", "NaN"],
+    ["verify-journal", "--run-id", "not-a-uuid"], ["calibrate", "--is-days", "0"], [], ["nope"],
+])
+def test_parser_rejects_bad_arguments(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as e:
+        cli.build_parser().parse_args(argv)
+    assert e.value.code == 2
+    capsys.readouterr()
+
+
+def test_every_subcommand_has_a_handler_and_parses() -> None:
+    p = cli.build_parser()
+    sub = next(a for a in p._actions if isinstance(a, argparse._SubParsersAction))
+    assert set(sub.choices) == set(cli.HANDLERS) == {
+        "backfill", "crosscheck", "fetch-funding", "calibrate", "replay-gap", "verify-journal", "db-stats"}
+    for name in cli.HANDLERS:
+        assert p.parse_args([name]).command == name
+    rid = "7d441046-5916-59d6-9ba7-3971dc3b1caa"
+    assert str(p.parse_args(["verify-journal", "--run-id", rid]).run_id) == rid
+    assert p.parse_args(["--database-url", "postgresql+asyncpg://x@h/db", "db-stats", "--json"]).json is True
+    assert p.parse_args(["crosscheck"]).threshold_bps == Decimal(50)
+
+
+def test_calibrate_is_days_default_comes_from_backtest_profile() -> None:
+    from fuzzhelm.config import load_yaml  # noqa: PLC0415
+
+    assert cli.build_parser().parse_args(["calibrate"]).is_days == \
+        load_yaml("profiles/backtest")["walkforward"]["is_days"]
+
+
+# ================================================================== вікно і план
+
+
+def test_dataset_window_is_45_full_utc_days_ending_at_midnight() -> None:
+    end = cli.utc_date_ms(date(2026, 9, 18))
+    w = cli.DatasetWindow.ending_at(end, 45)
+    assert cli.utc_iso(w.start_ms) == "2026-08-04T00:00:00Z"
+    assert cli.utc_iso(w.end_ms) == "2026-09-18T00:00:00Z"
+    assert w.days == 45 and w.bars_per_symbol == 45 * 1440 == 64_800
+    assert cli.utc_iso(w.last_open_ms) == "2026-09-17T23:59:00Z"
+    assert cli.DatasetWindow.from_dict(w.to_dict()) == w
+    # перше IS-вікно (дні 1–15) закінчується там, де починається перше OOS
+    lo, hi = w.sub_window(1, 15)
+    assert lo == w.start_ms and hi == w.start_ms + 15 * DAY
+    with pytest.raises(ValueError):
+        w.sub_window(40, 10)
+    with pytest.raises(ValueError):
+        cli.DatasetWindow(w.start_ms + 1, w.end_ms)
+    with pytest.raises(ValueError):
+        cli.DatasetWindow(w.end_ms, w.start_ms)
+    # «останній повний UTC-день»: кінець вікна = північ поточного дня за часом біржі
+    now = end + 21 * 3_600_000 + 14 * 60_000 + 26_747
+    assert cli.day_floor_ms(now) == end and cli.day_floor_ms(end) == end
+    assert cli.utc_iso(now) == "2026-09-18T21:14:26.747000Z"
+
+
+@pytest.mark.parametrize(("n", "limit", "pages"), [
+    (1, 1500, 1), (1500, 1500, 1), (1501, 1500, 2), (2999, 1500, 2), (3000, 1500, 3), (64_800, 1500, 44),
+    (10, 2, 9),
+])
+def test_pages_needed_counts_one_bar_overlap(n: int, limit: int, pages: int) -> None:
+    assert cli.pages_needed(n, limit) == pages
+    # перевірка незалежною симуляцією пагінації: перша сторінка limit, далі limit − 1 нових
+    got, covered = 1, min(n, limit)
+    while covered < n:
+        covered += limit - 1
+        got += 1
+    assert got == pages
+
+
+def test_plan_backfill_weight_uses_measured_klines_table() -> None:
+    plan = cli.plan_backfill(cli.DatasetWindow.ending_at(cli.utc_date_ms(date(2026, 9, 18)), 45))
+    assert plan.pages_per_symbol == 44 and plan.weight_per_symbol == 44 * 10
+    assert plan.total_weight == 2 * 440 + 3 + 1 and plan.total_requests == 2 * 44 + 4
+    assert plan.total_weight < 2400                                 # увесь добір — в одну хвилинну квоту
+    small = cli.plan_backfill(cli.DatasetWindow.ending_at(cli.utc_date_ms(date(2026, 9, 18)), 1), limit=500)
+    assert small.pages_per_symbol == 3 and small.weight_per_symbol == 3 * 2
+    with pytest.raises(ValueError):
+        cli.pages_needed(10, 1)
+
+
+# ================================================================== dry-run: без мережі й БД
+
+
+def test_backfill_dry_run_prints_plan_without_network_or_db(offline: None,
+                                                            capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["backfill", "--dry-run", "--end-date", "2026-09-18"]) == 0
+    out = capsys.readouterr().out
+    assert "[2026-08-04T00:00:00Z, 2026-09-18T00:00:00Z)" in out and "64800 per symbol, 129600 total" in out
+    assert "44 klines pages/symbol" in out and "= 884" in out
+
+
+def test_other_dry_runs_touch_neither_network_nor_db(offline: None, tmp_path: Path,
+                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    win = _window_json(tmp_path)
+    assert cli.main(["crosscheck", "--dry-run"]) == 0
+    assert "pair=XBTUSD" in capsys.readouterr().out
+    assert cli.main(["fetch-funding", "--dry-run", "--window-json", str(win), "--symbols", "BTCUSDT"]) == 0
+    out = capsys.readouterr().out
+    assert "fundingRate symbol=BTCUSDT startTime=1785801600000 endTime=1789689599999" in out
+    assert cli.main(["calibrate", "--dry-run", "--window-json", str(win)]) == 0
+    assert "[2026-08-04T00:00:00Z, 2026-08-19T00:00:00Z) = 21600 bars (days 1–15)" in capsys.readouterr().out
+    assert cli.main(["replay-gap", "--dry-run"]) == 0
+    assert "journal run_id=" in capsys.readouterr().out
+
+
+def test_missing_window_file_is_a_clean_cli_error(offline: None, tmp_path: Path,
+                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["calibrate", "--dry-run", "--window-json", str(tmp_path / "none.json")]) == 2
+    assert "run `fuzzhelm backfill` first" in capsys.readouterr().err
+
+
+def test_replay_run_id_is_deterministic_per_session_file(tmp_path: Path) -> None:
+    a = tmp_path / "a.jsonl.gz"
+    a.write_bytes(b"x")
+    b = tmp_path / "b.jsonl.gz"
+    b.write_bytes(b"x")
+    c = tmp_path / "c.jsonl.gz"
+    c.write_bytes(b"y")
+    assert cli.replay_run_id(a) == cli.replay_run_id(b) != cli.replay_run_id(c)
+    assert cli.replay_run_id(a).version == 5
+
+
+# ================================================================== крос-звірка зі збережених відповідей
+
+
+def _raw_from_fixtures() -> dict[str, Any]:
+    kraken = orjson.loads((REST / "kraken_ohlc.json").read_bytes())
+    rows = orjson.loads(gzip.decompress((REST / "binance_klines.json.gz").read_bytes()))
+    server_ms = orjson.loads((REST / "server_time.json").read_bytes())["serverTime"]
+    return {"v": 1, "captured_utc": "2026-09-18T19:25:37Z",
+            "kraken": {"pair": "XBTUSD", "interval": 1, "ts_ingest_ns": server_ms * 1_000_000,
+                       "result": kraken["result"]},
+            "binance": {"symbol": "BTCUSDT", "interval": "1m", "ts_ingest_ns": server_ms * 1_000_000,
+                        "server_time_ms": server_ms, "rows": rows}}
+
+
+def test_crosscheck_analysis_on_recorded_real_data_is_consistent_and_reproducible() -> None:
+    raw = _raw_from_fixtures()
+    a = cli.analyze_crosscheck(raw)
+    s = a.stats
+    assert s["matched"] == len(a.report.rows) > 700 and s["missing_in_binance"] == s["missing_in_kraken"] == 0
+    d = sorted(r.diff_bps for r in a.report.rows)
+    ad = sorted(abs(x) for x in d)
+    assert s["mean_bps"] == a.report.mean_bps and s["max_abs_bps"] == ad[-1] == a.report.max_abs_bps
+    assert s["p95_abs_bps"] == ad[int(np.ceil(0.95 * len(ad))) - 1]           # найближчий ранг
+    assert s["median_abs_bps"] <= s["p95_abs_bps"] <= s["max_abs_bps"]
+    assert s["count_above_threshold"] == len(a.report.flagged) == 0     # справжні дані: жодної > 50 б.п.
+    assert a.decomposition["n"] == 0                                    # без індексу/USDT — без розкладу
+    again = cli.analyze_crosscheck(orjson.loads(orjson.dumps(raw)))
+    assert again.stats == s                                             # той самий вхід → той самий звіт
+
+
+def test_crosscheck_analysis_flags_injected_divergence_and_decomposes_exactly() -> None:
+    raw = _raw_from_fixtures()
+    key = next(k for k in raw["kraken"]["result"] if k != "last")
+    rows = raw["kraken"]["result"][key]
+    victim = rows[100]
+    victim[4] = str((Decimal(victim[4]) * Decimal("0.99")).quantize(Decimal("0.1")))   # застиглий тик −1 %
+    victim[3] = min(victim[3], victim[4], key=Decimal)                                   # OHLC узгоджений
+    # індекс і USDT/USD для розкладу: синтетичні, але з точно відомою відповіддю
+    closes = {int(r[0]): r[4] for r in raw["binance"]["rows"]}
+    raw["binance_index"] = {"rows": [[t, "0", "0", "0", str(Decimal(c) * Decimal("0.9995")), "0", 0, "0", 0,
+                                      "0", "0", "0"] for t, c in closes.items()]}
+    raw["kraken_usdtusd"] = {"result": {"USDTZUSD": [[int(r[0]), "1", "1", "1", "0.9990", "1", "1", 1]
+                                                     for r in rows], "last": raw["kraken"]["result"]["last"]}}
+    a = cli.analyze_crosscheck(raw)
+    assert a.stats["count_above_threshold"] == 1 == len(a.report.flagged)
+    assert a.report.flagged[0].open_time_ns == int(victim[0]) * 1_000_000_000
+    dc = a.decomposition
+    assert dc["n"] == a.stats["matched"] and dc["identity_max_err"] < 1e-9
+    assert dc["perp_premium_bps"]["median"] == pytest.approx(-1e4 * np.log(0.9995), abs=1e-9)
+    assert dc["usdt_discount_bps"]["median"] == pytest.approx(-1e4 * np.log(0.9990), abs=1e-9)
+
+
+def test_committed_crosscheck_input_reproduces_its_report_invariants() -> None:
+    path = ROOT / "data" / "crosscheck_input.json.gz"
+    if not path.exists():
+        pytest.skip("data/crosscheck_input.json.gz is produced by `fuzzhelm crosscheck`")
+    raw = cli._load_raw(path)
+    a = cli.analyze_crosscheck(raw)
+    assert a.stats["matched"] == a.stats["kraken_closed"] == len(a.series["d_bps"])
+    assert a.decomposition["n"] == a.stats["matched"] and a.decomposition["identity_max_err"] < 1e-9
+    md = cli.crosscheck_report_md(a, raw, input_path="data/crosscheck_input.json.gz", command="x")
+    assert f"| звірено хвилин (спільний open_time) | {a.stats['matched']} |" in md
+
+
+def test_order_statistics_helpers() -> None:
+    xs = [Decimal(x) for x in (1, 2, 3, 4)]
+    assert cli._median(xs) == Decimal("2.5") and cli._median(xs[:3]) == 2
+    assert cli._order_stat(xs, Decimal("0.95")) == 4 and cli._order_stat(xs, Decimal("0.5")) == 2
+    assert cli._order_stat(xs, Decimal("0.01")) == 1
+
+
+# ================================================================== funding: нормалізація, файл, хеш
+
+
+ROW = {"symbol": "BTCUSDT", "fundingTime": 1785801600004, "fundingRate": "0.00003081",
+       "markPrice": "63497.20000000", "rateType": "Regular"}
+
+
+def test_funding_rate_normalization_is_strict_and_exact() -> None:
+    fr = normalize_funding_rate(ROW, BTC_USDT_PERP)
+    assert fr == FundingRate("BTC-USDT-PERP", Venue.BINANCE_USDM, 1785801600004 * 1_000_000,
+                             Decimal("0.00003081"), Decimal("63497.20000000"), "Regular")
+    assert fr.funding_time_ms == 1785801600004 and str(fr.funding_rate) == "0.00003081"   # масштаб збережено
+    assert normalize_funding_rate(ROW | {"markPrice": ""}, BTC_USDT_PERP).mark_price is None
+    no_type = {k: v for k, v in ROW.items() if k != "rateType"}
+    assert normalize_funding_rate(no_type, BTC_USDT_PERP).rate_type is None
+    assert normalize_funding_rate(ROW | {"fundingRate": "-0.00010810"}, BTC_USDT_PERP).funding_rate < 0
+    bad = [
+        (ROW | {"extra": 1}, "extra"), ({k: v for k, v in ROW.items() if k != "fundingRate"}, "fundingRate"),
+        (ROW | {"fundingRate": 0.0001}, "fundingRate"), (ROW | {"fundingRate": "1e-4"}, "fundingRate"),
+        (ROW | {"fundingTime": "1785801600004"}, "fundingTime"), (ROW | {"fundingTime": True}, "fundingTime"),
+        (ROW | {"markPrice": "0"}, "markPrice"), (ROW | {"symbol": "ETHUSDT"}, "symbol"),
+        (ROW | {"rateType": 1}, "rateType"),
+    ]
+    for row, field in bad:
+        with pytest.raises(NormalizationError) as e:
+            normalize_funding_rate(row, BTC_USDT_PERP)
+        assert e.value.field == field and e.value.venue == "BINANCE_USDM"
+
+
+def test_funding_batch_sorts_dedups_and_reports_row_index() -> None:
+    r2 = ROW | {"fundingTime": ROW["fundingTime"] + 8 * 3_600_000 - 4}
+    out = normalize_funding_rates([r2, ROW, ROW], BTC_USDT_PERP)
+    assert [x.funding_time_ms for x in out] == [ROW["fundingTime"], r2["fundingTime"]]
+    with pytest.raises(NormalizationError) as e:
+        normalize_funding_rates([ROW, ROW | {"fundingRate": "0.5"}], BTC_USDT_PERP)
+    assert e.value.field == "[1].fundingTime"
+    with pytest.raises(NormalizationError) as e:
+        normalize_funding_rates([ROW, ROW | {"x": 1}], BTC_USDT_PERP)
+    assert e.value.field == "[1].x"
+
+
+def _rates(n: int = 5) -> list[FundingRate]:
+    return normalize_funding_rates([ROW | {"fundingTime": ROW["fundingTime"] + i * 28_800_000,
+                                           "fundingRate": f"0.0000{i}081"} for i in range(n)], BTC_USDT_PERP)
+
+
+def test_funding_file_roundtrip_digest_and_dataset_hash_columns(tmp_path: Path) -> None:
+    rates = _rates()
+    doc = funding_document(rates, BTC_USDT_PERP, base_url=BASE, window={"days": 45},
+                           fetched_at_utc="2026-09-18T21:16:13Z", requests=1)
+    assert doc["source"] == f"GET {BASE}/fapi/v1/fundingRate" and doc["count"] == 5
+    path = write_funding_json(tmp_path / "funding_BTCUSDT.json", doc)
+    series = load_funding_json(path, BTC_USDT_PERP)
+    assert series.rates == tuple(rates) and series.meta["rows_digest"] == doc["rows_digest"]
+    with pytest.raises(ValueError, match="symbol"):
+        load_funding_json(path, ETH_USDT_PERP)
+    tampered = orjson.loads(path.read_bytes())
+    tampered["rows"][2][1] = "0.1"
+    (tmp_path / "t.json").write_bytes(orjson.dumps(tampered))
+    with pytest.raises(ValueError, match="rows_digest"):
+        load_funding_json(tmp_path / "t.json", BTC_USDT_PERP)
+    cols = funding_columns(rates)
+    assert cols["funding_t_ns"].dtype == np.int64 and cols["funding_rate"].dtype == np.float64
+    assert cols["funding_rate"][1] == float("0.00001081")
+    base = {"t_ns": np.arange(3, dtype=np.int64), "c": np.array([1.0, 2.0, 3.0])}
+    h_with = dataset_hash(base | cols)
+    last = FundingRate(**{**_asdict(rates[-1]), "funding_rate": Decimal("0.9")})
+    changed = funding_columns([*rates[:-1], last])
+    assert h_with != dataset_hash(base) and h_with != dataset_hash(base | changed)   # funding входить у хеш
+
+
+def _asdict(fr: FundingRate) -> dict[str, Any]:
+    return {k: getattr(fr, k) for k in FundingRate.__slots__}
+
+
+@pytest.mark.parametrize("name", ["BTCUSDT", "ETHUSDT"])
+def test_committed_funding_files_are_valid_and_cover_the_dataset_window(name: str) -> None:
+    path = ROOT / "data" / f"funding_{name}.json"
+    win = ROOT / "data" / "dataset_window.json"
+    if not (path.exists() and win.exists()):
+        pytest.skip("data/ is produced by `fuzzhelm backfill` + `fuzzhelm fetch-funding`")
+    ref = BTC_USDT_PERP if name == "BTCUSDT" else ETH_USDT_PERP
+    series = load_funding_json(path, ref)
+    w, _ = cli.load_window(win)
+    ts = [r.funding_time_ms for r in series.rates]
+    assert all(w.start_ms <= t < w.end_ms for t in ts) and ts == sorted(ts)
+    # ставки кожні 8 год (00/08/16 UTC) з мілісекундним «хвостом» біржі
+    assert all(t % (8 * 3_600_000) < 1000 for t in ts) and len(ts) == 3 * w.days
+
+
+# ================================================================== REST хвилі 2 (respx, без мережі)
+
+
+def _client(http: httpx.AsyncClient) -> BinanceRestClient:
+    clock = ManualClock(1_789_765_359_000_000_000)
+    return BinanceRestClient(BASE, http, binance_request_bucket(clock, sleep=_no_sleep),
+                             RetryPolicy(rng_seed=0), clock=clock, sleep=_no_sleep)
+
+
+async def test_funding_history_paginates_by_time_and_filters_window() -> None:
+    t0 = 1785801600004
+    rows = [ROW | {"fundingTime": t0 + i * 28_800_000} for i in range(5)]
+    calls: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        q = dict(request.url.params)
+        calls.append(q)
+        start, lim = int(q["startTime"]), int(q["limit"])
+        page = [r for r in rows if start <= r["fundingTime"] <= int(q["endTime"])][:lim]
+        return httpx.Response(200, json=page)
+
+    async with respx.mock(assert_all_called=True) as router:
+        router.get(f"{BASE}/fapi/v1/fundingRate").mock(side_effect=handler)
+        async with httpx.AsyncClient() as http:
+            client = _client(http)
+            rates, n = await fetch_funding_history(client, BTC_USDT_PERP, t0 - 4, t0 + 3 * 28_800_000,
+                                                   limit=2)
+    assert [r.funding_time_ms for r in rates] == [t0 + i * 28_800_000 for i in range(4)]
+    # 2 повні сторінки; після другої курсор (t₃ + 1) уже за межею вікна — третього запиту немає
+    assert n == 2 and calls[1]["startTime"] == str(t0 + 28_800_000 + 1)
+    assert client.bucket.acquired_weight == n * request_weight("/fapi/v1/fundingRate")
+    with pytest.raises(ValueError):
+        await fetch_funding_history(client, BTC_USDT_PERP, 10, 5)
+
+
+async def test_agg_trades_and_index_klines_endpoints_charge_measured_weights() -> None:
+    assert request_weight("/fapi/v1/aggTrades", {"fromId": 1, "limit": 1000}) == 20
+    assert request_weight("/fapi/v1/indexPriceKlines", {"limit": 1000}) == 5
+    assert request_weight("/fapi/v1/indexPriceKlines", {"limit": 2}) == 1
+    trade = {"a": 7, "p": "81118.60", "q": "0.001", "nq": "0.001", "f": 10, "l": 10, "T": 1789765359306,
+             "m": False}
+    async with respx.mock(assert_all_called=True) as router:
+        agg = router.get(f"{BASE}/fapi/v1/aggTrades").mock(return_value=httpx.Response(200, json=[trade]))
+        idx = router.get(f"{BASE}/fapi/v1/indexPriceKlines").mock(return_value=httpx.Response(200, json=[]))
+        async with httpx.AsyncClient() as http:
+            client = _client(http)
+            assert await client.agg_trades("BTCUSDT", from_id=7, limit=1000) == [trade]
+            assert await client.index_price_klines("BTCUSDT", start_ms=1, end_ms=2, limit=1000) == []
+    assert dict(agg.calls[0].request.url.params) == {"symbol": "BTCUSDT", "fromId": "7", "limit": "1000"}
+    assert dict(idx.calls[0].request.url.params)["pair"] == "BTCUSDT"
+    assert client.bucket.acquired_weight == 20 + 5 and client.requests_sent == 2
+    with pytest.raises(ValueError):
+        await client.agg_trades("BTCUSDT", limit=1001)
+    with pytest.raises(ValueError):
+        await client.funding_rate_history("BTCUSDT", limit=0)
+
+
+async def test_http_log_records_used_weight_header() -> None:
+    log = cli.HttpLog()
+    req = httpx.Request("GET", f"{BASE}/fapi/v1/time")
+    await log.on_response(httpx.Response(200, headers={"X-MBX-USED-WEIGHT-1M": "22"}, request=req))
+    await log.on_response(httpx.Response(200, headers=[(b"X-MBX-USED-WEIGHT-1M", b"\xb2")], request=req))
+    await log.on_response(httpx.Response(429, request=req))
+    assert log.by_path() == {"/fapi/v1/time": 3} and log.statuses() == {200: 2, 429: 1}
+    assert log.max_used_weight() == 22

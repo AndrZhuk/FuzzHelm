@@ -599,3 +599,98 @@ def normalize_kraken_asset_pair(result: Mapping[str, Any], pair: str = "XBTUSD")
         step_size=Decimal(1).scaleb(-lot_decimals),
         min_notional=_dec(p["costmin"], f"result.{key}.costmin", _KRK),
     )
+
+
+# ---------------------------------------------------------------- REST aggTrades (добір угод, WS-04)
+
+REST_AGG_TRADE_FIELDS: Final = frozenset({"a", "p", "q", "f", "l", "T", "m", "nq"})
+REST_AGG_TRADE_REQUIRED: Final = REST_AGG_TRADE_FIELDS - {"nq"}
+
+
+def normalize_rest_agg_trade(row: Mapping[str, Any], instrument: InstrumentLike, ts_ingest_ns: int) -> Trade:
+    """Рядок `GET /fapi/v1/aggTrades` → Trade з тим самим event_uid, що й WS aggTrade (дедуплікація добору).
+
+    Строга схема {a, p, q, f, l, T, m[, nq]} (у відповідях 2026 року є `nq` — як у WS, ING-04).
+    Перенесено з ingest/pipeline.py на запит WS-04 (docs/deviations.d/ingest_ws.md).
+    """
+    venue = instrument.venue.value
+    d = _mapping(row, "$", venue)
+    _check_fields(d, REST_AGG_TRADE_FIELDS, REST_AGG_TRADE_REQUIRED, "", venue)
+    if "nq" in d:
+        _dec(d["nq"], "nq", venue)
+    agg_id = _int(d["a"], "a", venue)
+    return _build(
+        Trade, venue,
+        instrument=instrument.symbol_canon, venue=instrument.venue, agg_id=agg_id,
+        first_trade_id=_int(d["f"], "f", venue), last_trade_id=_int(d["l"], "l", venue),
+        price=_dec(d["p"], "p", venue), qty=_dec(d["q"], "q", venue),
+        is_buyer_maker=_bool(d["m"], "m", venue),
+        ts_event_ns=ms_to_ns(_int(d["T"], "T", venue)), ts_ingest_ns=ts_ingest_ns,
+        event_uid=trade_uid(instrument.venue, instrument.symbol_canon, agg_id),
+    )
+
+
+# ---------------------------------------------------------------- REST fundingRate (історія ставок)
+
+FUNDING_RATE_FIELDS: Final = frozenset({"symbol", "fundingTime", "fundingRate", "markPrice", "rateType"})
+FUNDING_RATE_REQUIRED: Final = frozenset({"symbol", "fundingTime", "fundingRate"})
+
+
+@dataclass(frozen=True, slots=True)
+class FundingRate:
+    """Одна ставка фінансування перпетуала (`GET /fapi/v1/fundingRate`).
+
+    `funding_time_ns` — момент нарахування за біржею (у відповіді є мілісекундний «хвіст», напр.
+    …600004 мс, він зберігається як є); `mark_price` — mark на момент нарахування (у старих записах
+    Binance повертає порожній рядок → None); `rate_type` — поле `rateType` (2026: "Regular"), не
+    інтерпретується.
+    """
+
+    instrument: str
+    venue: Venue
+    funding_time_ns: int
+    funding_rate: Decimal
+    mark_price: Decimal | None
+    rate_type: str | None = None
+
+    @property
+    def funding_time_ms(self) -> int:
+        return self.funding_time_ns // NS_PER_MS
+
+
+def normalize_funding_rate(row: Mapping[str, Any], instrument: InstrumentLike) -> FundingRate:
+    """Рядок `fundingRate` → FundingRate; невідоме поле / не той тип / чужий символ → NormalizationError."""
+    d = _mapping(row, "$", _BIN)
+    _check_fields(d, FUNDING_RATE_FIELDS, FUNDING_RATE_REQUIRED, "", _BIN)
+    if _str(d["symbol"], "symbol", _BIN) != instrument.symbol_venue:
+        _fail(f"symbol {d['symbol']!r} != {instrument.symbol_venue!r}", "symbol", _BIN)
+    mark: Decimal | None = None
+    if "markPrice" in d and d["markPrice"] != "":
+        mark = _dec(d["markPrice"], "markPrice", _BIN)
+        if mark <= 0:
+            _fail(f"markPrice must be > 0, got {mark}", "markPrice", _BIN)
+    t_ms = _int(d["fundingTime"], "fundingTime", _BIN)
+    if t_ms < 0:
+        _fail("fundingTime must be >= 0", "fundingTime", _BIN)
+    return FundingRate(
+        instrument=instrument.symbol_canon, venue=instrument.venue, funding_time_ns=ms_to_ns(t_ms),
+        funding_rate=_dec(d["fundingRate"], "fundingRate", _BIN), mark_price=mark,
+        rate_type=_str(d["rateType"], "rateType", _BIN) if "rateType" in d else None,
+    )
+
+
+def normalize_funding_rates(rows: Iterable[Mapping[str, Any]],
+                            instrument: InstrumentLike) -> list[FundingRate]:
+    """Пакетно; помилка у рядку i → NormalizationError(field="[i].<поле>"). Результат — за зростанням часу,
+    без дублікатів часу (дублікат з іншим значенням — помилка: дві різні ставки на один момент)."""
+    out: dict[int, FundingRate] = {}
+    for i, r in enumerate(rows):
+        try:
+            fr = normalize_funding_rate(r, instrument)
+        except NormalizationError as e:
+            raise NormalizationError(str(e), field=f"[{i}].{e.field}", venue=_BIN) from e
+        prev = out.get(fr.funding_time_ns)
+        if prev is not None and prev != fr:
+            _fail(f"conflicting funding records at {fr.funding_time_ns}", f"[{i}].fundingTime", _BIN)
+        out[fr.funding_time_ns] = fr
+    return [out[k] for k in sorted(out)]

@@ -5,13 +5,18 @@
 limit_value, state_from/state_to, dwell_bars, actor, payload. Записи приходять із risk.journal.RiskJournal
 (через BufferedSink) і пишуться пачкою.
 Автор: Андрій Жук, 2026.
+
+Точність множника (deviations API-03): колонка factor — NUMERIC(6,4) (DDL §6), а множник SHRINK —
+точний дріб, обрізаний до 1e−18 (`Verdict.factor_dec`). PostgreSQL округлив би, напр., 0.99996 → 1.0000,
+тобто SHRINK виглядав би як ALLOW. Якщо значення не вміщується в 4 знаки, точний рядок пишеться ще й у
+payload["factor_exact"]; `RiskEventRow.factor_exact` повертає точне значення.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -19,6 +24,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fuzzhelm.core.enums import VerdictKind
+from fuzzhelm.core.money import dec_str
 from fuzzhelm.storage.models import RiskEventModel, table_of
 from fuzzhelm.storage.repositories.common import (
     chunks,
@@ -32,6 +38,8 @@ from fuzzhelm.storage.repositories.common import (
 _T = table_of(RiskEventModel)
 INSERT_CHUNK = 2_000
 STATE_RULE = "risk_state"       # rule переходу автомата (risk.journal.RiskJournal.record_transition)
+FACTOR_SCALE = Decimal("0.0001")  # масштаб колонки factor NUMERIC(6,4)
+FACTOR_EXACT_KEY = "factor_exact"
 
 
 class RiskRecordLike(Protocol):
@@ -69,6 +77,21 @@ class RiskEventRow:
     actor: str | None
     payload: dict[str, Any] | None
 
+    @property
+    def factor_exact(self) -> Decimal | None:
+        """Точний множник: payload["factor_exact"], якщо NUMERIC(6,4) його округлила, інакше factor."""
+        raw = (self.payload or {}).get(FACTOR_EXACT_KEY)
+        return Decimal(str(raw)) if raw is not None else self.factor
+
+
+def exact_factor_payload(factor: Decimal | None, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """payload + factor_exact, якщо factor не вміщується в масштаб NUMERIC(6,4) без округлення."""
+    out = dict(payload)
+    if factor is not None and factor.is_finite() and factor != factor.quantize(FACTOR_SCALE,
+                                                                                  rounding=ROUND_DOWN):
+        out[FACTOR_EXACT_KEY] = dec_str(factor)
+    return out
+
 
 def record_values(r: RiskRecordLike, *, run_id: UUID | None = None,
                   instrument_ids: Mapping[str, int] | None = None) -> dict[str, Any]:
@@ -84,7 +107,7 @@ def record_values(r: RiskRecordLike, *, run_id: UUID | None = None,
         "factor": to_numeric(r.factor), "observed": to_numeric(r.observed),
         "limit_value": to_numeric(r.limit_value), "state_from": enum_value(r.state_from),
         "state_to": enum_value(r.state_to), "dwell_bars": r.dwell_bars, "actor": r.actor,
-        "payload": dict(r.payload),
+        "payload": exact_factor_payload(r.factor, r.payload),
     }
 
 

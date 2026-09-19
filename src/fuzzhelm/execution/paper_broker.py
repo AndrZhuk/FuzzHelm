@@ -274,6 +274,12 @@ class PaperBroker:
         return OrderAck(client_order_id=client_order_id, venue_order_id=o.venue_order_id,
                         status=o.status, reject_code=o.reject_code, ts_ns=o.ts_ns)
 
+    def order_request(self, client_order_id: UUID) -> OrderRequest | None:
+        """Заявка (після квантування брокером) за client_order_id — зокрема синтетичні TP/ліквідації,
+        яких рушій не створював (потрібні для рядка sim_order)."""
+        o = self._orders.get(client_order_id)
+        return None if o is None else o.req
+
     def exit_reason(self, client_order_id: UUID) -> ExitReason | None:
         o = self._orders.get(client_order_id)
         return None if o is None else o.exit_reason

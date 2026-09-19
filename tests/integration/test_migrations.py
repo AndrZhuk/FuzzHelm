@@ -22,7 +22,9 @@ from fuzzhelm.storage.models import ALL_TABLES, APP_ROLE, AUTH_TABLES, CORE_TABL
 
 pytestmark = pytest.mark.integration
 
-HEAD = "0003_auth_audit"
+HEAD = "0004_decision_trace_extras"
+# 0004 (deviations API-02): три nullable-колонки decision, яких немає в DDL §6 брифінгу
+DECISION_EXTRAS: tuple[str, ...] = ("sizing", "risk", "narrative")
 
 
 def _tables(c: Connection) -> set[str]:
@@ -87,7 +89,16 @@ def test_migrations_up_and_down_clean(db_url: str, sync_engine: Engine) -> None:
         )
         types_at_head = _public_types(c)
 
+    decision_cols = {r[2] for r in head_fp["columns"] if r[0] == "decision"}
+    assert set(DECISION_EXTRAS) <= decision_cols
+
     # покроковий downgrade: після кожної ревізії лишаються рівно її попередники
+    command.downgrade(cfg, "0003_auth_audit")
+    with sync_engine.connect() as c:
+        assert _revision(c) == "0003_auth_audit" and _role_exists(c)
+        assert _tables(c) == {*ALL_TABLES, "alembic_version"}
+        cols = {r[2] for r in fingerprint(c)["columns"] if r[0] == "decision"}
+        assert cols == decision_cols - set(DECISION_EXTRAS)
     for target, expected, role in (
         ("0002_trading", {*CORE_TABLES, *TRADING_TABLES}, False),
         ("0001_core", set(CORE_TABLES), False),
@@ -116,7 +127,7 @@ def test_migrations_up_and_down_clean(db_url: str, sync_engine: Engine) -> None:
 
 
 def test_migrated_schema_matches_brief_ddl(db_url: str, sync_engine: Engine) -> None:
-    """Нормативний DDL §6 брифінгу, виконаний у тимчасовій схемі, = схема після міграцій (крім ST-01)."""
+    """Нормативний DDL §6 брифінгу в тимчасовій схемі = схема після міграцій (крім ST-01, API-02)."""
     statements = brief_ddl(ROOT / "docs" / "BRIEF.md")
     assert len(statements) == 22  # 15 CREATE TABLE + 7 CREATE INDEX
     with sync_engine.connect() as c:
@@ -151,6 +162,11 @@ def test_migrated_schema_matches_brief_ddl(db_url: str, sync_engine: Engine) -> 
         (*r[:4], False, *r[5:]) if (r[0], r[2]) == ("sim_order", "decision_id") else r
         for r in migrated["columns"]
     ]
+    # друге свідоме відхилення: 0004 дописує в кінець decision три nullable-колонки (API-02)
+    extras = [r for r in migrated["columns"] if r[0] == "decision" and r[2] in DECISION_EXTRAS]
+    assert [(r[2], r[3], r[4]) for r in extras] == [
+        ("sizing", "jsonb", False), ("risk", "jsonb", False), ("narrative", "text", False)]
+    migrated["columns"] = [r for r in migrated["columns"] if r not in extras]
     for key in ref:
         assert migrated[key] == ref[key], key
 

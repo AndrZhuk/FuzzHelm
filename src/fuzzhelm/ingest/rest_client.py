@@ -2,8 +2,9 @@
 
 Найменування: ingest/rest_client.py
 Призначення: klines (добір історії), exchangeInfo (tick/step/minNotional), premiumIndex (mark/funding),
-оцінка зсуву годинника. Кожен запит: token bucket (вага) → HTTP → ресинхронізація ваги за заголовком
-→ класифікація відповіді → повтор за RetryPolicy.
+aggTrades (добір угод), fundingRate (історія ставок фінансування), оцінка зсуву годинника.
+Кожен запит: token bucket (вага) → HTTP → ресинхронізація ваги за заголовком → класифікація відповіді
+→ повтор за RetryPolicy.
 Автор: Андрій Жук, 2026.
 
 Базова URL-адреса перевіряється allowlist-ом read-only хостів (fuzzhelm.config.assert_readonly_url):
@@ -37,7 +38,12 @@ KLINES: Final = "/fapi/v1/klines"
 EXCHANGE_INFO: Final = "/fapi/v1/exchangeInfo"
 PREMIUM_INDEX: Final = "/fapi/v1/premiumIndex"
 TIME: Final = "/fapi/v1/time"
+AGG_TRADES: Final = "/fapi/v1/aggTrades"
+INDEX_PRICE_KLINES: Final = "/fapi/v1/indexPriceKlines"
+FUNDING_RATE: Final = "/fapi/v1/fundingRate"
 MAX_KLINES_LIMIT: Final = 1500
+MAX_AGG_TRADES_LIMIT: Final = 1000
+MAX_FUNDING_LIMIT: Final = 1000
 
 
 class BinanceApiError(NonRetryableHttpError):
@@ -158,6 +164,46 @@ class BinanceRestClient:
         data = await self._get(PREMIUM_INDEX, {"symbol": symbol})
         if not isinstance(data, dict):
             raise NormalizationError("premiumIndex is not a JSON object", field="$", venue="BINANCE_USDM")
+        return data
+
+    async def index_price_klines(self, pair: str, interval: str = "1m", start_ms: int | None = None,
+                                 end_ms: int | None = None, limit: int = MAX_KLINES_LIMIT) -> list[list[Any]]:
+        """Сирі рядки свічок індексної ціни (кошик спотових цін у USDT, з якого Binance рахує mark):
+        [openTime, o, h, l, c, "0", closeTime, "0", count, "0", "0", "0"]. Потрібні крос-звірці, щоб
+        розкласти розбіжність перп ↔ спот на премію перпетуала і решту."""
+        if not 1 <= limit <= MAX_KLINES_LIMIT:
+            raise ValueError(f"limit must be in [1, {MAX_KLINES_LIMIT}]")
+        data = await self._get(INDEX_PRICE_KLINES, {"pair": pair, "interval": interval, "startTime": start_ms,
+                                                    "endTime": end_ms, "limit": limit})
+        if not isinstance(data, list):
+            raise NormalizationError("indexPriceKlines response is not a JSON array", field="$",
+                                     venue="BINANCE_USDM")
+        return data
+
+    async def agg_trades(self, symbol: str, *, from_id: int | None = None, start_ms: int | None = None,
+                         end_ms: int | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        """Сирі рядки aggTrades {a,p,q,f,l,T,m[,nq]} (вага 20 — виміряно). `from_id` — з id включно;
+        без нього — за часом [start_ms, end_ms] або останні `limit` угод."""
+        if not 1 <= limit <= MAX_AGG_TRADES_LIMIT:
+            raise ValueError(f"limit must be in [1, {MAX_AGG_TRADES_LIMIT}]")
+        data = await self._get(AGG_TRADES, {"symbol": symbol, "fromId": from_id, "startTime": start_ms,
+                                            "endTime": end_ms, "limit": limit})
+        if not isinstance(data, list):
+            raise NormalizationError("aggTrades response is not a JSON array", field="$",
+                                     venue="BINANCE_USDM")
+        return data
+
+    async def funding_rate_history(self, symbol: str, start_ms: int | None = None, end_ms: int | None = None,
+                                   limit: int = MAX_FUNDING_LIMIT) -> list[dict[str, Any]]:
+        """Сирі рядки історії ставок фінансування {symbol, fundingTime, fundingRate, markPrice[, rateType]},
+        fundingTime ∈ [start_ms, end_ms], за зростанням, не більше `limit` (≤ 1000)."""
+        if not 1 <= limit <= MAX_FUNDING_LIMIT:
+            raise ValueError(f"limit must be in [1, {MAX_FUNDING_LIMIT}]")
+        data = await self._get(FUNDING_RATE, {"symbol": symbol, "startTime": start_ms, "endTime": end_ms,
+                                              "limit": limit})
+        if not isinstance(data, list):
+            raise NormalizationError("fundingRate response is not a JSON array", field="$",
+                                     venue="BINANCE_USDM")
         return data
 
     async def server_time_ms(self) -> int:

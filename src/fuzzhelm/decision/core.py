@@ -16,7 +16,7 @@ sizing і risk.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,7 +59,7 @@ def clip_unit(x: float) -> float:
 class DecisionCore:
     """Композиція детекторів і рушія виведення. Без стану між барами (чиста функція від вікна)."""
 
-    __slots__ = ("_detectors", "_engine", "eps", "kappa_min", "nu", "v_default")
+    __slots__ = ("_detectors", "_engine", "_infer_u", "eps", "kappa_min", "nu", "v_default")
 
     def __init__(
         self,
@@ -81,6 +81,8 @@ class DecisionCore:
             raise ValueError(f"duplicate detector names: {names}")
         self._detectors: tuple[Detector, ...] = tuple(detectors)
         self._engine = engine
+        # швидкий шлях рушія бектесту: infer_u (Мамдані, лінійний) побітово дорівнює infer(...).u_raw
+        self._infer_u: Callable[[float, float, float], float] | None = getattr(engine, "infer_u", None)
         self.kappa_min = kappa_min
         self.nu = nu
         self.eps = eps
@@ -104,6 +106,24 @@ class DecisionCore:
     @property
     def engine(self) -> InferenceEngine:
         return self._engine
+
+    def intent(self, window: BarWindow) -> tuple[float, float, float]:
+        """Швидкий шлях без трасування: (u_raw, κ, u_final) — ті самі числа, що й у `decide()`.
+
+        Той самий порядок обчислень (детектори → консенсус → рушій → κ → clip), але замість
+        `engine.infer` — `engine.infer_u`, якщо рушій його має (для MamdaniEngine і LinearVoteEngine
+        він побітово дорівнює `infer(...).u_raw`), і без побудови DecisionTrace. Потрібен рушію
+        бектесту: повне трасування будується лише на барах, де воно зберігається.
+        """
+        outputs = tuple(d.compute(window) for d in self._detectors)
+        cons = consensus(outputs, self.eps, self.v_default)
+        infer_u = self._infer_u
+        u_raw = (infer_u(cons.T, cons.R, cons.V) if infer_u is not None
+                 else self._engine.infer(cons.T, cons.R, cons.V).u_raw)
+        if not math.isfinite(u_raw):
+            raise ValueError(f"engine {self._engine.name!r} returned non-finite u_raw={u_raw}")
+        kappa = agreement(outputs, self.kappa_min, self.nu, self.eps).kappa
+        return u_raw, kappa, clip_unit(kappa * u_raw)
 
     def decide(self, window: BarWindow, open_time_ns: int | None = None) -> DecisionTrace:
         """Рішення на закритті поточного бару вікна.

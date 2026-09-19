@@ -1,42 +1,46 @@
 # Функції належності лінгвістичних змінних нечіткого ядра (брифінг §5.5).
 # Кожне число має джерело: percentile | kmeans | expert.
+# Згенеровано regimes/calibrate_mf.write_membership_yaml: run_id=cal-727167b30ad655a5, seed=20260918, n_samples=21078, n_T=21078.
+# T: перцентилі {8,25,50,75,92} емпіричного T = [-0.900157, -0.557943, -0.034548, 0.53379, 0.906397]; записано симетризовані (T ∪ −T) = [-0.903051, -0.545389, 0.0, 0.545389, 0.903051]
+# V: KMeans(k=3) центри (vol_pct) = [0.211367, 0.546153, 0.765761]; σ_i = 0.5·max(d⁻, d⁺) з дзеркальними привидами на межах [0, 1] (правило cover: покриття ≥ e^−½; буквальне §5.5 «до найближчого» дало б σ = [0.167393, 0.109804, 0.109804] і max μ = 0.102759 при V = 1.0)
+# Силует за k: 2: 0.306478, 3: 0.335391, 4: 0.307327, 5: 0.305726, 6: 0.272706; найкращий k за силуетом = 3 (для V використано k = 3).
 version: 3
 variables:
   T:
     range: [-1.0, 1.0]
     source: percentile          # точки зламу = перцентилі {8,25,50,75,92} емпіричного T на IS-вікні
-    source_run_id: null         # заповнює scripts/calibrate_mf.py
+    source_run_id: "cal-727167b30ad655a5"
     terms:
-      STRONG_DOWN: {type: trap, points: [-1.0, -1.0, -0.70, -0.35]}
-      WEAK_DOWN:   {type: tri,  points: [-0.70, -0.35, 0.0]}
-      NEUTRAL:     {type: tri,  points: [-0.35, 0.0, 0.35]}
-      WEAK_UP:     {type: tri,  points: [0.0, 0.35, 0.70]}
-      STRONG_UP:   {type: trap, points: [0.35, 0.70, 1.0, 1.0]}
+      STRONG_DOWN: {type: trap, points: [-1.0, -1.0, -0.903051, -0.545389]}
+      WEAK_DOWN:   {type: tri, points: [-0.903051, -0.545389, 0.0]}
+      NEUTRAL:     {type: tri, points: [-0.545389, 0.0, 0.545389]}
+      WEAK_UP:     {type: tri, points: [0.0, 0.545389, 0.903051]}
+      STRONG_UP:   {type: trap, points: [0.545389, 0.903051, 1.0, 1.0]}
   R:
     range: [-1.0, 1.0]
     source: expert
     terms:
       SELL_PRESSURE: {type: trap, points: [-1.0, -1.0, -0.45, 0.0]}
-      NO_PRESSURE:   {type: tri,  points: [-0.45, 0.0, 0.45]}
+      NO_PRESSURE:   {type: tri, points: [-0.45, 0.0, 0.45]}
       BUY_PRESSURE:  {type: trap, points: [0.0, 0.45, 1.0, 1.0]}
   V:
     range: [0.0, 1.0]
-    source: kmeans              # центри = центроїди KMeans(k=3); σ_i = 0.5·d(m_i, m_{i±1})
-    provisional: true           # ТИМЧАСОВІ значення зі спеки; перезаписує scripts/calibrate_mf.py
-    source_run_id: null
-    silhouette: null
+    source: kmeans              # центри = центроїди KMeans(k=3); σ_i = 0.5·d(m_i, m_{i±1}) — правило cover (див. коментар угорі)
+    provisional: false          # записано калібруванням (regimes/calibrate_mf.py)
+    source_run_id: "cal-727167b30ad655a5"
+    silhouette: 0.335391
     terms:
-      LO:  {type: gauss, m: 0.17, sigma: 0.17}
-      MID: {type: gauss, m: 0.51, sigma: 0.17}
-      HI:  {type: gauss, m: 0.88, sigma: 0.185}
+      LO:  {type: gauss, m: 0.211367, sigma: 0.211367}
+      MID: {type: gauss, m: 0.546153, sigma: 0.167393}
+      HI:  {type: gauss, m: 0.765761, sigma: 0.234239}
   U:
     range: [-1.0, 1.0]
     terms:
-      STRONG_SHORT: {type: trap, points: [-1.0, -1.0, -0.80, -0.45]}
-      SHORT:        {type: tri,  points: [-0.80, -0.40, 0.0]}
-      HOLD:         {type: tri,  points: [-0.40, 0.0, 0.40]}
-      LONG:         {type: tri,  points: [0.0, 0.40, 0.80]}
-      STRONG_LONG:  {type: trap, points: [0.45, 0.80, 1.0, 1.0]}
+      STRONG_SHORT: {type: trap, points: [-1.0, -1.0, -0.8, -0.45]}
+      SHORT:        {type: tri, points: [-0.8, -0.4, 0.0]}
+      HOLD:         {type: tri, points: [-0.4, 0.0, 0.4]}
+      LONG:         {type: tri, points: [0.0, 0.4, 0.8]}
+      STRONG_LONG:  {type: trap, points: [0.45, 0.8, 1.0, 1.0]}
 defuzz:
   scheme: trapezoid             # rect | trapezoid | simpson
   grid_nodes: 201

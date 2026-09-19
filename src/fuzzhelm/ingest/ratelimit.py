@@ -45,17 +45,24 @@ def klines_weight(limit: int) -> int:
 
 
 # Ваги інших використовуваних ендпоінтів (для символу; premiumIndex без symbol важить 10 за документацією).
+# aggTrades = 20 — ВИМІРЯНО 2026-09-18 за приростом X-MBX-USED-WEIGHT-1M (2 → 22;
+# docs/deviations.d/data.md, DATA-02).
+# fundingRate не списує REQUEST_WEIGHT узагалі (заголовка у відповіді немає, лічильник не зріс): у нього
+# окремий ліміт 500 запитів / 5 хв / IP; 1 — консервативний облік у власному відрі (вага мусить бути > 0).
 ENDPOINT_WEIGHTS: Final[dict[str, int]] = {
     "/fapi/v1/time": 1,
     "/fapi/v1/ping": 1,
     "/fapi/v1/exchangeInfo": 1,
     "/fapi/v1/premiumIndex": 1,
+    "/fapi/v1/aggTrades": 20,
+    "/fapi/v1/fundingRate": 1,
 }
 
 
 def request_weight(path: str, params: Mapping[str, object] | None = None) -> int:
     params = params or {}
-    if path == "/fapi/v1/klines":
+    # indexPriceKlines важить як klines за тим самим limit — ВИМІРЯНО 2026-09-18 (limit 2 → 1, 1000 → 5)
+    if path in ("/fapi/v1/klines", "/fapi/v1/indexPriceKlines"):
         limit = params.get("limit", 500)
         if not isinstance(limit, int):
             raise ValueError(f"klines limit must be int, got {limit!r}")

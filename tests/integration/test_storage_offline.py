@@ -331,7 +331,7 @@ def _cfg(buf: io.StringIO) -> Config:
 def test_alembic_revisions_form_linear_chain() -> None:
     script = ScriptDirectory.from_config(_cfg(io.StringIO()))
     chain = [r.revision for r in script.walk_revisions("base", "heads")]
-    assert chain == ["0003_auth_audit", "0002_trading", "0001_core"]
+    assert chain == ["0004_decision_trace_extras", "0003_auth_audit", "0002_trading", "0001_core"]
     assert script.get_revision("0002_trading").down_revision == "0001_core"  # type: ignore[union-attr]
 
 

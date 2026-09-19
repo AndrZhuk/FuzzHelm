@@ -11,3 +11,6 @@ walkforward:            # масштабовано під 45 днів даних
   step_days: 5
   folds: 6
   embargo_bars: null    # null → 2·max_lookback
+# рушій (config/engine.yaml): модель витрат і обсяг трасування рішень
+cost_mode: full
+record_traces: trades          # повне DecisionTrace лише для рішень з заявками

@@ -4,10 +4,14 @@
 Призначення: доказ надійності конвеєра — кожна виявлена прогалина має запис і кінцевий статус
 (FILLED / PARTIAL / UNFILLABLE); нічний добір бере відкриті через частковий індекс ix_gap_open.
 Автор: Андрій Жук, 2026.
+
+`list_by_status` і `list_overlapping` додано для планувальника (scheduler.jobs: нічний повторний добір
+PARTIAL/UNFILLABLE і неперервність у погодинному Q) — deviations API-05.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from sqlalchemy import func, insert, select, update
@@ -91,6 +95,28 @@ class GapRepo:
         if instrument_id is not None:
             q = q.where(_T.c.instrument_id == instrument_id)
         res = await self.s.execute(q.order_by(_T.c.detected_at.desc()).limit(limit))
+        return [from_mapping(GapRow, m) for m in res.mappings()]
+
+    async def list_by_status(self, statuses: Iterable[GapStatus | str], *, instrument_id: int | None = None,
+                             max_attempts: int | None = None, limit: int = 1_000) -> list[GapRow]:
+        """Прогалини із заданими статусами, найстаріші першими; max_attempts: лише attempts < max_attempts."""
+        wanted = [GapStatus(s).value for s in statuses]
+        q = select(_T).where(_T.c.status.in_(wanted))
+        if instrument_id is not None:
+            q = q.where(_T.c.instrument_id == instrument_id)
+        if max_attempts is not None:
+            q = q.where(func.coalesce(_T.c.attempts, 0) < max_attempts)
+        res = await self.s.execute(q.order_by(_T.c.detected_at, _T.c.id).limit(limit))
+        return [from_mapping(GapRow, m) for m in res.mappings()]
+
+    async def list_overlapping(self, instrument_id: int, ts_lo_ns: int, ts_hi_ns: int, *,
+                               stream: Stream | str | None = None) -> list[GapRow]:
+        """Прогалини інструмента, чий інтервал [ts_lo, ts_hi] перетинає [ts_lo_ns, ts_hi_ns)."""
+        q = select(_T).where(_T.c.instrument_id == instrument_id, _T.c.ts_lo < ns_to_dt(ts_hi_ns),
+                             _T.c.ts_hi >= ns_to_dt(ts_lo_ns))
+        if stream is not None:
+            q = q.where(_T.c.stream == Stream(stream).value)
+        res = await self.s.execute(q.order_by(_T.c.ts_lo, _T.c.id))
         return [from_mapping(GapRow, m) for m in res.mappings()]
 
     async def stats(self) -> dict[str, int]:

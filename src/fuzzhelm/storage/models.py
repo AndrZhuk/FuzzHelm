@@ -3,7 +3,8 @@
 Найменування: storage/models.py
 Призначення: типізований опис фізичної моделі БД для репозиторіїв і для autogenerate-порівняння
 з мігрованою схемою (тест test_models_match_migrated_schema). Самі таблиці створюють міграції
-Alembic 0001–0003 дослівним DDL; ці класи схему НЕ створюють і повинні збігатися з нею.
+Alembic 0001–0003 дослівним DDL (+ 0004: decision.sizing/risk/narrative, deviations API-02);
+ці класи схему НЕ створюють і повинні збігатися з нею.
 Автор: Андрій Жук, 2026.
 
 Типи: гроші/ціни/обсяги — NUMERIC(38,18) → Decimal; час — TIMESTAMPTZ (мікросекунди UTC) → aware
@@ -261,6 +262,10 @@ class DecisionModel(Base):
     stop_price: Mapped[Decimal | None] = mapped_column(_money())
     tp_price: Mapped[Decimal | None] = mapped_column(_money())
     liq_price: Mapped[Decimal | None] = mapped_column(_money())
+    # 0004_decision_trace_extras (deviations API-02): розкладка сайзера, ризик-ланцюг, текст трасування
+    sizing: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    risk: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    narrative: Mapped[str | None] = mapped_column(Text)
 
 
 class SimOrderModel(Base):

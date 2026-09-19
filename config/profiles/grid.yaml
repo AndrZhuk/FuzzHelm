@@ -5,3 +5,6 @@ tf: 1m
 engine: mamdani
 seed: 20260918
 initial_equity: "10000"
+# рушій (config/engine.yaml): клітинка сітки зберігає лише метрики
+cost_mode: full
+record_traces: none

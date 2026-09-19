@@ -1,0 +1,64 @@
+{
+  "v": 1,
+  "definition": "45 full UTC days ending at the last full UTC day before the backfill run (end exclusive); bars are Binance USD-M 1m klines, closed only",
+  "window": {
+    "start_ms": 1785801600000,
+    "end_ms": 1789689600000,
+    "start_utc": "2026-08-04T00:00:00Z",
+    "end_utc_exclusive": "2026-09-18T00:00:00Z",
+    "last_open_utc": "2026-09-17T23:59:00Z",
+    "days": 45,
+    "tf": "1m",
+    "bars_per_symbol": 64800,
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ]
+  },
+  "first_is_window": {
+    "days": [
+      1,
+      15
+    ],
+    "start_ms": 1785801600000,
+    "end_ms": 1787097600000,
+    "start_utc": "2026-08-04T00:00:00Z",
+    "end_utc_exclusive": "2026-08-19T00:00:00Z",
+    "note": "calibration uses ONLY this window: every walk-forward OOS window starts after it (config/profiles/backtest.yaml, docs/deviations.md D-03)"
+  },
+  "symbols": {
+    "BTCUSDT": {
+      "symbol_canon": "BTC-USDT-PERP",
+      "rows_in_db_window": 64800,
+      "first_open_utc": "2026-08-04T00:00:00Z",
+      "last_open_utc": "2026-09-17T23:59:00Z",
+      "dataset_hash": "41bc9f0b20a8d4d2cf99234f21f4e6592196cf9c6151e8e87dba06e6fef6dcd5",
+      "dataset_hash_columns": [
+        "c",
+        "h",
+        "l",
+        "o",
+        "t_ns",
+        "v"
+      ]
+    },
+    "ETHUSDT": {
+      "symbol_canon": "ETH-USDT-PERP",
+      "rows_in_db_window": 64800,
+      "first_open_utc": "2026-08-04T00:00:00Z",
+      "last_open_utc": "2026-09-17T23:59:00Z",
+      "dataset_hash": "d9f11c7e9f1e718f22eb06a3d88e6a9c459081499373c98c78722e35e4190d27",
+      "dataset_hash_columns": [
+        "c",
+        "h",
+        "l",
+        "o",
+        "t_ns",
+        "v"
+      ]
+    }
+  },
+  "dataset_hash_method": "backtest.manifest.dataset_hash(CandleRepo.load_arrays(...).columns())",
+  "created_utc": "2026-09-18T21:15:06Z",
+  "command": "uv run fuzzhelm backfill --days 45 --symbols BTCUSDT,ETHUSDT"
+}

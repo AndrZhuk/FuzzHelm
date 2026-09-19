@@ -1,0 +1,233 @@
+{
+  "id": "cal-727167b30ad655a5",
+  "kind": "mf_calibration",
+  "v": 1,
+  "dataset": {
+    "symbol": "BTCUSDT",
+    "symbol_canon": "BTC-USDT-PERP",
+    "tf": "1m",
+    "from_ms": 1785801600000,
+    "to_ms": 1787097600000,
+    "from_utc": "2026-08-04T00:00:00Z",
+    "to_utc": "2026-08-19T00:00:00Z",
+    "days": "1–15",
+    "n_bars": 21600,
+    "dataset_hash": "9156616db47020cab8543644133021bd466c0abb491634559d8f01f77ddad4bd",
+    "dataset_hash_columns": [
+      "c",
+      "h",
+      "l",
+      "o",
+      "t_ns",
+      "v"
+    ]
+  },
+  "n_bars": 21600,
+  "warmup_bars": 523,
+  "seed": 20260918,
+  "detectors_config_hash": "f5d0b1fb8d65bba98e721e4d9060b1429450ffc3f2ea457f996e981226a90592",
+  "feature_params": {
+    "n_ema": 21,
+    "ema_horizon": 5,
+    "ema_r2_points": 5,
+    "n_atr": 14,
+    "n_rsi": 14,
+    "rsi_div_lookback": 14,
+    "bb_n": 20,
+    "bb_k": 2.0,
+    "bb_rank_window": 200,
+    "donchian_n": 20,
+    "park_window": 24,
+    "vol_rank_window": 500,
+    "volume_window": 60,
+    "resync_every": 1024
+  },
+  "method": {
+    "T": {
+      "source": "decision.aggregator.consensus",
+      "percentiles": [
+        8,
+        25,
+        50,
+        75,
+        92
+      ],
+      "symmetrized": true
+    },
+    "V": {
+      "kmeans_k": 3,
+      "features": [
+        "vol_pct",
+        "ema_slope_norm",
+        "volume_z"
+      ],
+      "k_range": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "n_init": 10,
+      "standardize": true,
+      "silhouette_sample": 10000,
+      "sigma_rule": "cover"
+    }
+  },
+  "result": {
+    "T": {
+      "percentiles": [
+        8,
+        25,
+        50,
+        75,
+        92
+      ],
+      "raw_breakpoints": [
+        -0.9001566034569333,
+        -0.5579430525441373,
+        -0.034548208745657505,
+        0.533790372009534,
+        0.9063974925170944
+      ],
+      "symmetric": true,
+      "breakpoints": [
+        -0.9030507287283142,
+        -0.545389217166002,
+        0.0,
+        0.545389217166002,
+        0.9030507287283142
+      ],
+      "n": 21078,
+      "terms": {
+        "STRONG_DOWN": {
+          "type": "trap",
+          "points": [
+            -1.0,
+            -1.0,
+            -0.9030507287283142,
+            -0.545389217166002
+          ]
+        },
+        "WEAK_DOWN": {
+          "type": "tri",
+          "points": [
+            -0.9030507287283142,
+            -0.545389217166002,
+            0.0
+          ]
+        },
+        "NEUTRAL": {
+          "type": "tri",
+          "points": [
+            -0.545389217166002,
+            0.0,
+            0.545389217166002
+          ]
+        },
+        "WEAK_UP": {
+          "type": "tri",
+          "points": [
+            0.0,
+            0.545389217166002,
+            0.9030507287283142
+          ]
+        },
+        "STRONG_UP": {
+          "type": "trap",
+          "points": [
+            0.545389217166002,
+            0.9030507287283142,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    "V": {
+      "k_used": 3,
+      "centres": [
+        0.21136671381423816,
+        0.5461527480371163,
+        0.7657608024691356
+      ],
+      "sigmas": [
+        0.21136671381423816,
+        0.16739301711143909,
+        0.23423919753086442
+      ],
+      "silhouette": 0.3353914198324983,
+      "sigma_rule": "cover",
+      "sigmas_nearest": [
+        0.16739301711143909,
+        0.10980402721600963,
+        0.10980402721600963
+      ],
+      "coverage_min": 0.6065306597126334,
+      "coverage_min_at": 0.0,
+      "coverage_min_nearest": 0.10275856719583427,
+      "coverage_min_nearest_at": 1.0,
+      "terms": {
+        "LO": {
+          "type": "gauss",
+          "m": 0.21136671381423816,
+          "sigma": 0.21136671381423816
+        },
+        "MID": {
+          "type": "gauss",
+          "m": 0.5461527480371163,
+          "sigma": 0.16739301711143909
+        },
+        "HI": {
+          "type": "gauss",
+          "m": 0.7657608024691356,
+          "sigma": 0.23423919753086442
+        }
+      }
+    },
+    "centroids_k3": [
+      [
+        0.21136671381423816,
+        -0.022004070603464893,
+        -0.26401074828656707
+      ],
+      [
+        0.5461527480371163,
+        0.001200678048228131,
+        3.209595501471943
+      ],
+      [
+        0.7657608024691356,
+        0.023358072490702268,
+        -0.17826563372151755
+      ]
+    ],
+    "feature_columns": [
+      "vol_pct",
+      "ema_slope_norm",
+      "volume_z"
+    ],
+    "silhouette_by_k": {
+      "2": 0.30647816846501363,
+      "3": 0.3353914198324983,
+      "4": 0.307326729677654,
+      "5": 0.305725955808298,
+      "6": 0.27270573217373084
+    },
+    "inertia_by_k": {
+      "2": 46525.49650033028,
+      "3": 34364.662356735644,
+      "4": 27133.97669243008,
+      "5": 23379.180931702584,
+      "6": 20880.648599459226
+    },
+    "k_best": 3,
+    "k_best_is_3": true,
+    "n_samples": 21078,
+    "seed": 20260918,
+    "source_run_id": "cal-727167b30ad655a5",
+    "warnings": []
+  },
+  "command": "uv run fuzzhelm calibrate --symbol BTCUSDT --is-days 15 --seed 20260918",
+  "created_utc": "2026-09-18T21:30:50Z"
+}
