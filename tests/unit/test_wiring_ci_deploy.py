@@ -32,7 +32,10 @@ def test_ci_workflow_runs_lint_tests_integration_and_audit() -> None:
     mypy = "mypy src/fuzzhelm/core src/fuzzhelm/fuzzy src/fuzzhelm/risk"
     assert lint.index("ruff check") < lint.index(mypy)
     # поріг покриття — у pyproject ([tool.coverage.report] fail_under), не в командному рядку
-    assert "pytest -q --cov" in runs("test") and "--cov-fail-under" not in runs("test")
+    test_runs = runs("test")
+    assert "pytest -q" in test_runs and "--cov" in test_runs and "--cov-fail-under" not in test_runs
+    # поріг ≥ 90 % на fuzzy/risk/decision/sizing (§10) перевіряється окремим кроком
+    assert "tests.helpers.cov_packages" in test_runs
     pg = jobs["integration"]["services"]["postgres"]
     assert pg["image"] == "postgres:16" and pg["ports"] == ["5432:5432"]
     url = jobs["integration"]["env"]["FUZZHELM_TEST_DATABASE_URL"]
