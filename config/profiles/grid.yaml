@@ -3,7 +3,7 @@ kind: grid
 instrument: BTC-USDT-PERP
 tf: 1m
 engine: mamdani
-seed: 20260918
+seed: 20260919          # ≠ backtest-профілю: клітинка сітки не збігається з ідентичністю прогону фази 6 (XS-04)
 initial_equity: "10000"
 # рушій (config/engine.yaml): клітинка сітки зберігає лише метрики
 cost_mode: full

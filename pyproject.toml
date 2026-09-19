@@ -54,7 +54,7 @@ fuzzhelm = "fuzzhelm.cli:main"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-ra --strict-markers -m 'not integration and not live'"
+addopts = "-ra --strict-markers -m 'not integration and not live and not slow'"
 markers = [
   "integration: потребує PostgreSQL з docker-compose (make test-int)",
   "live: ходить у мережу (ніколи в make test)",

@@ -30,9 +30,11 @@ from fuzzhelm.api.backtest_runner import (
 from fuzzhelm.api.explain import explain_decision
 from fuzzhelm.api.schemas import BacktestParams
 from fuzzhelm.backtest.dataset import load_exchange_instrument, load_fixture_dataset
+from fuzzhelm.backtest.engine import BacktestConfig
 from fuzzhelm.backtest.metrics import METRIC_NAMES
 from fuzzhelm.config import load_yaml
-from fuzzhelm.core.enums import RunKind
+from fuzzhelm.core.dto import Instrument
+from fuzzhelm.core.enums import ContractType, RunKind, Venue
 from fuzzhelm.storage.repositories import RunRow
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -126,13 +128,6 @@ async def test_explain_of_engine_decision_is_consistent_with_run_config(engine_r
 
 def test_run_config_json_stores_instrument_spec_explicitly() -> None:
     # ENG-13: паспорт мусить показувати, з якими tick/step/mmr рахувався прогін, а не лише хешувати їх
-    from decimal import Decimal
-
-    from fuzzhelm.api.backtest_runner import run_config_json
-    from fuzzhelm.backtest.engine import BacktestConfig
-    from fuzzhelm.core.dto import Instrument
-    from fuzzhelm.core.enums import ContractType, Venue
-
     inst = Instrument(venue=Venue.BINANCE_USDM, symbol_venue="BTCUSDT", symbol_canon="BTC-USDT-PERP",
                       base_asset="BTC", quote_asset="USDT", contract_type=ContractType.PERP,
                       tick_size=Decimal("0.10"), step_size=Decimal("0.001"), min_notional=Decimal(50),

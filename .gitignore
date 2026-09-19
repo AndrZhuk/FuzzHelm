@@ -10,5 +10,5 @@ __pycache__/
 coverage.xml
 htmlcov/
 *.part
-artifacts/tmp/
 .DS_Store
+artifacts/
