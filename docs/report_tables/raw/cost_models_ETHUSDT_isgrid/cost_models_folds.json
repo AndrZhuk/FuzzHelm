@@ -1,0 +1,1211 @@
+{
+ "experiment": "cost_models",
+ "passport": {
+  "experiment": "cost_models",
+  "command": "uv run python scripts/cost_models.py --db --symbol ETHUSDT --workers 8 --selection is_grid --scope oos --out docs/report_tables/raw/cost_models_ETHUSDT_isgrid",
+  "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "git_dirty": false,
+  "git_dirty_any": true,
+  "git_dirty_paths": [],
+  "seed": 20260918,
+  "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+  "source": "db:ETHUSDT",
+  "symbol": "ETHUSDT",
+  "tf": "1m",
+  "n_bars": 64800,
+  "t_first_ns": 1785801600000000000,
+  "t_last_ns": 1789689540000000000,
+  "config_hashes": {
+   "zero": "369fdee9dd2a620e0816183d43ffbd0e0558e1f7bd39ef6a2ac8997dfe8d0931",
+   "sqrt_impact": "4596aafadfc6f045490f769283cccfcb49103f3840e094dc33ea39eba4326dd4",
+   "full": "48e2a5d88b321d31c7b415370de5ed6505a2af4175883ddb245fbdcf9dfaa1c6"
+  },
+  "fold_layout": "profile",
+  "folds": [
+   {
+    "index": 0,
+    "is_start": 0,
+    "is_end": 20554,
+    "embargo_bars": 1046,
+    "oos_start": 21600,
+    "oos_end": 28800
+   },
+   {
+    "index": 1,
+    "is_start": 7200,
+    "is_end": 27754,
+    "embargo_bars": 1046,
+    "oos_start": 28800,
+    "oos_end": 36000
+   },
+   {
+    "index": 2,
+    "is_start": 14400,
+    "is_end": 34954,
+    "embargo_bars": 1046,
+    "oos_start": 36000,
+    "oos_end": 43200
+   },
+   {
+    "index": 3,
+    "is_start": 21600,
+    "is_end": 42154,
+    "embargo_bars": 1046,
+    "oos_start": 43200,
+    "oos_end": 50400
+   },
+   {
+    "index": 4,
+    "is_start": 28800,
+    "is_end": 49354,
+    "embargo_bars": 1046,
+    "oos_start": 50400,
+    "oos_end": 57600
+   },
+   {
+    "index": 5,
+    "is_start": 36000,
+    "is_end": 56554,
+    "embargo_bars": 1046,
+    "oos_start": 57600,
+    "oos_end": 64800
+   }
+  ],
+  "scopes": [
+   "oos"
+  ],
+  "selection": "is_grid",
+  "cells": [
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.2,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.25,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.94
+   },
+   {
+    "n_atr": 21,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   }
+  ],
+  "risk_loop": "default",
+  "is_rule": "front",
+  "dd_cap": 0.08,
+  "params": {},
+  "params_source": {
+   "kind": "profile",
+   "selected_on_oos": false
+  },
+  "smoke": false,
+  "workers": 8,
+  "engine": "mamdani",
+  "warmup_bars": 523
+ },
+ "folds": [
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "oos",
+   "segment": "oos_0",
+   "fold": 0,
+   "sharpe": 3.181932895840064,
+   "total_return": 0.002019615999999891,
+   "max_drawdown": 0.005269681058143516,
+   "turnover": 19628.390072725328,
+   "n_trades": 462.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "psr": 0.645337058632822,
+   "final_state": "WARNING",
+   "equity_hash": "6f9fa1aa3ba0d01487cdf10d6afb3f3c1959ee1e6920248a7d68e6427561d073",
+   "config_hash": "512bd10cc2c357c1a7a1c3f158c180c509627a33829fc4248cc5af52515d99f3",
+   "dataset_hash": "1a48881aae9d52e7e2897b4c2ddb0285d5b2ca73e842b8b11ffbc0deb093a16b"
+  },
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "oos",
+   "segment": "oos_1",
+   "fold": 1,
+   "sharpe": -1.7575841049800578,
+   "total_return": -0.0020661990000000463,
+   "max_drawdown": 0.009645940415631715,
+   "turnover": 38748.43854489045,
+   "n_trades": 482.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "psr": 0.4185482181639259,
+   "final_state": "NORMAL",
+   "equity_hash": "0c1d6e9fe8f50c6b3ae7a34680889555e22001e36be77811c55f9479241a3be9",
+   "config_hash": "936dbb9a66481984532b26572dafe7e91a8384aab630835e101bc472521ca5e3",
+   "dataset_hash": "ba5b339e2398c2dd8890c8e76214a838f1a7aff60b27e121e3402328194215f2"
+  },
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "oos",
+   "segment": "oos_2",
+   "fold": 2,
+   "sharpe": -3.348997855231532,
+   "total_return": -0.0024842839999998922,
+   "max_drawdown": 0.009099198576985934,
+   "turnover": 26456.426636562723,
+   "n_trades": 259.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "psr": 0.3477055943331803,
+   "final_state": "NORMAL",
+   "equity_hash": "73e1833237f406b9911636bfdc22286bf20632ed281334442e7b7dab7e4d361d",
+   "config_hash": "e800dc665482a8828190b0b8b0f34cefb2e838c3f756f8ac0dac6e7eeb705de7",
+   "dataset_hash": "eae784919729b5def9de5e898cee4cfeb9422796f8053d5d10afb3e0ee82def1"
+  },
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "oos",
+   "segment": "oos_3",
+   "fold": 3,
+   "sharpe": 0.5968021142236682,
+   "total_return": 0.00033389599999988917,
+   "max_drawdown": 0.004019512156192451,
+   "turnover": 12894.617323367002,
+   "n_trades": 122.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "psr": 0.5278397498348985,
+   "final_state": "NORMAL",
+   "equity_hash": "a015be74436139c14d2f1026c0ce2bc5dc373907232a37e509259ef6f505ef2a",
+   "config_hash": "9518a7a8c9995022b80e1283f558e6e794cd2fd0fd6d93b4193ddfcd203d25d3",
+   "dataset_hash": "a09c0f4a98ac4f9a3585611b16c4a2ae24acdb095fbe3a74a7111f764527c7c3"
+  },
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "oos",
+   "segment": "oos_4",
+   "fold": 4,
+   "sharpe": 6.102835637399007,
+   "total_return": 0.003671690999999866,
+   "max_drawdown": 0.004696686389073501,
+   "turnover": 12749.215327814283,
+   "n_trades": 127.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "psr": 0.7638591433461592,
+   "final_state": "NORMAL",
+   "equity_hash": "3f67cbb6a4be2cf7bd09d2fec4fed821f99e0ae850decb333b2f97830cd60bd5",
+   "config_hash": "af36d401ad559efd290c9f8c07eefbb7fade18850dc5d05aa79faf1d7844d346",
+   "dataset_hash": "28c8513ece080e1290b86da3ef1a1a90784d9139b03d5b85de9e413526e9c6fb"
+  },
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "oos",
+   "segment": "oos_5",
+   "fold": 5,
+   "sharpe": 1.6407012519436832,
+   "total_return": 0.0007742889999999836,
+   "max_drawdown": 0.004069841002276697,
+   "turnover": 8313.096038869635,
+   "n_trades": 110.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "psr": 0.5763938353733243,
+   "final_state": "NORMAL",
+   "equity_hash": "ad6544ba5b0b63ec39f89d0d1751d5cf47d6f8314a945229425f01b284167ef7",
+   "config_hash": "af36d401ad559efd290c9f8c07eefbb7fade18850dc5d05aa79faf1d7844d346",
+   "dataset_hash": "2beecfcd8e35936c744cafd56d1020a54d96cf5391cb791eff59bbcb31a804c0"
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "oos",
+   "segment": "oos_0",
+   "fold": 0,
+   "sharpe": -1.8790611429160131,
+   "total_return": -0.0012317400000000367,
+   "max_drawdown": 0.0060885100786181034,
+   "turnover": 19631.790215418747,
+   "n_trades": 462.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 32.4833813137372,
+   "psr": 0.4130025857750094,
+   "final_state": "WARNING",
+   "equity_hash": "f564fc16a1053fd73d67e7faf850d9aa062e6bb0bec21668adb060d395558fa0",
+   "config_hash": "6d96486cde44a0259a0d43937dcb517a9178afef156830dcde9f122dcbb24651",
+   "dataset_hash": "1a48881aae9d52e7e2897b4c2ddb0285d5b2ca73e842b8b11ffbc0deb093a16b"
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "oos",
+   "segment": "oos_1",
+   "fold": 1,
+   "sharpe": 6.436202245838685,
+   "total_return": 0.004882438999999961,
+   "max_drawdown": 0.0033232586904863304,
+   "turnover": 14619.678459538332,
+   "n_trades": 165.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 14.964353607385,
+   "psr": 0.7752434614530089,
+   "final_state": "NORMAL",
+   "equity_hash": "41e1ee4450b4241b715208afc93c636708473519ed7527edacfc1182fb127a8b",
+   "config_hash": "7b1d673d39d720ec8e7b66a04514cd6577284ae7d98bf7a8281918fd4ca4b97a",
+   "dataset_hash": "ba5b339e2398c2dd8890c8e76214a838f1a7aff60b27e121e3402328194215f2"
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "oos",
+   "segment": "oos_2",
+   "fold": 2,
+   "sharpe": -9.310651627763091,
+   "total_return": -0.006927949000000044,
+   "max_drawdown": 0.0100930774340664,
+   "turnover": 26466.701922148863,
+   "n_trades": 259.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 44.5891846710328,
+   "psr": 0.13819267713470484,
+   "final_state": "NORMAL",
+   "equity_hash": "26e78e3f6be7a82ca0289c3c1d5c589d7c8548a80fd7446183c82a3c9730a542",
+   "config_hash": "b7e9977ef14b9febd7d332740cfdc8469ec1d288ed82062c7b99e31cbd840e07",
+   "dataset_hash": "eae784919729b5def9de5e898cee4cfeb9422796f8053d5d10afb3e0ee82def1"
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "oos",
+   "segment": "oos_3",
+   "fold": 3,
+   "sharpe": -1.6069402494938174,
+   "total_return": -0.00102068700000002,
+   "max_drawdown": 0.004522700000000102,
+   "turnover": 13739.540921354343,
+   "n_trades": 122.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 7.3818217430265,
+   "psr": 0.4253950951250885,
+   "final_state": "NORMAL",
+   "equity_hash": "c7531cdd1e59062e25f8d0e04ce2814a784a97b53c253bac8ee0604c35c66ef9",
+   "config_hash": "5379a1e2cbd6d58391f92b659f82e69020fec358f67b71b04d8d135038eaa97a",
+   "dataset_hash": "a09c0f4a98ac4f9a3585611b16c4a2ae24acdb095fbe3a74a7111f764527c7c3"
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "oos",
+   "segment": "oos_4",
+   "fold": 4,
+   "sharpe": 2.902331637140386,
+   "total_return": 0.0017579480000000647,
+   "max_drawdown": 0.005253407432325163,
+   "turnover": 12746.025122739768,
+   "n_trades": 127.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 19.0884112662666,
+   "psr": 0.6333315551386477,
+   "final_state": "NORMAL",
+   "equity_hash": "06683c98cad1001f7e2f701d9fa3485879ea8256d39f8edd66248b06fb6f1507",
+   "config_hash": "c95f2a99610a0a95c00c2cd376e9fd179ba601e3e443e49fd1dbdcd23d36dff3",
+   "dataset_hash": "28c8513ece080e1290b86da3ef1a1a90784d9139b03d5b85de9e413526e9c6fb"
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "oos",
+   "segment": "oos_5",
+   "fold": 5,
+   "sharpe": -0.5969212782328107,
+   "total_return": -0.00029366100000005613,
+   "max_drawdown": 0.00436584776555049,
+   "turnover": 8313.19882584946,
+   "n_trades": 110.0,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 10.6859348042659,
+   "psr": 0.47218856919746743,
+   "final_state": "NORMAL",
+   "equity_hash": "21a743d8880509c1401c3f3e5d2fc52f0d2305661bcb24fdfb62ecd0463eeb3d",
+   "config_hash": "c95f2a99610a0a95c00c2cd376e9fd179ba601e3e443e49fd1dbdcd23d36dff3",
+   "dataset_hash": "2beecfcd8e35936c744cafd56d1020a54d96cf5391cb791eff59bbcb31a804c0"
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "oos",
+   "segment": "oos_0",
+   "fold": 0,
+   "sharpe": -58.63635890062557,
+   "total_return": -0.027521945519635826,
+   "max_drawdown": 0.027707394914272987,
+   "turnover": 5093.282936818738,
+   "n_trades": 130.0,
+   "fees": 275.225792964,
+   "funding": 0.0974322323592,
+   "slippage_cost": 3.3678529900428,
+   "psr": 1.3322676295501878e-15,
+   "final_state": "WARNING",
+   "equity_hash": "faa187c1c941673d83839806727023c14982776200571e80dea4589356801e0b",
+   "config_hash": "aa4fed5caeaddcde10b9b605c581b7a4194ba57a174172463ef91c13b017c132",
+   "dataset_hash": "1a48881aae9d52e7e2897b4c2ddb0285d5b2ca73e842b8b11ffbc0deb093a16b"
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "oos",
+   "segment": "oos_1",
+   "fold": 1,
+   "sharpe": -68.3478519366937,
+   "total_return": -0.05075596900767543,
+   "max_drawdown": 0.05104270636213648,
+   "turnover": 9539.296634260845,
+   "n_trades": 154.0,
+   "fees": 508.883905416,
+   "funding": 0.070584660755,
+   "slippage_cost": 9.5373781146417,
+   "psr": 0.0,
+   "final_state": "WARNING",
+   "equity_hash": "48f8eae9ca9c5e70f2e186d146e7c994b263cce5e8e27ace7c95665dd6626053",
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "ba5b339e2398c2dd8890c8e76214a838f1a7aff60b27e121e3402328194215f2"
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "oos",
+   "segment": "oos_2",
+   "fold": 2,
+   "sharpe": -75.51106855272121,
+   "total_return": -0.04063424174079988,
+   "max_drawdown": 0.041083208768784574,
+   "turnover": 7382.414035325986,
+   "n_trades": 96.0,
+   "fees": 393.411517408,
+   "funding": 0.0,
+   "slippage_cost": 9.3467305453906,
+   "psr": 0.0,
+   "final_state": "WARNING",
+   "equity_hash": "32c1fea5c45026f60bfeed9f1008a17d4965507d2b2d3498ed05b075304947db",
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "eae784919729b5def9de5e898cee4cfeb9422796f8053d5d10afb3e0ee82def1"
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "oos",
+   "segment": "oos_3",
+   "fold": 3,
+   "sharpe": -78.40282452914253,
+   "total_return": -0.05448726443239993,
+   "max_drawdown": 0.05448726443239993,
+   "turnover": 10276.302748245631,
+   "n_trades": 121.0,
+   "fees": 547.216634324,
+   "funding": 0.0,
+   "slippage_cost": 12.1700858379584,
+   "psr": 0.0,
+   "final_state": "WARNING",
+   "equity_hash": "1d4f1e7a8d97a68ef34e7ca1e5969d6c299153f00ce5289485db1fc447508448",
+   "config_hash": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91",
+   "dataset_hash": "a09c0f4a98ac4f9a3585611b16c4a2ae24acdb095fbe3a74a7111f764527c7c3"
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "oos",
+   "segment": "oos_4",
+   "fold": 4,
+   "sharpe": -72.27752229198511,
+   "total_return": -0.047695758741600036,
+   "max_drawdown": 0.047695758741600036,
+   "turnover": 9170.026020334188,
+   "n_trades": 121.0,
+   "fees": 491.775647416,
+   "funding": 0.0,
+   "slippage_cost": 1.844994941381,
+   "psr": 0.0,
+   "final_state": "WARNING",
+   "equity_hash": "b34816d41e4c887fbab6c293f93aa49671196dd8e62c9b168dff0cb9b08b111c",
+   "config_hash": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91",
+   "dataset_hash": "28c8513ece080e1290b86da3ef1a1a90784d9139b03d5b85de9e413526e9c6fb"
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "oos",
+   "segment": "oos_5",
+   "fold": 5,
+   "sharpe": -66.98348635622033,
+   "total_return": -0.03512516885719996,
+   "max_drawdown": 0.03512516885719996,
+   "turnover": 6626.674849801188,
+   "n_trades": 107.0,
+   "fees": 356.392618572,
+   "funding": 0.0,
+   "slippage_cost": 11.7988928018961,
+   "psr": 1.1102230246251565e-16,
+   "final_state": "WARNING",
+   "equity_hash": "811b56cde42d54e78fdf6b085c2f40c3766792102dd714c7a09fbc9e790ac1e3",
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "2beecfcd8e35936c744cafd56d1020a54d96cf5391cb791eff59bbcb31a804c0"
+  }
+ ]
+}

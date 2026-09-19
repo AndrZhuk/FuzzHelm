@@ -1,0 +1,79 @@
+@startuml activity_trading_loop
+' Діаграма діяльності одного бару TradingLoop.step() → _decide() (src/fuzzhelm/backtest/engine.py, HEAD b933802).
+' Той самий код працює в бектесті (run_backtest), live/replay (on_candle) і в клітинках сітки (run_cell).
+' Автор: Андрій Жук, 2026.
+title Один бар TradingLoop: виконання → облік → ознаки/ризик-стан → рішення → сайзинг → ризик-ланцюг → заявки
+skinparam defaultFontName Helvetica
+skinparam shadowing false
+skinparam ActivityDiamondFontSize 11
+
+start
+:закритий бар t (Bar + DecBar), close_t;
+:ManualClock.set(open_t);\nставка фандингу для моментів 00/08/16 у (open_{t−1}, open_t]\n(історичний ряд або fallback 0.0001, не пізніше close_t);
+if (HALTED або kill-switch спрацював\n(зокрема між барами оператором/API)?) then (так)
+  :PaperBroker.cancel — заявки NEW, що збільшили б |позицію|,\nі стопи, подані разом із ними (ENG-20);\nстоп відкритої позиції лишається;
+endif
+
+partition "1. Виконання (заявки бару t−1)" {
+  :router.on_bar(dbar): фандинг на позицію → MARKET за **open_t** + CostModel\n→ STOP / TP / ліквідація в [l_t, h_t] песимістичним шляхом\n(лонг O→L→H→C, шорт O→H→L→C: стоп раніше тейку);
+}
+partition "2. Облік" {
+  :Portfolio.apply_funding · _apply_fill → записи позицій (exit_reason, MAE), order_updates;\nціна ліквідації фактичної позиції → брокеру;
+  :ManualClock.set(close_t); E_t = Portfolio.mark(c_t);
+  if (check_invariants?) then (так)
+    :cash + Σq·p − Σfees == equity (≤ 1e−9);\nпозиція брокера == позиція Portfolio;\nза засувки |позиція| після виконань не зросла;\nінакше EngineInvariantError;
+  endif
+}
+partition "3. Ознаки і ризик-стан" {
+  :FeaturePipeline.update(bar) → BarWindow.append;\nVolTarget.update(r_t) → σ_ann, s_t;\nσ_base = медіана σ_ann на прогріві → vol_ratio;
+  :RiskStateMachine.update(RiskObservation(close_t, E_t, vol_ratio))\n→ Transition? → risk_event (rule = risk_state);
+}
+
+if (index ≥ decide_from\n(прогрів 523 бари)?) then (так)
+  partition "4. Рішення — «м'яке пропонує»" {
+    :gate.reset(фактичний бік), якщо тригер і позиція розійшлися (ENG-05);
+    :DecisionCore.intent(window) (або decide → DecisionTrace):\n6 детекторів → consensus (T, R, V) → MamdaniEngine (u_raw)\n→ agreement (κ) → u_final = clip(κ·u_raw, −1, 1);
+    :HysteresisGate.update(u_final) → gate_side\n(вхід |u| ≥ 0.25, вихід знаковий u < 0.12);\ndesired = 0 у HALTED / при kill-switch;
+  }
+  if (намір: desired ≠ поточний бік?) then (ні)
+    :action = hold | none\n(розмір фіксується на вході, ENG-04; ризик не оцінюється;\nпри record_traces = all сайзер рахується лише для трасування);
+  else (так)
+    partition "5. Сайзинг" {
+      :PositionSizer.size(u_final, E_t, c_t, ATR_t, s_t,\nκ_mode = fsm.kappa_mode_float, step, minNotional)\n→ qty = floor_step(κ_mode · min(q_atr, q_vt, q_lev)), binding_constraint;
+    }
+    if (сайзер відмовив\n(BELOW_MIN_NOTIONAL / ZERO_QTY:\nціль = поточна)?) then (так)
+      :action = none; ризик-ланцюг не викликається (ENG-12);
+    else (ні)
+      partition "6. Ризик-ланцюг — «жорстке вирішує»" {
+        :RiskContext.from_snapshot(fsm.snapshot, price = c_t, current, target,\nATR, stop_distance, mmr, dq_score, last_data_ns, risk_state);
+        :RiskGuard.evaluate(ctx): stale_data → max_position_notional →\nmax_gross_leverage → max_daily_loss → max_drawdown_halt →\nliquidation_buffer → risk_mode (cooldown_policy);\nкожна перевірка → risk_event (observed, limit);\nV = compose(вердикти);
+        :approved = side · (base + floor_step(exposure(V, increase)));
+        if (approved · c_t < minNotional?) then (так)
+          :approved = 0 (note: BELOW_MIN_NOTIONAL);
+        endif
+      }
+      if (GuardResult.flatten_all?) then (так)
+        :action = flatten, exit_reason = HALT;
+      elseif (розворот, а новий бік\nланцюг відхилив цілком?) then (так)
+        :action = exit, exit_reason = RISK_VETO;
+      elseif (поточний бік ≠ новий?) then (так)
+        :action = flip | exit (SIGNAL);
+      else (ні)
+        :action = enter | none (SIGNAL);
+      endif
+      partition "7. Заявки (виконання — на open_{t+1})" {
+        :OrderRouter.submit(MARKET, ts_created = close_t);\nдля нового боку — reduce-only STOP_MARKET на c_t ∓ Δ_stop\nі рівень TP c_t ± m·Δ_stop (Δ_stop = χ·ATR, m = 2; ENG-01, ENG-03);
+      }
+    endif
+  endif
+  :DecisionEntry (+ DecisionTrace з sizing і risk\nза record_traces = all | trades);
+endif
+:StepResult(fills, funding, decision, orders, positions,\nrisk_events, transition, equity_point, order_updates);
+note right
+  Рушій БД не знає: воркер/API пишуть
+  StepResult у таблиці 1:1 (workers.persist).
+  Бар t+1 на кроці t недосяжний
+  (LookaheadGuard у бектесті).
+end note
+stop
+@enduml

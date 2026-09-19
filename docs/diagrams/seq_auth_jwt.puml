@@ -1,0 +1,76 @@
+@startuml seq_auth_jwt
+' Sequence автентифікації й авторизації за кодом src/fuzzhelm/api/{routers/auth.py, auth.py, deps.py}
+' (PyJWT, HEAD b933802). Автор: Андрій Жук, 2026.
+title Автентифікація (JWT HS256) і авторизація за ACCESS_MATRIX
+skinparam defaultFontName Helvetica
+skinparam shadowing false
+autonumber
+
+actor "Користувач" as USER
+participant "Клієнт\n(браузер / curl)" as UI
+participant "POST /auth/login\nrouters.auth.login" as LOGIN
+participant "LoginRateLimiter" as RL
+participant "ApiServices.uow()\n(UserRepo, AuditRepo)" as UOW
+participant "check_password\n(asyncio.to_thread)" as BCRYPT
+participant "auth.issue_token /\nauth.decode_token\n(PyJWT)" as JWT
+participant "deps.get_principal /\ndeps.require(permission)" as DEPS
+participant "маршрут API" as ROUTE
+database "PostgreSQL\n(app_user, audit_log)" as DB
+
+USER -> UI : логін, пароль
+UI -> LOGIN : OAuth2-форма або JSON {username, password}
+LOGIN -> RL : retry_after_s("ip:<ip>", "login:<логін>")
+alt ≥ 10 невдач за останні 5 хв (на IP або на логін; 11-та спроба)
+  LOGIN --> UI : 429 «Too many failed login attempts», Retry-After
+end
+LOGIN -> UOW : users.get_by_login(username)
+UOW -> DB : SELECT app_user WHERE login = $1
+LOGIN -> BCRYPT : bcrypt (вартість 12) у потоці, поза транзакцією;\nневідомий логін → dummy_verify (той самий час)
+alt пароль хибний або користувача немає
+  LOGIN -> UOW : audit.append("auth.login_failed", ip, after={login})
+  UOW -> DB : INSERT audit_log; COMMIT
+  LOGIN -> RL : record_failure(ip, login)
+  LOGIN --> UI : 401 «Incorrect username or password»\nWWW-Authenticate: Bearer (однаковий текст)
+else пароль правильний
+  LOGIN -> JWT : issue_token(uid, login, role, secret, ttl_hours = 8, clock)
+  JWT --> LOGIN : HS256 {sub, uid, role, iat, nbf, exp = iat + 8 год, iss = "fuzzhelm", jti}
+  LOGIN -> UOW : audit.append("auth.login", user_id, ip, after={role, jti, expires_at_s})
+  UOW -> DB : INSERT audit_log; COMMIT
+  LOGIN -> RL : reset(login)
+  LOGIN --> UI : 200 TokenResponse {access_token, expires_in, role, login}
+end
+
+== Запит до захищеного маршруту ==
+UI -> DEPS : GET/POST … Authorization: Bearer <JWT>\n(лише заголовок; у query-рядку токен не приймається)
+alt заголовка Authorization немає
+  DEPS --> UI : 401 «Not authenticated»
+end
+DEPS -> JWT : decode_token(token, secret, clock)
+note right of JWT
+  algorithms=["HS256"] (alg=none, HS384/HS512,
+  RS256/ES256 відкидаються); issuer="fuzzhelm";
+  усі 8 claims обов'язкові; exp — без допуску,
+  iat/nbf — допуск 30 с; час за ін'єктованим Clock
+end note
+alt підпис / claims / час невалідні
+  DEPS --> UI : 401 «Invalid or expired token»
+end
+DEPS -> DEPS : роль ∈ ACCESS_MATRIX[permission]?
+alt ні
+  DEPS --> UI : 403 «role '<роль>' lacks permission '<дозвіл>'»
+end
+opt permission ∈ MUTATING_PERMISSIONS\n(strategy:write, backtest:run, risk:limits:write,\nrisk:killswitch:release)
+  DEPS -> UOW : users.get(uid)
+  UOW -> DB : SELECT app_user WHERE id = uid
+  alt користувача немає / логін змінено
+    DEPS --> UI : 401 «User no longer exists»
+  else роль у БД втратила дозвіл (понижено до спливу токена)
+    DEPS --> UI : 403 «role was changed; permission revoked»
+  end
+end
+DEPS -> ROUTE : Principal(uid, login, role, jti, exp_s)
+opt маршрут змінює стан
+  ROUTE -> UOW : зміна + audit_log (before/after, user_id, ip)\nв ОДНІЙ транзакції; COMMIT до відповіді
+end
+ROUTE --> UI : 200 / 201 / 202
+@enduml

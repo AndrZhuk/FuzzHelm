@@ -1,0 +1,133 @@
+{
+ "experiment": "plot_equity",
+ "passport": {
+  "experiment": "plot_equity",
+  "command": "uv run python scripts/plot_equity.py --db --symbol ETHUSDT --params @artifacts/exp_search/grid/grid_ETHUSDT_mamdani.json --persist --out docs/figures",
+  "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "git_dirty": false,
+  "git_dirty_any": true,
+  "git_dirty_paths": [],
+  "seed": 20260918,
+  "run_id": "2c9344ad-726e-400a-80fc-cb8f98371099",
+  "run_kind": "backtest",
+  "run_status": "DONE",
+  "run_git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+  "config_hashes": {
+   "run": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91"
+  },
+  "equity_hash": "ed0ef3b05e8df2d477c337a732124649d9fe7d85ce51ba8759a8d7e2740b2047",
+  "seed_of_run": 20260918,
+  "run_git_dirty": 0.0,
+  "persist": {
+   "mode": "commit",
+   "spec": {
+    "symbol": "ETH-USDT-PERP",
+    "tf": "1m",
+    "ts_from_ns": 1785801600000000000,
+    "ts_to_ns": 1789689600000000000,
+    "seed": 20260918,
+    "engine": "mamdani",
+    "params": {
+     "n_atr": 7,
+     "chi": 2.0,
+     "u_enter": 0.3,
+     "rho_base": 0.0025,
+     "lam": 0.97
+    }
+   },
+   "expected_config_hash": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91",
+   "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+   "git_dirty": false,
+   "git_dirty_paths": [],
+   "run_id": "2c9344ad-726e-400a-80fc-cb8f98371099",
+   "config_hash": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91",
+   "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+   "equity_hash": "ed0ef3b05e8df2d477c337a732124649d9fe7d85ce51ba8759a8d7e2740b2047",
+   "config_hash_matches": true,
+   "rows": {
+    "bars": 64800,
+    "decisions": 703,
+    "decisions_skipped": 0,
+    "orders": 1147,
+    "orders_skipped": 0,
+    "fills": 847,
+    "positions": 437,
+    "equity_points": 64800,
+    "risk_events": 4926,
+    "metrics": 25,
+    "journal_entries": 7616,
+    "candles": 0
+   }
+  }
+ },
+ "meta": {
+  "run_id": "2c9344ad-726e-400a-80fc-cb8f98371099",
+  "run_kind": "backtest",
+  "run_status": "DONE",
+  "run_git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+  "config_hashes": {
+   "run": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91"
+  },
+  "equity_hash": "ed0ef3b05e8df2d477c337a732124649d9fe7d85ce51ba8759a8d7e2740b2047",
+  "seed_of_run": 20260918,
+  "run_git_dirty": 0.0,
+  "persist": {
+   "mode": "commit",
+   "spec": {
+    "symbol": "ETH-USDT-PERP",
+    "tf": "1m",
+    "ts_from_ns": 1785801600000000000,
+    "ts_to_ns": 1789689600000000000,
+    "seed": 20260918,
+    "engine": "mamdani",
+    "params": {
+     "n_atr": 7,
+     "chi": 2.0,
+     "u_enter": 0.3,
+     "rho_base": 0.0025,
+     "lam": 0.97
+    }
+   },
+   "expected_config_hash": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91",
+   "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+   "git_dirty": false,
+   "git_dirty_paths": [],
+   "run_id": "2c9344ad-726e-400a-80fc-cb8f98371099",
+   "config_hash": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91",
+   "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+   "equity_hash": "ed0ef3b05e8df2d477c337a732124649d9fe7d85ce51ba8759a8d7e2740b2047",
+   "config_hash_matches": true,
+   "rows": {
+    "bars": 64800,
+    "decisions": 703,
+    "decisions_skipped": 0,
+    "orders": 1147,
+    "orders_skipped": 0,
+    "fills": 847,
+    "positions": 437,
+    "equity_points": 64800,
+    "risk_events": 4926,
+    "metrics": 25,
+    "journal_entries": 7616,
+    "candles": 0
+   }
+  }
+ },
+ "summary": {
+  "points": 64800,
+  "equity_first": 10000.0,
+  "equity_last": 8800.088358185056,
+  "total_return": -0.11999116418149447,
+  "max_drawdown": 0.12009199841871632,
+  "bars_per_state": {
+   "NORMAL": 2193,
+   "WARNING": 8202,
+   "COOLDOWN": 16112,
+   "HALTED": 38293
+  },
+  "state_changes": 5
+ },
+ "figure": "docs/figures/equity_run_2c9344ad.png"
+}

@@ -1,0 +1,947 @@
+{
+ "provenance": {
+  "command": "uv run python scripts/run_walkforward.py --db --symbol ETHUSDT --engine both --workers 8",
+  "created_utc": "2026-09-19T14:37:48Z",
+  "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "git_dirty": false,
+  "git_dirty_any": false,
+  "git_dirty_paths": [],
+  "git_dirty_ignored": [
+   "artifacts",
+   "docs"
+  ],
+  "seed": 20260918,
+  "workers": 8,
+  "dataset": {
+   "source": "db:ETHUSDT",
+   "symbol": "ETHUSDT",
+   "symbol_canon": "ETH-USDT-PERP",
+   "tf": "1m",
+   "bars": 64800,
+   "first_open_utc": "2026-08-04T00:00Z",
+   "last_open_utc": "2026-09-17T23:59Z",
+   "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+   "candles_hash": "d9f11c7e9f1e718f22eb06a3d88e6a9c459081499373c98c78722e35e4190d27",
+   "funding_rates": 135
+  },
+  "config_hash": "52c93408be3a2e9c2e811deaa62bb3db69297ee560d6cb6ad684baa5c39db33f",
+  "engine": "linear",
+  "cost_mode": "full",
+  "cooldown_policy": "scaled_entries",
+  "initial_equity": "10000",
+  "warmup_bars": 523,
+  "script": "walkforward",
+  "smoke": false,
+  "persist": "commit",
+  "cells": "all",
+  "wall_s": {
+   "is_grid": 150.29298533394467,
+   "oos": 1.0597029590280727,
+   "total": 151.3663238750305
+  }
+ },
+ "selection_rule": "eps_constraint_max_sr",
+ "selection_rule_uk": "ε-обмеження на фронті Парето (SR↑, MaxDD↓, Turnover↓): серед недомінованих клітинок з MaxDD ≤ dd_cap обирається клітинка з найбільшим Шарпом; рівність → менший оборот → менший індекс сітки. Якщо жодна клітинка фронту не вкладається в dd_cap — клітинка фронту з найменшою MaxDD (рівність → більший Шарп → менший оборот → менший індекс). dd_cap за замовчуванням = state_machine.cool_enter (просадка, з якої автомат ризику переходить у COOLDOWN): робоча точка, що вже на IS доходить до COOLDOWN, неприйнятна.",
+ "folds_geometry": [
+  {
+   "fold": 0,
+   "is": [
+    0,
+    20554
+   ],
+   "embargo": [
+    20554,
+    21600
+   ],
+   "oos": [
+    21600,
+    28800
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-04 00:00",
+    "2026-08-18 06:33"
+   ],
+   "oos_utc": [
+    "2026-08-19 00:00",
+    "2026-08-23 23:59"
+   ]
+  },
+  {
+   "fold": 1,
+   "is": [
+    7200,
+    27754
+   ],
+   "embargo": [
+    27754,
+    28800
+   ],
+   "oos": [
+    28800,
+    36000
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-09 00:00",
+    "2026-08-23 06:33"
+   ],
+   "oos_utc": [
+    "2026-08-24 00:00",
+    "2026-08-28 23:59"
+   ]
+  },
+  {
+   "fold": 2,
+   "is": [
+    14400,
+    34954
+   ],
+   "embargo": [
+    34954,
+    36000
+   ],
+   "oos": [
+    36000,
+    43200
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-14 00:00",
+    "2026-08-28 06:33"
+   ],
+   "oos_utc": [
+    "2026-08-29 00:00",
+    "2026-09-02 23:59"
+   ]
+  },
+  {
+   "fold": 3,
+   "is": [
+    21600,
+    42154
+   ],
+   "embargo": [
+    42154,
+    43200
+   ],
+   "oos": [
+    43200,
+    50400
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-19 00:00",
+    "2026-09-02 06:33"
+   ],
+   "oos_utc": [
+    "2026-09-03 00:00",
+    "2026-09-07 23:59"
+   ]
+  },
+  {
+   "fold": 4,
+   "is": [
+    28800,
+    49354
+   ],
+   "embargo": [
+    49354,
+    50400
+   ],
+   "oos": [
+    50400,
+    57600
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-24 00:00",
+    "2026-09-07 06:33"
+   ],
+   "oos_utc": [
+    "2026-09-08 00:00",
+    "2026-09-12 23:59"
+   ]
+  },
+  {
+   "fold": 5,
+   "is": [
+    36000,
+    56554
+   ],
+   "embargo": [
+    56554,
+    57600
+   ],
+   "oos": [
+    57600,
+    64800
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-29 00:00",
+    "2026-09-12 06:33"
+   ],
+   "oos_utc": [
+    "2026-09-13 00:00",
+    "2026-09-17 23:59"
+   ]
+  }
+ ],
+ "engine": "linear",
+ "config_hash": "52c93408be3a2e9c2e811deaa62bb3db69297ee560d6cb6ad684baa5c39db33f",
+ "dd_cap": 0.08,
+ "warmup_bars": 523,
+ "cells": 108,
+ "concat_oos": {
+  "total_return": -0.04899922297487669,
+  "cagr": -0.45737841625272135,
+  "ann_vol": 0.017565130890484847,
+  "sharpe": -34.79555309793517,
+  "sortino": -37.48678101013884,
+  "max_drawdown": 0.04899922297487669,
+  "calmar": -9.33440141463534,
+  "ulcer_index": 0.02920622223727825,
+  "turnover": 1470.0579650054403,
+  "n_trades": 124.0,
+  "sr_period": -0.04799500773504586,
+  "skew": -15.057003915980216,
+  "kurt": 577.6958642086452,
+  "psr": 0.0,
+  "n_obs": 43194.0,
+  "n_segments": 6.0
+ },
+ "psr_statement": "конкатенований OOS (linear): PSR = 0 < 0.95: перевага над SR = 0 статистично НЕ встановлена.",
+ "wall_s": {
+  "is_grid": 150.29298533394467,
+  "oos": 1.0597029590280727
+ },
+ "folds": [
+  {
+   "fold": 0,
+   "selected_cell": 81,
+   "params": {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 81,
+    "front": [
+     32,
+     33,
+     44,
+     46,
+     69,
+     70,
+     80,
+     81,
+     82,
+     83,
+     105,
+     106
+    ],
+    "feasible": [
+     32,
+     33,
+     44,
+     46,
+     69,
+     70,
+     80,
+     81,
+     82,
+     83,
+     105,
+     106
+    ],
+    "dd_cap": 0.08,
+    "rule": "eps_constraint"
+   },
+   "is": {
+    "sharpe": -48.31906929265786,
+    "sortino": -50.636087011655235,
+    "max_drawdown": 0.04129147861105398,
+    "turnover": 2910.8720920291366,
+    "total_return": -0.040955489478841645,
+    "n_trades": 88.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "0c7bed51f9c2a0827cf97d4ef2a2bb6ab046a1f1761732f0b08d86e6a040365c"
+   },
+   "oos": {
+    "sharpe": -21.88769627879327,
+    "sortino": -27.648672451494292,
+    "max_drawdown": 0.0035779502316000134,
+    "turnover": 549.7111115633903,
+    "total_return": -0.0030909121836001363,
+    "n_trades": 22.0,
+    "psr": 0.005254261746625133,
+    "halted": 0.0,
+    "config_hash": "0c7bed51f9c2a0827cf97d4ef2a2bb6ab046a1f1761732f0b08d86e6a040365c",
+    "equity_hash": "f7e9a4e223561282aa0e6331fc3e8279d92b0a26e99f895ece467884e7cacde5",
+    "final_state": "WARNING"
+   },
+   "oos_run_bars": [
+    21077,
+    28800
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 1,
+   "selected_cell": 11,
+   "params": {
+    "n_atr": 7,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 11,
+    "front": [
+     9,
+     11,
+     45,
+     47,
+     57,
+     69,
+     71
+    ],
+    "feasible": [
+     9,
+     11,
+     45,
+     47,
+     57,
+     69,
+     71
+    ],
+    "dd_cap": 0.08,
+    "rule": "eps_constraint"
+   },
+   "is": {
+    "sharpe": -43.31789063945772,
+    "sortino": -46.0087942208414,
+    "max_drawdown": 0.026864411616518424,
+    "turnover": 1783.3635803721293,
+    "total_return": -0.026410471960518378,
+    "n_trades": 74.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "5e982fdaed64e69f91ed96898db25d2165d3dcf1e130def75c6f86312770316f"
+   },
+   "oos": {
+    "sharpe": -34.72145681576186,
+    "sortino": -36.507420251024556,
+    "max_drawdown": 0.008533237841852448,
+    "turnover": 1415.8156791502242,
+    "total_return": -0.008271776601999958,
+    "n_trades": 21.0,
+    "psr": 6.607811520176199e-10,
+    "halted": 0.0,
+    "config_hash": "5e982fdaed64e69f91ed96898db25d2165d3dcf1e130def75c6f86312770316f",
+    "equity_hash": "db2d86cf96788b1d9286d881e2fe92da64e43f36fd68d723943db5930e75957e",
+    "final_state": "NORMAL"
+   },
+   "oos_run_bars": [
+    28277,
+    36000
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 2,
+   "selected_cell": 83,
+   "params": {
+    "n_atr": 21,
+    "chi": 1.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 83,
+    "front": [
+     45,
+     47,
+     57,
+     59,
+     69,
+     81,
+     83,
+     93,
+     105
+    ],
+    "feasible": [
+     45,
+     47,
+     57,
+     59,
+     69,
+     81,
+     83,
+     93,
+     105
+    ],
+    "dd_cap": 0.08,
+    "rule": "eps_constraint"
+   },
+   "is": {
+    "sharpe": -37.77390703679606,
+    "sortino": -40.38499080132876,
+    "max_drawdown": 0.025894442727554368,
+    "turnover": 1683.354521680051,
+    "total_return": -0.025534619410943926,
+    "n_trades": 68.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "0728eb6fbc09d1250707caae8d831a77d3e17b329ac67f1812fc0aef02752bf9"
+   },
+   "oos": {
+    "sharpe": -49.92787755964074,
+    "sortino": -51.12340080984271,
+    "max_drawdown": 0.015691148074799988,
+    "turnover": 2509.285679091896,
+    "total_return": -0.015691148074799988,
+    "n_trades": 26.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "0728eb6fbc09d1250707caae8d831a77d3e17b329ac67f1812fc0aef02752bf9",
+    "equity_hash": "a10194c6715a5fbab74f5658246e861940e14c1ad294dd7a75ac7dd6bdb6998c",
+    "final_state": "NORMAL"
+   },
+   "oos_run_bars": [
+    35477,
+    43200
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 3,
+   "selected_cell": 59,
+   "params": {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 59,
+    "front": [
+     59,
+     68,
+     69,
+     71
+    ],
+    "feasible": [
+     59,
+     68,
+     69,
+     71
+    ],
+    "dd_cap": 0.08,
+    "rule": "eps_constraint"
+   },
+   "is": {
+    "sharpe": -36.76445111752569,
+    "sortino": -39.354471221810776,
+    "max_drawdown": 0.02045355740403998,
+    "turnover": 1165.3554611267539,
+    "total_return": -0.02045355740403998,
+    "n_trades": 59.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4"
+   },
+   "oos": {
+    "sharpe": -27.650588533984788,
+    "sortino": -31.91240325562288,
+    "max_drawdown": 0.007719249669599915,
+    "turnover": 1540.9320700336816,
+    "total_return": -0.007719249669599915,
+    "n_trades": 18.0,
+    "psr": 0.00018703229882238714,
+    "halted": 0.0,
+    "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4",
+    "equity_hash": "7456178e7957cb7dcbb3aee6a03c9826e0c6e86a5edd7ad4e6f1bc02581a8720",
+    "final_state": "NORMAL"
+   },
+   "oos_run_bars": [
+    42677,
+    50400
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 4,
+   "selected_cell": 59,
+   "params": {
+    "n_atr": 14,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 59,
+    "front": [
+     45,
+     47,
+     57,
+     59,
+     69,
+     71,
+     107
+    ],
+    "feasible": [
+     45,
+     47,
+     57,
+     59,
+     69,
+     71,
+     107
+    ],
+    "dd_cap": 0.08,
+    "rule": "eps_constraint"
+   },
+   "is": {
+    "sharpe": -37.46487496925866,
+    "sortino": -40.251350945853176,
+    "max_drawdown": 0.027514565411927316,
+    "turnover": 1577.4951863062804,
+    "total_return": -0.02698412302472719,
+    "n_trades": 52.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4"
+   },
+   "oos": {
+    "sharpe": -33.16514930945642,
+    "sortino": -36.88656805445112,
+    "max_drawdown": 0.0079659422227496,
+    "turnover": 1544.159449229887,
+    "total_return": -0.007734108975200105,
+    "n_trades": 21.0,
+    "psr": 2.6585629263053967e-06,
+    "halted": 0.0,
+    "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4",
+    "equity_hash": "d70a5d60e3a392d899469b1a3be9e73af595e2bcac59eb6955f5a3f902b19be9",
+    "final_state": "NORMAL"
+   },
+   "oos_run_bars": [
+    49877,
+    57600
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 5,
+   "selected_cell": 71,
+   "params": {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.005,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 71,
+    "front": [
+     69,
+     71
+    ],
+    "feasible": [
+     69,
+     71
+    ],
+    "dd_cap": 0.08,
+    "rule": "eps_constraint"
+   },
+   "is": {
+    "sharpe": -33.03525044845764,
+    "sortino": -36.1328673681216,
+    "max_drawdown": 0.016378028734399974,
+    "turnover": 1109.8649427114897,
+    "total_return": -0.016378028734399974,
+    "n_trades": 56.0,
+    "psr": 2.220446049250313e-16,
+    "halted": 0.0,
+    "config_hash": "f5d383f4339111af25b5013d5a4207aca9c289c3426176f9c98046dd00158149"
+   },
+   "oos": {
+    "sharpe": -39.34605463968323,
+    "sortino": -39.528563554143126,
+    "max_drawdown": 0.007481469441599997,
+    "turnover": 1276.6720029823466,
+    "total_return": -0.007481469441599997,
+    "n_trades": 16.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "f5d383f4339111af25b5013d5a4207aca9c289c3426176f9c98046dd00158149",
+    "equity_hash": "de61223111823d678f86bd116a1c9ad6abd9183ddc28607c6ead4ecb6464c5a1",
+    "final_state": "NORMAL"
+   },
+   "oos_run_bars": [
+    57077,
+    64800
+   ],
+   "oos_eval_start": 523
+  }
+ ],
+ "persisted_runs": [
+  {
+   "fold": 0,
+   "segment": "is",
+   "bars": [
+    0,
+    20554
+   ],
+   "eval_start": 0,
+   "config_hash": "0c7bed51f9c2a0827cf97d4ef2a2bb6ab046a1f1761732f0b08d86e6a040365c",
+   "dataset_hash": "adc0d6c03a89bc8d3e0da90274d925e24675f0b2868adb0ab59d69a4df458b9a",
+   "read_back_ok": true,
+   "run_id": "e6f2e6c5-6f3f-4510-b6c4-3b2c377c4ce1",
+   "status": "written",
+   "equity_hash": "2dd0b6230c3fc2a84ba06ac312e6dd407f4176b400c2a79f8067fcf05f253367",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 165,
+    "decisions_skipped": 0,
+    "orders": 255,
+    "orders_skipped": 0,
+    "fills": 176,
+    "positions": 88,
+    "equity_points": 20554,
+    "risk_events": 1198,
+    "metrics": 25,
+    "journal_entries": 1792,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 0,
+   "segment": "oos",
+   "bars": [
+    21077,
+    28800
+   ],
+   "eval_start": 523,
+   "config_hash": "0c7bed51f9c2a0827cf97d4ef2a2bb6ab046a1f1761732f0b08d86e6a040365c",
+   "dataset_hash": "1a48881aae9d52e7e2897b4c2ddb0285d5b2ca73e842b8b11ffbc0deb093a16b",
+   "read_back_ok": true,
+   "run_id": "2320d90a-c8cc-4a5c-b99c-42157b541837",
+   "status": "written",
+   "equity_hash": "f7e9a4e223561282aa0e6331fc3e8279d92b0a26e99f895ece467884e7cacde5",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 39,
+    "decisions_skipped": 0,
+    "orders": 62,
+    "orders_skipped": 0,
+    "fills": 44,
+    "positions": 22,
+    "equity_points": 7723,
+    "risk_events": 292,
+    "metrics": 25,
+    "journal_entries": 436,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 1,
+   "segment": "is",
+   "bars": [
+    7200,
+    27754
+   ],
+   "eval_start": 0,
+   "config_hash": "5e982fdaed64e69f91ed96898db25d2165d3dcf1e130def75c6f86312770316f",
+   "dataset_hash": "f43314a7c6129b60c54c63a69c6eaebe7ee59f8320e1925868ce638e5d92ed17",
+   "read_back_ok": true,
+   "run_id": "567a1850-f163-4c45-bd44-7f1a6e218147",
+   "status": "written",
+   "equity_hash": "6a746acc2979d3849f36beac06c3388394894eaa6f43f8e5b27d385bc3fd4826",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 142,
+    "decisions_skipped": 0,
+    "orders": 217,
+    "orders_skipped": 0,
+    "fills": 148,
+    "positions": 74,
+    "equity_points": 20554,
+    "risk_events": 1131,
+    "metrics": 25,
+    "journal_entries": 1637,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 1,
+   "segment": "oos",
+   "bars": [
+    28277,
+    36000
+   ],
+   "eval_start": 523,
+   "config_hash": "5e982fdaed64e69f91ed96898db25d2165d3dcf1e130def75c6f86312770316f",
+   "dataset_hash": "ba5b339e2398c2dd8890c8e76214a838f1a7aff60b27e121e3402328194215f2",
+   "read_back_ok": true,
+   "run_id": "d6370363-ade3-4cf8-84b5-8469a20fa80b",
+   "status": "written",
+   "equity_hash": "db2d86cf96788b1d9286d881e2fe92da64e43f36fd68d723943db5930e75957e",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 39,
+    "decisions_skipped": 0,
+    "orders": 60,
+    "orders_skipped": 0,
+    "fills": 42,
+    "positions": 21,
+    "equity_points": 7723,
+    "risk_events": 299,
+    "metrics": 25,
+    "journal_entries": 440,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 2,
+   "segment": "is",
+   "bars": [
+    14400,
+    34954
+   ],
+   "eval_start": 0,
+   "config_hash": "0728eb6fbc09d1250707caae8d831a77d3e17b329ac67f1812fc0aef02752bf9",
+   "dataset_hash": "a526f7d699275c6afee6b17cea6fb33a0ba2ffa9cf80752c63597b83ec860856",
+   "read_back_ok": true,
+   "run_id": "fe82701a-8284-4cde-83f0-d806659b6ea0",
+   "status": "written",
+   "equity_hash": "fdbd6969eea07f6e0b3d7fe6e3a106860e77c57d5bb69a1c95767eac6dbd615a",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 124,
+    "decisions_skipped": 0,
+    "orders": 194,
+    "orders_skipped": 0,
+    "fills": 136,
+    "positions": 68,
+    "equity_points": 20554,
+    "risk_events": 1017,
+    "metrics": 25,
+    "journal_entries": 1469,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 2,
+   "segment": "oos",
+   "bars": [
+    35477,
+    43200
+   ],
+   "eval_start": 523,
+   "config_hash": "0728eb6fbc09d1250707caae8d831a77d3e17b329ac67f1812fc0aef02752bf9",
+   "dataset_hash": "eae784919729b5def9de5e898cee4cfeb9422796f8053d5d10afb3e0ee82def1",
+   "read_back_ok": true,
+   "run_id": "66770bbc-36a9-4f62-bbc7-ccfb1d33008d",
+   "status": "written",
+   "equity_hash": "a10194c6715a5fbab74f5658246e861940e14c1ad294dd7a75ac7dd6bdb6998c",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 48,
+    "decisions_skipped": 0,
+    "orders": 75,
+    "orders_skipped": 0,
+    "fills": 52,
+    "positions": 26,
+    "equity_points": 7723,
+    "risk_events": 376,
+    "metrics": 25,
+    "journal_entries": 550,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 3,
+   "segment": "is",
+   "bars": [
+    21600,
+    42154
+   ],
+   "eval_start": 0,
+   "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4",
+   "dataset_hash": "1240df2e4ab631df14df2d3a65685d7751d3b9181a98bcedd3f2cc1636fac264",
+   "read_back_ok": true,
+   "run_id": "5f30a9d6-b604-4611-b32e-3a69a798aaa7",
+   "status": "written",
+   "equity_hash": "f6f03a7dcd05ac0b47ebe18665d6c972adc04feaafc2d0ef18ed96b5c84f2c72",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 116,
+    "decisions_skipped": 0,
+    "orders": 175,
+    "orders_skipped": 0,
+    "fills": 118,
+    "positions": 59,
+    "equity_points": 20554,
+    "risk_events": 994,
+    "metrics": 25,
+    "journal_entries": 1403,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 3,
+   "segment": "oos",
+   "bars": [
+    42677,
+    50400
+   ],
+   "eval_start": 523,
+   "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4",
+   "dataset_hash": "a09c0f4a98ac4f9a3585611b16c4a2ae24acdb095fbe3a74a7111f764527c7c3",
+   "read_back_ok": true,
+   "run_id": "e5cf8569-890e-4686-a7e6-4e126993beef",
+   "status": "written",
+   "equity_hash": "7456178e7957cb7dcbb3aee6a03c9826e0c6e86a5edd7ad4e6f1bc02581a8720",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 35,
+    "decisions_skipped": 0,
+    "orders": 53,
+    "orders_skipped": 0,
+    "fills": 36,
+    "positions": 18,
+    "equity_points": 7723,
+    "risk_events": 263,
+    "metrics": 25,
+    "journal_entries": 387,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 4,
+   "segment": "is",
+   "bars": [
+    28800,
+    49354
+   ],
+   "eval_start": 0,
+   "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4",
+   "dataset_hash": "85d9cb2a3def83c52d4d8b46debb1a46e0f9430691394bba3f30f4593c637f28",
+   "read_back_ok": true,
+   "run_id": "353fcd9a-77a3-4424-818f-ae13bc30de7b",
+   "status": "written",
+   "equity_hash": "e95841e46646c7d771d5276b8cbf2c9f35cb67faae3f95af002c46eddb560f8f",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 103,
+    "decisions_skipped": 0,
+    "orders": 155,
+    "orders_skipped": 0,
+    "fills": 104,
+    "positions": 52,
+    "equity_points": 20554,
+    "risk_events": 761,
+    "metrics": 25,
+    "journal_entries": 1123,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 4,
+   "segment": "oos",
+   "bars": [
+    49877,
+    57600
+   ],
+   "eval_start": 523,
+   "config_hash": "62bc02d67a61ff57e9c372a379699bcad7e3270974ec4eb7bfd16932f1cb6cc4",
+   "dataset_hash": "28c8513ece080e1290b86da3ef1a1a90784d9139b03d5b85de9e413526e9c6fb",
+   "read_back_ok": true,
+   "run_id": "75bac55d-30c2-45f4-8a55-6f6f33477501",
+   "status": "written",
+   "equity_hash": "d70a5d60e3a392d899469b1a3be9e73af595e2bcac59eb6955f5a3f902b19be9",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 40,
+    "decisions_skipped": 0,
+    "orders": 62,
+    "orders_skipped": 0,
+    "fills": 42,
+    "positions": 21,
+    "equity_points": 7723,
+    "risk_events": 344,
+    "metrics": 25,
+    "journal_entries": 487,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 5,
+   "segment": "is",
+   "bars": [
+    36000,
+    56554
+   ],
+   "eval_start": 0,
+   "config_hash": "f5d383f4339111af25b5013d5a4207aca9c289c3426176f9c98046dd00158149",
+   "dataset_hash": "bc18c711743f24ee991e9839bc15e86aed1d73980956ad4a1703aca50f6c66a0",
+   "read_back_ok": true,
+   "run_id": "1a403fc4-0840-4043-aa6f-6bfbad259dbd",
+   "status": "written",
+   "equity_hash": "df5232b39ff1d3ce44eb49e269eb6f119f16f4cc57e8abc073c10d27978e412f",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 110,
+    "decisions_skipped": 0,
+    "orders": 167,
+    "orders_skipped": 0,
+    "fills": 112,
+    "positions": 56,
+    "equity_points": 20554,
+    "risk_events": 946,
+    "metrics": 25,
+    "journal_entries": 1334,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 5,
+   "segment": "oos",
+   "bars": [
+    57077,
+    64800
+   ],
+   "eval_start": 523,
+   "config_hash": "f5d383f4339111af25b5013d5a4207aca9c289c3426176f9c98046dd00158149",
+   "dataset_hash": "2beecfcd8e35936c744cafd56d1020a54d96cf5391cb791eff59bbcb31a804c0",
+   "read_back_ok": true,
+   "run_id": "45c8a78a-f53f-4fe9-b2ef-39b22e435dd7",
+   "status": "written",
+   "equity_hash": "de61223111823d678f86bd116a1c9ad6abd9183ddc28607c6ead4ecb6464c5a1",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 32,
+    "decisions_skipped": 0,
+    "orders": 48,
+    "orders_skipped": 0,
+    "fills": 32,
+    "positions": 16,
+    "equity_points": 7723,
+    "risk_events": 304,
+    "metrics": 25,
+    "journal_entries": 416,
+    "candles": 0
+   }
+  }
+ ]
+}

@@ -1,0 +1,167 @@
+@startuml component
+' Діаграма компонентів FuzzHelm: пакети src/fuzzhelm, порти core/ports.py, дві архітектурні межі (брифінг §4.2).
+' Імена — фактичні класи й модулі коду (HEAD b933802). Автор: Андрій Жук, 2026.
+title FuzzHelm — компоненти, порти і дві архітектурні межі
+skinparam componentStyle uml2
+skinparam defaultFontName Helvetica
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam nodesep 25
+skinparam ranksep 40
+skinparam package {
+  BackgroundColor<<float>> #E8F1FB
+  BackgroundColor<<decimal>> #FFF4E0
+  BackgroundColor<<boundary>> #F2F2F2
+}
+
+actor "Користувач\n(operator / analyst /\nauditor / admin)" as USER
+cloud "Binance USDⓈ-M (read-only)\nfapi.binance.com\nfstream.binance.com" as BINANCE
+cloud "Kraken (read-only)\napi.kraken.com" as KRAKEN
+cloud "Binance Futures testnet\ntestnet.binancefuture.com" as TESTNET
+cloud "Telegram Bot API\napi.telegram.org" as TELEGRAM
+database "PostgreSQL 16\n15 таблиць, роль fuzzhelm_app\nLISTEN/NOTIFY" as PG
+
+package "config.py (Settings)" <<boundary>> as CFG {
+  component "ALLOWED_TESTNET_HOSTS\nALLOWED_READONLY_HOSTS\nassert_testnet_url" as ALLOW
+}
+
+package "ingest (межа: JSON бірж → DTO)" <<boundary>> {
+  component "BinanceRestClient\nKrakenRestClient\nTokenBucket · RetryPolicy\nbackfill_klines" as REST
+  component "BinanceWsClient\n(conn market + public)\nBackoff · HeartbeatWatchdog" as WS
+  component "ReplayFeed · SessionRecorder\nFrameClock" as REPLAY
+  component "IngestPipeline\nnormalize_binance · Deduplicator\nGapDetector · CandleAggregator\nRestBackfiller · crosscheck" as PIPE
+}
+
+package "quality" <<boundary>> {
+  component "check_candle · dq_score (AHP)\nAnomalyAutoencoder (MLP)\nPipelineHealth" as QUAL
+}
+
+rectangle "МЕЖА ДЕТЕРМІНІЗМУ — без настінного часу й випадковості\n(AST-тест test_no_wallclock_in_core)" as DET {
+  package "core" <<decimal>> {
+    interface "Clock" as P_CLOCK
+    interface "IdGenerator" as P_ID
+    interface "MarketFeed" as P_FEED
+    interface "ExecutionVenue" as P_VENUE
+    component "dto · money · digest\nEventJournal (BLAKE2b)\nManualClock · SeededIdGenerator" as CORE
+  }
+  package "features" <<float>> {
+    component "FeaturePipeline (інкрементально:\nO(1) на бар, перцентильний ранг — O(L), F-08)\nBarWindow · LookaheadGuard" as FEAT
+    component "convert.to_float\n(Decimal → float)" as TOFLOAT
+  }
+  package "detectors" <<float>> {
+    component "Detector ×6 (Protocol)\nregistry.build_detectors" as DETS
+  }
+  package "fuzzy" <<float>> {
+    interface "InferenceEngine" as P_ENGINE
+    component "MamdaniEngine (45 правил)\nLinearVoteEngine" as FUZZY
+  }
+  package "decision" <<float>> {
+    component "DecisionCore\nconsensus · agreement (κ)\nDecisionTrace · narrate" as DECISION
+  }
+  package "sizing" <<decimal>> {
+    component "VolTarget · PositionSizer\nHysteresisGate" as SIZING
+    component "convert.to_decimal\nprice_to_decimal\n(float → Decimal, ROUND_DOWN)" as TODEC
+  }
+  package "risk" <<decimal>> {
+    component "RiskGuard (6 правил + RiskModeGate)\nVerdict · compose\nRiskStateMachine · KillSwitch\nmargin · var · kupiec" as RISK
+  }
+}
+
+package "regimes" <<float>> {
+  component "fit_regimes (KMeans)\ncalibrate (МФ з даних)" as REGIMES
+}
+
+package "execution" <<decimal>> {
+  component "PaperBroker · CostModel\nPortfolio" as PAPER
+  component "BinanceTestnetVenue\n(HMAC-SHA256)" as TNV
+  component "OrderRouter\n(ідемпотентність client_order_id)" as ROUTER
+}
+
+package "backtest" <<decimal>> {
+  component "TradingLoop.step()\nrun_backtest · Dataset\nmetrics · walkforward · grid\nparallel · pareto · manifest" as ENGINE
+}
+
+package "storage" <<boundary>> {
+  component "repositories (Candle, Journal, Run,\nDecision, Order, RiskEvent, Audit, …)\nAlembic 0001–0004" as STORAGE
+}
+
+package "api (FastAPI)" <<boundary>> {
+  component "routers · auth (JWT, ACCESS_MATRIX)\nexplain · LiveHub/PgLiveSource (SSE)\nFileLimitsStore · DbBacktestRunner" as API
+}
+
+package "workers · scheduler · notify · cli" <<boundary>> {
+  component "TradingSession (trading_worker)\ningest_worker · persist" as WORKERS
+  component "scheduler.jobs (APScheduler)" as SCHED
+  component "TelegramNotifier" as NOTIFY
+  component "fuzzhelm CLI" as CLI
+}
+
+package "infra (поза межею)" <<boundary>> {
+  component "SystemClock · MonotonicClock\nRandomIdGenerator" as INFRA
+}
+
+' --- реалізації портів
+WS ..|> P_FEED
+REPLAY ..|> P_FEED
+PAPER ..|> P_VENUE
+TNV ..|> P_VENUE
+ROUTER ..|> P_VENUE
+INFRA ..|> P_CLOCK
+CORE ..|> P_CLOCK : ManualClock
+CORE ..|> P_ID : SeededIdGenerator
+FUZZY ..|> P_ENGINE
+
+' --- потік даних (брифінг §4.1)
+BINANCE --> REST
+BINANCE --> WS
+KRAKEN --> REST
+REST --> PIPE : REST-добір
+WS --> PIPE
+REPLAY --> PIPE
+PIPE --> QUAL
+PIPE --> STORAGE : свічки, ingest_gap,\nevent_journal
+PIPE --> WORKERS : закриті свічки
+WORKERS --> ENGINE : on_candle
+ENGINE --> FEAT
+FEAT --> DETS
+DETS --> DECISION
+DECISION --> P_ENGINE
+ENGINE --> SIZING
+ENGINE --> RISK
+ENGINE --> ROUTER
+ROUTER --> PAPER
+ROUTER --> TNV
+TNV --> TESTNET : лише testnet
+REGIMES ..> FEAT : калібрування МФ\n(config/membership.yaml)
+
+' --- межа типів: дві точки конвертації
+ENGINE --> TOFLOAT : Decimal → float
+TOFLOAT --> FEAT
+ENGINE --> TODEC : float → Decimal
+SIZING --> TODEC
+
+WORKERS --> STORAGE : workers.persist
+API --> STORAGE
+API --> ENGINE : POST /backtests
+API <..> WORKERS : NOTIFY через PostgreSQL:\nfuzzhelm_control (команди) →\n← fuzzhelm_live (події SSE)
+STORAGE --> PG
+USER --> API : HTTPS, Bearer JWT
+SCHED --> STORAGE
+SCHED --> NOTIFY
+API --> NOTIFY
+NOTIFY --> TELEGRAM
+CLI --> REST
+CLI --> STORAGE
+ALLOW ..> REST : read-only хости
+ALLOW ..> TNV : testnet-хости
+
+legend right
+  **Межа детермінізму** (сірий прямокутник): core, features, detectors, fuzzy,
+  decision, sizing, risk — час лише через Clock, id — через IdGenerator.
+  **Межа типів:** <back:#E8F1FB>float-домен</back> (features, detectors, fuzzy, decision,
+  regimes) і <back:#FFF4E0>Decimal-домен</back> (core, sizing, risk, execution, backtest)
+  з'єднані лише двома точками: features/convert.py::to_float і
+  sizing/convert.py::to_decimal (AST-тест test_decimal_float_boundary_is_single_choke_point).
+  Пакети-межі (сірі): ingest, quality, storage, api, notify, workers, scheduler, infra, cli.
+endlegend
+@enduml

@@ -1,0 +1,253 @@
+{
+ "experiment": "plot_equity",
+ "passport": {
+  "experiment": "plot_equity",
+  "command": "uv run python scripts/plot_equity.py --series docs/report_tables/raw/var_ETHUSDT/var_series.npz --scope oos --out docs/figures",
+  "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "git_dirty": false,
+  "git_dirty_any": true,
+  "git_dirty_paths": [],
+  "seed": 20260918,
+  "source_passport": {
+   "experiment": "var_backtest",
+   "command": "uv run python scripts/var_backtest.py --db --symbol ETHUSDT --workers 8 --params @artifacts/exp_search/grid/grid_ETHUSDT_mamdani.json --out docs/report_tables/raw/var_ETHUSDT",
+   "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+   "git_dirty": false,
+   "git_dirty_any": true,
+   "git_dirty_paths": [],
+   "seed": 20260918,
+   "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+   "source": "db:ETHUSDT",
+   "symbol": "ETHUSDT",
+   "tf": "1m",
+   "n_bars": 64800,
+   "t_first_ns": 1785801600000000000,
+   "t_last_ns": 1789689540000000000,
+   "config_hashes": {
+    "chosen": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91"
+   },
+   "fold_layout": "profile",
+   "folds": [
+    {
+     "index": 0,
+     "is_start": 0,
+     "is_end": 20554,
+     "embargo_bars": 1046,
+     "oos_start": 21600,
+     "oos_end": 28800
+    },
+    {
+     "index": 1,
+     "is_start": 7200,
+     "is_end": 27754,
+     "embargo_bars": 1046,
+     "oos_start": 28800,
+     "oos_end": 36000
+    },
+    {
+     "index": 2,
+     "is_start": 14400,
+     "is_end": 34954,
+     "embargo_bars": 1046,
+     "oos_start": 36000,
+     "oos_end": 43200
+    },
+    {
+     "index": 3,
+     "is_start": 21600,
+     "is_end": 42154,
+     "embargo_bars": 1046,
+     "oos_start": 43200,
+     "oos_end": 50400
+    },
+    {
+     "index": 4,
+     "is_start": 28800,
+     "is_end": 49354,
+     "embargo_bars": 1046,
+     "oos_start": 50400,
+     "oos_end": 57600
+    },
+    {
+     "index": 5,
+     "is_start": 36000,
+     "is_end": 56554,
+     "embargo_bars": 1046,
+     "oos_start": 57600,
+     "oos_end": 64800
+    }
+   ],
+   "scopes": [
+    "oos",
+    "full"
+   ],
+   "selection": "fixed",
+   "cells": null,
+   "risk_loop": "default",
+   "is_rule": null,
+   "dd_cap": null,
+   "params": {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "params_source": {
+    "kind": "file",
+    "path": "artifacts/exp_search/grid/grid_ETHUSDT_mamdani.json",
+    "selected_on_oos": true,
+    "front_space": "oos",
+    "selection_rule": "eps_constraint_max_sr",
+    "choice_rule": "fallback_min_dd",
+    "choice_index": 21,
+    "dd_cap": 0.08,
+    "source_git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+    "source_command": "uv run python scripts/run_grid.py --db --symbol ETHUSDT --engine mamdani --workers 8"
+   },
+   "smoke": false,
+   "workers": 8,
+   "engine": "mamdani",
+   "warmup_bars": 523,
+   "var_window": 500,
+   "var_window_active": 500,
+   "var_alpha": 0.05
+  },
+  "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+  "source": "db:ETHUSDT",
+  "n_bars": 64800,
+  "symbol": "ETHUSDT",
+  "config_hashes": {
+   "chosen": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91"
+  }
+ },
+ "meta": {
+  "source_passport": {
+   "experiment": "var_backtest",
+   "command": "uv run python scripts/var_backtest.py --db --symbol ETHUSDT --workers 8 --params @artifacts/exp_search/grid/grid_ETHUSDT_mamdani.json --out docs/report_tables/raw/var_ETHUSDT",
+   "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+   "git_dirty": false,
+   "git_dirty_any": true,
+   "git_dirty_paths": [],
+   "seed": 20260918,
+   "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+   "source": "db:ETHUSDT",
+   "symbol": "ETHUSDT",
+   "tf": "1m",
+   "n_bars": 64800,
+   "t_first_ns": 1785801600000000000,
+   "t_last_ns": 1789689540000000000,
+   "config_hashes": {
+    "chosen": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91"
+   },
+   "fold_layout": "profile",
+   "folds": [
+    {
+     "index": 0,
+     "is_start": 0,
+     "is_end": 20554,
+     "embargo_bars": 1046,
+     "oos_start": 21600,
+     "oos_end": 28800
+    },
+    {
+     "index": 1,
+     "is_start": 7200,
+     "is_end": 27754,
+     "embargo_bars": 1046,
+     "oos_start": 28800,
+     "oos_end": 36000
+    },
+    {
+     "index": 2,
+     "is_start": 14400,
+     "is_end": 34954,
+     "embargo_bars": 1046,
+     "oos_start": 36000,
+     "oos_end": 43200
+    },
+    {
+     "index": 3,
+     "is_start": 21600,
+     "is_end": 42154,
+     "embargo_bars": 1046,
+     "oos_start": 43200,
+     "oos_end": 50400
+    },
+    {
+     "index": 4,
+     "is_start": 28800,
+     "is_end": 49354,
+     "embargo_bars": 1046,
+     "oos_start": 50400,
+     "oos_end": 57600
+    },
+    {
+     "index": 5,
+     "is_start": 36000,
+     "is_end": 56554,
+     "embargo_bars": 1046,
+     "oos_start": 57600,
+     "oos_end": 64800
+    }
+   ],
+   "scopes": [
+    "oos",
+    "full"
+   ],
+   "selection": "fixed",
+   "cells": null,
+   "risk_loop": "default",
+   "is_rule": null,
+   "dd_cap": null,
+   "params": {
+    "n_atr": 7,
+    "chi": 2.0,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "params_source": {
+    "kind": "file",
+    "path": "artifacts/exp_search/grid/grid_ETHUSDT_mamdani.json",
+    "selected_on_oos": true,
+    "front_space": "oos",
+    "selection_rule": "eps_constraint_max_sr",
+    "choice_rule": "fallback_min_dd",
+    "choice_index": 21,
+    "dd_cap": 0.08,
+    "source_git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+    "source_command": "uv run python scripts/run_grid.py --db --symbol ETHUSDT --engine mamdani --workers 8"
+   },
+   "smoke": false,
+   "workers": 8,
+   "engine": "mamdani",
+   "warmup_bars": 523,
+   "var_window": 500,
+   "var_window_active": 500,
+   "var_alpha": 0.05
+  },
+  "dataset_hash": "9a04aeae9ba15d8636a05342070d3617f4240aecb588fc89f23b970b6d91671f",
+  "source": "db:ETHUSDT",
+  "n_bars": 64800,
+  "symbol": "ETHUSDT",
+  "config_hashes": {
+   "chosen": "c1fd0694560996a42cf4e4b31a2227f884b96fdd06bee8ab9ee08807b3fbbf91"
+  }
+ },
+ "summary": {
+  "points": 43195,
+  "equity_first": 10000.0,
+  "equity_last": 7686.165079911207,
+  "total_return": -0.2313834920088793,
+  "max_drawdown": 0.23153006546157395,
+  "bars_per_state": {
+   "NORMAL": 17204,
+   "WARNING": 25991,
+   "COOLDOWN": 0,
+   "HALTED": 0
+  },
+  "state_changes": 153
+ },
+ "figure": "docs/figures/equity_var_ETHUSDT_oos.png"
+}

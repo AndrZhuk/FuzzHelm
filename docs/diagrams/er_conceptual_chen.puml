@@ -1,0 +1,114 @@
+@startchen er_conceptual_chen
+' Концептуальна модель (ER, нотація Чена, 7 сутностей) за docs/db_schema.md §1 (ПР10).
+' Подвійна лінія (=) — повна участь; <<weak>> — слабка сутність; <<identifying>> — ідентифікувальний зв'язок;
+' <<multi>> — багатозначний атрибут; <<derived>> — похідний. Автор: Андрій Жук, 2026.
+' ПРОГІН — асоціативна сутність, що розв'язує M:N «СТРАТЕГІЯ ВИКОНУЄТЬСЯ НА ІНСТРУМЕНТІ» (db_schema.md §2.3):
+' на діаграмі — через два зв'язки 1:N (ЗА_ВЕРСІЄЮ і НА_ІНСТРУМЕНТІ).
+
+entity "ІНСТРУМЕНТ" as I {
+  id <<key>>
+  біржа_і_символ_біржі
+  канонічний_символ
+  крок_ціни
+  крок_кількості
+  мін_номінал
+  ставка_підтр_маржі
+  макс_плече
+}
+
+entity "СВІЧКА" as C <<weak>> {
+  таймфрейм_і_час_відкриття <<key>>
+  OHLCV
+  VWAP
+  к_сть_угод
+  джерело
+  закрита
+  скор_аномалії
+}
+
+entity "СТРАТЕГІЯ" as S {
+  id <<key>>
+  назва_і_версія
+  хеш_правил
+  правила_Мамдані <<multi>>
+  функції_належності
+  активна
+}
+
+entity "ПРОГІН" as R {
+  id_UUID <<key>>
+  конфігурація
+  хеш_конфігурації
+  хеш_датасету
+  git_SHA
+  seed
+  рушій
+  статус
+}
+
+entity "РІШЕННЯ" as D {
+  id <<key>>
+  T_R_V
+  узгодженість
+  kappa <<derived>>
+  u_raw
+  u_final
+  виходи_детекторів
+  спрацьовані_правила <<multi>>
+  ціль_сайзера
+}
+
+entity "ОРДЕР" as O {
+  client_order_id <<key>>
+  тип
+  сторона
+  кількість
+  заповнено <<derived>>
+  середня_ціна <<derived>>
+  комісія
+  статус
+}
+
+entity "ПОЗИЦІЯ" as P {
+  id <<key>>
+  сторона
+  обсяг
+  ціна_входу
+  плече
+  стоп_тейк_ліквідація
+  PnL
+  фандинг
+  MAE
+  причина_виходу
+}
+
+relationship "МАЄ" as HAS <<identifying>> {
+}
+relationship "ЗА_ВЕРСІЄЮ" as BYSTRAT {
+}
+relationship "НА_ІНСТРУМЕНТІ" as ONINST {
+}
+relationship "УХВАЛЮЄ" as DECIDES {
+}
+relationship "ПОРОДЖУЄ" as EMITS {
+}
+relationship "ВІДКРИВАЄ" as OPENS {
+}
+relationship "ЗМІНЮЄ" as CHANGES {
+}
+
+I -1- HAS
+HAS =N= C
+S -1- BYSTRAT
+BYSTRAT -N- R
+I -1- ONINST
+ONINST -N- R
+R -1- DECIDES
+DECIDES =N= D
+D -1- EMITS
+EMITS =N= O
+R -1- OPENS
+OPENS =N= P
+O -N- CHANGES
+CHANGES -1- P
+@endchen

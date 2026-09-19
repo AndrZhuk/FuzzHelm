@@ -1,0 +1,883 @@
+{
+ "provenance": {
+  "command": "uv run python scripts/run_walkforward.py --db --symbol BTCUSDT --engine both --workers 8",
+  "created_utc": "2026-09-19T14:28:31Z",
+  "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "git_dirty": false,
+  "git_dirty_any": false,
+  "git_dirty_paths": [],
+  "git_dirty_ignored": [
+   "artifacts",
+   "docs"
+  ],
+  "seed": 20260918,
+  "workers": 8,
+  "dataset": {
+   "source": "db:BTCUSDT",
+   "symbol": "BTCUSDT",
+   "symbol_canon": "BTC-USDT-PERP",
+   "tf": "1m",
+   "bars": 64800,
+   "first_open_utc": "2026-08-04T00:00Z",
+   "last_open_utc": "2026-09-17T23:59Z",
+   "dataset_hash": "99382675fda6dcab9be0fa566ac6c602686bf19685aa9c5557f5b7cdf3b8c345",
+   "candles_hash": "41bc9f0b20a8d4d2cf99234f21f4e6592196cf9c6151e8e87dba06e6fef6dcd5",
+   "funding_rates": 135
+  },
+  "config_hash": "48e2a5d88b321d31c7b415370de5ed6505a2af4175883ddb245fbdcf9dfaa1c6",
+  "engine": "mamdani",
+  "cost_mode": "full",
+  "cooldown_policy": "scaled_entries",
+  "initial_equity": "10000",
+  "warmup_bars": 523,
+  "script": "walkforward",
+  "smoke": false,
+  "persist": "commit",
+  "cells": "all",
+  "wall_s": {
+   "is_grid": 197.63054074998945,
+   "oos": 1.203563374991063,
+   "total": 198.84992699994473
+  }
+ },
+ "selection_rule": "eps_constraint_max_sr",
+ "selection_rule_uk": "ε-обмеження на фронті Парето (SR↑, MaxDD↓, Turnover↓): серед недомінованих клітинок з MaxDD ≤ dd_cap обирається клітинка з найбільшим Шарпом; рівність → менший оборот → менший індекс сітки. Якщо жодна клітинка фронту не вкладається в dd_cap — клітинка фронту з найменшою MaxDD (рівність → більший Шарп → менший оборот → менший індекс). dd_cap за замовчуванням = state_machine.cool_enter (просадка, з якої автомат ризику переходить у COOLDOWN): робоча точка, що вже на IS доходить до COOLDOWN, неприйнятна.",
+ "folds_geometry": [
+  {
+   "fold": 0,
+   "is": [
+    0,
+    20554
+   ],
+   "embargo": [
+    20554,
+    21600
+   ],
+   "oos": [
+    21600,
+    28800
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-04 00:00",
+    "2026-08-18 06:33"
+   ],
+   "oos_utc": [
+    "2026-08-19 00:00",
+    "2026-08-23 23:59"
+   ]
+  },
+  {
+   "fold": 1,
+   "is": [
+    7200,
+    27754
+   ],
+   "embargo": [
+    27754,
+    28800
+   ],
+   "oos": [
+    28800,
+    36000
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-09 00:00",
+    "2026-08-23 06:33"
+   ],
+   "oos_utc": [
+    "2026-08-24 00:00",
+    "2026-08-28 23:59"
+   ]
+  },
+  {
+   "fold": 2,
+   "is": [
+    14400,
+    34954
+   ],
+   "embargo": [
+    34954,
+    36000
+   ],
+   "oos": [
+    36000,
+    43200
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-14 00:00",
+    "2026-08-28 06:33"
+   ],
+   "oos_utc": [
+    "2026-08-29 00:00",
+    "2026-09-02 23:59"
+   ]
+  },
+  {
+   "fold": 3,
+   "is": [
+    21600,
+    42154
+   ],
+   "embargo": [
+    42154,
+    43200
+   ],
+   "oos": [
+    43200,
+    50400
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-19 00:00",
+    "2026-09-02 06:33"
+   ],
+   "oos_utc": [
+    "2026-09-03 00:00",
+    "2026-09-07 23:59"
+   ]
+  },
+  {
+   "fold": 4,
+   "is": [
+    28800,
+    49354
+   ],
+   "embargo": [
+    49354,
+    50400
+   ],
+   "oos": [
+    50400,
+    57600
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-24 00:00",
+    "2026-09-07 06:33"
+   ],
+   "oos_utc": [
+    "2026-09-08 00:00",
+    "2026-09-12 23:59"
+   ]
+  },
+  {
+   "fold": 5,
+   "is": [
+    36000,
+    56554
+   ],
+   "embargo": [
+    56554,
+    57600
+   ],
+   "oos": [
+    57600,
+    64800
+   ],
+   "embargo_bars": 1046,
+   "is_utc": [
+    "2026-08-29 00:00",
+    "2026-09-12 06:33"
+   ],
+   "oos_utc": [
+    "2026-09-13 00:00",
+    "2026-09-17 23:59"
+   ]
+  }
+ ],
+ "engine": "mamdani",
+ "config_hash": "48e2a5d88b321d31c7b415370de5ed6505a2af4175883ddb245fbdcf9dfaa1c6",
+ "dd_cap": 0.08,
+ "warmup_bars": 523,
+ "cells": 108,
+ "concat_oos": {
+  "total_return": -0.23902234075174167,
+  "cagr": -0.9639843674074099,
+  "ann_vol": 0.04335545634341564,
+  "sharpe": -76.64206397031157,
+  "sortino": -83.60533012192602,
+  "max_drawdown": 0.23902234075174167,
+  "calmar": -4.033030403666925,
+  "ulcer_index": 0.1450318654959477,
+  "turnover": 8478.444860542902,
+  "n_trades": 672.0,
+  "sr_period": -0.10571570576078206,
+  "skew": -5.228761909085981,
+  "kurt": 70.28385731172342,
+  "psr": 0.0,
+  "n_obs": 43194.0,
+  "n_segments": 6.0
+ },
+ "psr_statement": "конкатенований OOS (mamdani): PSR = 0 < 0.95: перевага над SR = 0 статистично НЕ встановлена.",
+ "wall_s": {
+  "is_grid": 197.63054074998945,
+  "oos": 1.203563374991063
+ },
+ "folds": [
+  {
+   "fold": 0,
+   "selected_cell": 69,
+   "params": {
+    "n_atr": 14,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 69,
+    "front": [
+     9,
+     11,
+     33,
+     69,
+     106
+    ],
+    "feasible": [],
+    "dd_cap": 0.08,
+    "rule": "fallback_min_dd"
+   },
+   "is": {
+    "sharpe": -81.03032001513377,
+    "sortino": -86.31466395625492,
+    "max_drawdown": 0.1144927776528839,
+    "turnover": 8767.928025997458,
+    "total_return": -0.11446912440488399,
+    "n_trades": 297.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "5bba3e27aa18f0281e32ce8b9ed8cb6e16c4166ae984b49a84fedcfd5f0b7bf2"
+   },
+   "oos": {
+    "sharpe": -61.06356369076927,
+    "sortino": -68.73602721508959,
+    "max_drawdown": 0.03008506782999998,
+    "turnover": 5771.02142205495,
+    "total_return": -0.03008506782999998,
+    "n_trades": 117.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "5bba3e27aa18f0281e32ce8b9ed8cb6e16c4166ae984b49a84fedcfd5f0b7bf2",
+    "equity_hash": "0f2c7746ddac7a3e548cb5e4e32b13b88e3665c850f165f20f982174a76cd75b",
+    "final_state": "WARNING"
+   },
+   "oos_run_bars": [
+    21077,
+    28800
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 1,
+   "selected_cell": 33,
+   "params": {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 33,
+    "front": [
+     32,
+     33
+    ],
+    "feasible": [],
+    "dd_cap": 0.08,
+    "rule": "fallback_min_dd"
+   },
+   "is": {
+    "sharpe": -80.54081002135253,
+    "sortino": -84.19335179486278,
+    "max_drawdown": 0.09695199552283484,
+    "turnover": 7315.216490172251,
+    "total_return": -0.09695199552283484,
+    "n_trades": 302.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee"
+   },
+   "oos": {
+    "sharpe": -76.55175622912272,
+    "sortino": -87.10636894238377,
+    "max_drawdown": 0.05270587680265215,
+    "turnover": 9896.979565887092,
+    "total_return": -0.052207925513065856,
+    "n_trades": 138.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+    "equity_hash": "c67789028009482bfab113a928d046721fbba4a63fdc816239e650633d4d3f96",
+    "final_state": "WARNING"
+   },
+   "oos_run_bars": [
+    28277,
+    36000
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 2,
+   "selected_cell": 33,
+   "params": {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 33,
+    "front": [
+     32,
+     33
+    ],
+    "feasible": [],
+    "dd_cap": 0.08,
+    "rule": "fallback_min_dd"
+   },
+   "is": {
+    "sharpe": -73.2533147026456,
+    "sortino": -78.89336682522863,
+    "max_drawdown": 0.0898539757425797,
+    "turnover": 6541.792766359947,
+    "total_return": -0.08982058574257967,
+    "n_trades": 312.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee"
+   },
+   "oos": {
+    "sharpe": -85.82489363133337,
+    "sortino": -91.15038554067532,
+    "max_drawdown": 0.047249994655999994,
+    "turnover": 8987.292002691676,
+    "total_return": -0.047249994655999994,
+    "n_trades": 111.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+    "equity_hash": "e943f415b410c716336c71e6ffa12e56ab70db0d2da21a5492692f70351c408d",
+    "final_state": "WARNING"
+   },
+   "oos_run_bars": [
+    35477,
+    43200
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 3,
+   "selected_cell": 33,
+   "params": {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 33,
+    "front": [
+     32,
+     33,
+     68,
+     69,
+     70,
+     71,
+     104,
+     105,
+     106,
+     107
+    ],
+    "feasible": [],
+    "dd_cap": 0.08,
+    "rule": "fallback_min_dd"
+   },
+   "is": {
+    "sharpe": -73.77608488103992,
+    "sortino": -81.75513198522688,
+    "max_drawdown": 0.08793353264192161,
+    "turnover": 5969.73341577241,
+    "total_return": -0.08793353264192161,
+    "n_trades": 338.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee"
+   },
+   "oos": {
+    "sharpe": -86.46463261108217,
+    "sortino": -91.83714430816157,
+    "max_drawdown": 0.0563888423079999,
+    "turnover": 10919.708338428632,
+    "total_return": -0.0563888423079999,
+    "n_trades": 113.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+    "equity_hash": "a079b734b689e9a06617d6ada53e2aff68239d31695121f38e8a720a2ee21738",
+    "final_state": "WARNING"
+   },
+   "oos_run_bars": [
+    42677,
+    50400
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 4,
+   "selected_cell": 33,
+   "params": {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 33,
+    "front": [
+     32,
+     33,
+     34
+    ],
+    "feasible": [],
+    "dd_cap": 0.08,
+    "rule": "fallback_min_dd"
+   },
+   "is": {
+    "sharpe": -73.68171260436988,
+    "sortino": -82.82959873302865,
+    "max_drawdown": 0.09806208411814832,
+    "turnover": 7171.854596193216,
+    "total_return": -0.09803278322906572,
+    "n_trades": 329.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee"
+   },
+   "oos": {
+    "sharpe": -84.21522643115878,
+    "sortino": -89.67169755394553,
+    "max_drawdown": 0.05090644649950715,
+    "turnover": 9594.917797779213,
+    "total_return": -0.05090644649950715,
+    "n_trades": 107.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+    "equity_hash": "dbea17f019301eeff8e1868ba4164c2f6f6f6e754220e03e9067aaec2196430a",
+    "final_state": "WARNING"
+   },
+   "oos_run_bars": [
+    49877,
+    57600
+   ],
+   "oos_eval_start": 523
+  },
+  {
+   "fold": 5,
+   "selected_cell": 33,
+   "params": {
+    "n_atr": 7,
+    "chi": 2.5,
+    "u_enter": 0.3,
+    "rho_base": 0.0025,
+    "lam": 0.97
+   },
+   "choice": {
+    "index": 33,
+    "front": [
+     32,
+     33
+    ],
+    "feasible": [],
+    "dd_cap": 0.08,
+    "rule": "fallback_min_dd"
+   },
+   "is": {
+    "sharpe": -80.12369109906471,
+    "sortino": -84.58257121337,
+    "max_drawdown": 0.09510127679032954,
+    "turnover": 6817.129957714536,
+    "total_return": -0.09510127679032954,
+    "n_trades": 306.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee"
+   },
+   "oos": {
+    "sharpe": -64.37578169759298,
+    "sortino": -71.05963275697322,
+    "max_drawdown": 0.029838272888000006,
+    "turnover": 5759.410391792729,
+    "total_return": -0.029838272888000006,
+    "n_trades": 86.0,
+    "psr": 0.0,
+    "halted": 0.0,
+    "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+    "equity_hash": "1868c23224ea60f28e2d87c22589c158a7565029840b95897fec9c7986e3a8eb",
+    "final_state": "WARNING"
+   },
+   "oos_run_bars": [
+    57077,
+    64800
+   ],
+   "oos_eval_start": 523
+  }
+ ],
+ "persisted_runs": [
+  {
+   "fold": 0,
+   "segment": "is",
+   "bars": [
+    0,
+    20554
+   ],
+   "eval_start": 0,
+   "config_hash": "5bba3e27aa18f0281e32ce8b9ed8cb6e16c4166ae984b49a84fedcfd5f0b7bf2",
+   "dataset_hash": "974d28dbb322d1c5cba88fb3e29519d15b77be201b77c3bafe7c1f3d36e9bcda",
+   "read_back_ok": true,
+   "run_id": "5f58448c-8d93-448f-8b96-8d022dd2051a",
+   "status": "written",
+   "equity_hash": "91e6df98a99cce1a1f116bba74c4ebbc906a16989385f6e1152ea0140dcda019",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 512,
+    "decisions_skipped": 0,
+    "orders": 815,
+    "orders_skipped": 0,
+    "fills": 582,
+    "positions": 297,
+    "equity_points": 20554,
+    "risk_events": 3599,
+    "metrics": 25,
+    "journal_entries": 5502,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 0,
+   "segment": "oos",
+   "bars": [
+    21077,
+    28800
+   ],
+   "eval_start": 523,
+   "config_hash": "5bba3e27aa18f0281e32ce8b9ed8cb6e16c4166ae984b49a84fedcfd5f0b7bf2",
+   "dataset_hash": "139be94e0960832544f99e28578924629ff06f38b33fac117e1b9abacc9b961b",
+   "read_back_ok": true,
+   "run_id": "9f969c9d-3b2e-4b8e-94d3-001d843dd519",
+   "status": "written",
+   "equity_hash": "0f2c7746ddac7a3e548cb5e4e32b13b88e3665c850f165f20f982174a76cd75b",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 200,
+    "decisions_skipped": 0,
+    "orders": 317,
+    "orders_skipped": 0,
+    "fills": 225,
+    "positions": 117,
+    "equity_points": 7723,
+    "risk_events": 1423,
+    "metrics": 25,
+    "journal_entries": 2165,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 1,
+   "segment": "is",
+   "bars": [
+    7200,
+    27754
+   ],
+   "eval_start": 0,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "f0195fa69226ad09f576c71aeceb2f05a20f87299d3b3433da0096d159292017",
+   "read_back_ok": true,
+   "run_id": "d9ae1884-b9c0-4c4d-8cff-c7470ca162d4",
+   "status": "written",
+   "equity_hash": "942e7b2d97ea5ddb4686641895c3cd26fcfe523e8c3f6e57f3403262063ac6bc",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 522,
+    "decisions_skipped": 0,
+    "orders": 826,
+    "orders_skipped": 0,
+    "fills": 590,
+    "positions": 302,
+    "equity_points": 20554,
+    "risk_events": 3676,
+    "metrics": 25,
+    "journal_entries": 5612,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 1,
+   "segment": "oos",
+   "bars": [
+    28277,
+    36000
+   ],
+   "eval_start": 523,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "e6cc52cb0e4211a6f90495341bce37644f8e82b3b7467f07fa5a71eea0f6d6fd",
+   "read_back_ok": true,
+   "run_id": "1ff29894-2236-4730-b753-0f61c0bb2a52",
+   "status": "written",
+   "equity_hash": "c67789028009482bfab113a928d046721fbba4a63fdc816239e650633d4d3f96",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 242,
+    "decisions_skipped": 0,
+    "orders": 380,
+    "orders_skipped": 0,
+    "fills": 268,
+    "positions": 138,
+    "equity_points": 7723,
+    "risk_events": 1741,
+    "metrics": 25,
+    "journal_entries": 2631,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 2,
+   "segment": "is",
+   "bars": [
+    14400,
+    34954
+   ],
+   "eval_start": 0,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "99f94f19d629ed864e67fcc2a5be02c770beefcc4ab80f9ccff31204cb141ed4",
+   "read_back_ok": true,
+   "run_id": "c2a8a0b8-a906-44f2-8652-70779a32f331",
+   "status": "written",
+   "equity_hash": "c144f6aac7fa31e3ec507130d4657a448e020f213dd18ea7f5cb00b88586a727",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 537,
+    "decisions_skipped": 0,
+    "orders": 851,
+    "orders_skipped": 0,
+    "fills": 606,
+    "positions": 313,
+    "equity_points": 20554,
+    "risk_events": 3775,
+    "metrics": 25,
+    "journal_entries": 5768,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 2,
+   "segment": "oos",
+   "bars": [
+    35477,
+    43200
+   ],
+   "eval_start": 523,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "720bbb9902f595f917dc7e5f2bbf9814e95d487192c6528c5d36ea4b4beb8c49",
+   "read_back_ok": true,
+   "run_id": "eb7f65d2-882e-4eef-badc-2443382771f0",
+   "status": "written",
+   "equity_hash": "e943f415b410c716336c71e6ffa12e56ab70db0d2da21a5492692f70351c408d",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 194,
+    "decisions_skipped": 0,
+    "orders": 306,
+    "orders_skipped": 0,
+    "fills": 220,
+    "positions": 111,
+    "equity_points": 7723,
+    "risk_events": 1359,
+    "metrics": 25,
+    "journal_entries": 2078,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 3,
+   "segment": "is",
+   "bars": [
+    21600,
+    42154
+   ],
+   "eval_start": 0,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "d1a9149ad632119c91fb875c443f4429c0e9886715255be3b9926442e55970a0",
+   "read_back_ok": true,
+   "run_id": "ee9b9bc1-fbf6-482e-93bf-37fd74667451",
+   "status": "written",
+   "equity_hash": "d2f63b22d9cd17463c1861c7094a53da6dc6c78ffa5bda002028a021f4183c46",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 584,
+    "decisions_skipped": 0,
+    "orders": 923,
+    "orders_skipped": 0,
+    "fills": 660,
+    "positions": 338,
+    "equity_points": 20554,
+    "risk_events": 4106,
+    "metrics": 25,
+    "journal_entries": 6272,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 3,
+   "segment": "oos",
+   "bars": [
+    42677,
+    50400
+   ],
+   "eval_start": 523,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "b021b06d910a0cb5b098ca3b4742b738b26f82ac7296c95b35fa20630434b85c",
+   "read_back_ok": true,
+   "run_id": "bf810321-0eaf-467f-bbac-b9dfe6d06222",
+   "status": "written",
+   "equity_hash": "a079b734b689e9a06617d6ada53e2aff68239d31695121f38e8a720a2ee21738",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 196,
+    "decisions_skipped": 0,
+    "orders": 310,
+    "orders_skipped": 0,
+    "fills": 219,
+    "positions": 113,
+    "equity_points": 7723,
+    "risk_events": 1429,
+    "metrics": 25,
+    "journal_entries": 2153,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 4,
+   "segment": "is",
+   "bars": [
+    28800,
+    49354
+   ],
+   "eval_start": 0,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "38b3a0e9fc4c4571ecf50498e1ca83de65b53c36d9b2568c3ca04692f558195b",
+   "read_back_ok": true,
+   "run_id": "8af4e125-7336-4840-911e-649f148a65e8",
+   "status": "written",
+   "equity_hash": "dea32e7dcdabe3e8a31ccadae1e32730940e37c04155ed5bf22f4b49cf72d21e",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 575,
+    "decisions_skipped": 0,
+    "orders": 906,
+    "orders_skipped": 0,
+    "fills": 642,
+    "positions": 329,
+    "equity_points": 20554,
+    "risk_events": 4049,
+    "metrics": 25,
+    "journal_entries": 6170,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 4,
+   "segment": "oos",
+   "bars": [
+    49877,
+    57600
+   ],
+   "eval_start": 523,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "f4fba3b9838e1244eccfc4cdaeb4884fcb7ff1d3ea1e0374856fbeb2559327d1",
+   "read_back_ok": true,
+   "run_id": "5402be3f-ede1-44cf-bf06-5f22e5ebc27f",
+   "status": "written",
+   "equity_hash": "dbea17f019301eeff8e1868ba4164c2f6f6f6e754220e03e9067aaec2196430a",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 186,
+    "decisions_skipped": 0,
+    "orders": 295,
+    "orders_skipped": 0,
+    "fills": 212,
+    "positions": 107,
+    "equity_points": 7723,
+    "risk_events": 1375,
+    "metrics": 25,
+    "journal_entries": 2066,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 5,
+   "segment": "is",
+   "bars": [
+    36000,
+    56554
+   ],
+   "eval_start": 0,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "a72cffac2bb43c86f9cfdbb6e120bb90b06415a4a7078b15265bda7041db54d2",
+   "read_back_ok": true,
+   "run_id": "3f8f5783-3479-4c2e-9fb3-ad3db320b85b",
+   "status": "written",
+   "equity_hash": "59978926f3d3824b2753d6bb5f0bb09256b13655c8db6f42cb90bf50d06c0c6e",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 538,
+    "decisions_skipped": 0,
+    "orders": 846,
+    "orders_skipped": 0,
+    "fills": 601,
+    "positions": 306,
+    "equity_points": 20554,
+    "risk_events": 3794,
+    "metrics": 25,
+    "journal_entries": 5777,
+    "candles": 0
+   }
+  },
+  {
+   "fold": 5,
+   "segment": "oos",
+   "bars": [
+    57077,
+    64800
+   ],
+   "eval_start": 523,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "dataset_hash": "2483bf4579fc96375347a8d80b5f8270ecab9a241bda1b23a2328bbff878cb92",
+   "read_back_ok": true,
+   "run_id": "45a52520-dcfd-40c1-a7d4-70e78d34dd18",
+   "status": "written",
+   "equity_hash": "1868c23224ea60f28e2d87c22589c158a7565029840b95897fec9c7986e3a8eb",
+   "matches_worker": true,
+   "counts": {
+    "decisions": 146,
+    "decisions_skipped": 0,
+    "orders": 233,
+    "orders_skipped": 0,
+    "fills": 169,
+    "positions": 86,
+    "equity_points": 7723,
+    "risk_events": 1075,
+    "metrics": 25,
+    "journal_entries": 1622,
+    "candles": 0
+   }
+  }
+ ]
+}

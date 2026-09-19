@@ -1,0 +1,886 @@
+{
+ "provenance": {
+  "command": "uv run python scripts/sensitivity.py --db --symbol BTCUSDT --target full --workers 8",
+  "created_utc": "2026-09-19T14:45:13Z",
+  "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "git_dirty": false,
+  "git_dirty_any": true,
+  "git_dirty_paths": [],
+  "git_dirty_ignored": [
+   "artifacts",
+   "docs"
+  ],
+  "seed": 20260918,
+  "workers": 8,
+  "dataset": {
+   "source": "db:BTCUSDT",
+   "symbol": "BTCUSDT",
+   "symbol_canon": "BTC-USDT-PERP",
+   "tf": "1m",
+   "bars": 64800,
+   "first_open_utc": "2026-08-04T00:00Z",
+   "last_open_utc": "2026-09-17T23:59Z",
+   "dataset_hash": "99382675fda6dcab9be0fa566ac6c602686bf19685aa9c5557f5b7cdf3b8c345",
+   "candles_hash": "41bc9f0b20a8d4d2cf99234f21f4e6592196cf9c6151e8e87dba06e6fef6dcd5",
+   "funding_rates": 135
+  },
+  "config_hash": "48e2a5d88b321d31c7b415370de5ed6505a2af4175883ddb245fbdcf9dfaa1c6",
+  "engine": "mamdani",
+  "cost_mode": "full",
+  "cooldown_policy": "scaled_entries",
+  "initial_equity": "10000",
+  "warmup_bars": 523,
+  "script": "sensitivity",
+  "smoke": false,
+  "target": "full",
+  "base_cell": null,
+  "levels": [
+   -1.0,
+   -0.5,
+   0.5,
+   1.0
+  ],
+  "oos_folds": 0,
+  "wall_s": 32.96113862498896
+ },
+ "target": "full",
+ "levels": [
+  -1.0,
+  -0.5,
+  0.5,
+  1.0
+ ],
+ "space": [
+  {
+   "name": "u_enter",
+   "symbol": "u_enter",
+   "label_uk": "поріг входу гістерезису",
+   "where": "risk_limits.hysteresis.enter",
+   "base": 0.25,
+   "values": [
+    0.2,
+    0.225,
+    0.275,
+    0.3
+   ],
+   "span": 0.2,
+   "rationale": "поріг тригера Шмітта визначає частоту входів; ±20 % тримає u_exit < u_enter і відповідає осі сітки"
+  },
+  {
+   "name": "u_exit",
+   "symbol": "u_exit",
+   "label_uk": "поріг виходу гістерезису",
+   "where": "risk_limits.hysteresis.exit",
+   "base": 0.12,
+   "values": [
+    0.09,
+    0.105,
+    0.135,
+    0.15
+   ],
+   "span": 0.25,
+   "rationale": "ширина петлі гістерезису (ціна чатерингу, §5.9); ±25 % лишає u_exit < u_enter"
+  },
+  {
+   "name": "chi",
+   "symbol": "χ_ATR",
+   "label_uk": "множник ATR стопу",
+   "where": "risk_limits.sizing.chi_atr",
+   "base": 2.0,
+   "values": [
+    1.5,
+    1.75,
+    2.25,
+    2.5
+   ],
+   "span": 0.25,
+   "rationale": "відстань стопу Δ = χ·ATR і q_atr ∝ 1/χ; ±25 % = вісь сітки {1.5, 2.5}"
+  },
+  {
+   "name": "rho_base",
+   "symbol": "ρ_base",
+   "label_uk": "ризик на угоду",
+   "where": "risk_limits.sizing.rho_base",
+   "base": 0.005,
+   "values": [
+    0.0025,
+    0.00375,
+    0.00625,
+    0.0075
+   ],
+   "span": 0.5,
+   "rationale": "масштаб позиції q_atr ∝ ρ; ±50 % = вісь сітки знизу (0.0025) і симетрично зверху"
+  },
+  {
+   "name": "lam",
+   "symbol": "λ_EWMA",
+   "label_uk": "λ EWMA волатильності",
+   "where": "risk_limits.sizing.ewma_lambda",
+   "base": 0.94,
+   "values": [
+    0.88,
+    0.92,
+    0.952,
+    0.96
+   ],
+   "span": 0.5,
+   "rationale": "λ не масштабний параметр: варіюється пам'ять N = 1/(1−λ) на ±50 % (λ ∈ (0, 1) зберігається)"
+  },
+  {
+   "name": "sigma_target",
+   "symbol": "σ_target",
+   "label_uk": "цільова волатильність",
+   "where": "risk_limits.sizing.sigma_target",
+   "base": 0.2,
+   "values": [
+    0.1,
+    0.15,
+    0.25,
+    0.3
+   ],
+   "span": 0.5,
+   "rationale": "рівень таргетування волатильності s* = σ_target/σ̂ (§5.8); експертне число, ±50 %"
+  },
+  {
+   "name": "kappa_min",
+   "symbol": "κ_min",
+   "label_uk": "нижня межа κ",
+   "where": "detectors.agreement.kappa_min",
+   "base": 0.35,
+   "values": [
+    0.21,
+    0.28,
+    0.42,
+    0.49
+   ],
+   "span": 0.4,
+   "rationale": "підлога коефіцієнта довіри κ = κ_min + (1−κ_min)·A^ν (§5.4); ±40 % лишає κ_min ∈ (0, 1)"
+  },
+  {
+   "name": "n_atr",
+   "symbol": "n_ATR",
+   "label_uk": "період ATR",
+   "where": "detectors.features.n_atr",
+   "base": 14.0,
+   "values": [
+    7.0,
+    10.0,
+    18.0,
+    21.0
+   ],
+   "span": 0.5,
+   "rationale": "період ATR Уайлдера; ±50 % = вісь сітки {7, 21} (цілі значення)"
+  }
+ ],
+ "base": {
+  "config_hash": "48e2a5d88b321d31c7b415370de5ed6505a2af4175883ddb245fbdcf9dfaa1c6",
+  "metrics": {
+   "total_return": -0.12003634075724201,
+   "sharpe": -46.12414822580328,
+   "max_drawdown": 0.12003634075724201,
+   "n_trades": 303.0,
+   "turnover": 2906.2959572173218,
+   "psr": 0.0
+  }
+ },
+ "runs": [
+  {
+   "param": "u_enter",
+   "value": 0.2,
+   "config_hash": "852c7162e0c2a9dfb99f1233bf3e4a1a7944d23bfecb0414c3c4d0a2f867ca48",
+   "metrics": {
+    "total_return": -0.12036666561200005,
+    "sharpe": -49.43269051255658,
+    "max_drawdown": 0.12036666561200005,
+    "n_trades": 324.0,
+    "turnover": 2967.0069106131996,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "u_enter",
+   "value": 0.225,
+   "config_hash": "965b8701f4094eb70a15f011e43c990631d7fad73adb2ec79ae7956e6302c30d",
+   "metrics": {
+    "total_return": -0.12023565634000011,
+    "sharpe": -49.55983004395399,
+    "max_drawdown": 0.12023565634000011,
+    "n_trades": 329.0,
+    "turnover": 2972.6428292206015,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "u_enter",
+   "value": 0.275,
+   "config_hash": "e2ccc81ceefd8632cd7de4581195340e5f91c7ec289a1c17fee6c43868311e43",
+   "metrics": {
+    "total_return": -0.12009042721991259,
+    "sharpe": -49.52126849247201,
+    "max_drawdown": 0.12009042721991259,
+    "n_trades": 348.0,
+    "turnover": 2919.0519521974284,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "u_enter",
+   "value": 0.3,
+   "config_hash": "e063275466558f7756c2905107e3e2052c5afe0b74ef13cd4ddf38a700aff568",
+   "metrics": {
+    "total_return": -0.12017699084743727,
+    "sharpe": -46.907261711324246,
+    "max_drawdown": 0.12017699084743727,
+    "n_trades": 300.0,
+    "turnover": 2966.999945709613,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "u_exit",
+   "value": 0.09,
+   "config_hash": "14218e93640689f8ac71b6aab40e56b32b676bbfa3d5f152a9b0b7400e1b92ee",
+   "metrics": {
+    "total_return": -0.120089249953242,
+    "sharpe": -44.838346935801596,
+    "max_drawdown": 0.120089249953242,
+    "n_trades": 304.0,
+    "turnover": 2917.2812233165,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "u_exit",
+   "value": 0.105,
+   "config_hash": "928b48330f16dfe1d2560d390d14189cafc13f8dc475fd7b6d5f76069578ab76",
+   "metrics": {
+    "total_return": -0.12020312972524205,
+    "sharpe": -45.69689627208082,
+    "max_drawdown": 0.12020312972524205,
+    "n_trades": 310.0,
+    "turnover": 2945.478573217551,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "u_exit",
+   "value": 0.135,
+   "config_hash": "2ebf4bf03892867f8299e3f7bd8912c9493157e75d85dddb26d1c09c488b85e0",
+   "metrics": {
+    "total_return": -0.12017619072899999,
+    "sharpe": -46.824371180580385,
+    "max_drawdown": 0.12017619072899999,
+    "n_trades": 302.0,
+    "turnover": 2896.2827508678984,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "u_exit",
+   "value": 0.15,
+   "config_hash": "ccc40859a872ed436268c4c434015fadd33591f5968cf04d4c5e253b2f306df7",
+   "metrics": {
+    "total_return": -0.12009280766499997,
+    "sharpe": -48.60561753954025,
+    "max_drawdown": 0.12009280766499997,
+    "n_trades": 302.0,
+    "turnover": 2909.431896216811,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "chi",
+   "value": 1.5,
+   "config_hash": "9b422134be3f388ff4274629ccd7ad5d42f177c4cbb6cdd908240f9265dc1eae",
+   "metrics": {
+    "total_return": -0.12023364248800006,
+    "sharpe": -48.78224302179232,
+    "max_drawdown": 0.12023364248800006,
+    "n_trades": 298.0,
+    "turnover": 2852.769140471008,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "chi",
+   "value": 1.75,
+   "config_hash": "8f821d5345a8d7310efc59d843c182b2295efbc9fcf61b50acfa4dd3e0573754",
+   "metrics": {
+    "total_return": -0.12013149393599998,
+    "sharpe": -47.414807633207616,
+    "max_drawdown": 0.12013149393599998,
+    "n_trades": 300.0,
+    "turnover": 2894.141823948603,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "chi",
+   "value": 2.25,
+   "config_hash": "51f615d7d1c035f29aa392277ed8d1a42b6bab5d1df0bc12cc74d993f8f7b531",
+   "metrics": {
+    "total_return": -0.12014169148924192,
+    "sharpe": -45.85169561956679,
+    "max_drawdown": 0.12014169148924192,
+    "n_trades": 305.0,
+    "turnover": 2920.283880919165,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "chi",
+   "value": 2.5,
+   "config_hash": "32f98f51f2a03ee778b59644a00f37152dd0fd851e479d74f41e790bbbc87cb9",
+   "metrics": {
+    "total_return": -0.12019465989324196,
+    "sharpe": -45.19214335652337,
+    "max_drawdown": 0.12019465989324196,
+    "n_trades": 306.0,
+    "turnover": 2922.855200647694,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "rho_base",
+   "value": 0.0025,
+   "config_hash": "1f469a7176b02b1a50249f162c7f2780ac9eb1a97ac4d8a2236ec98513a851f2",
+   "metrics": {
+    "total_return": -0.12013451520124196,
+    "sharpe": -46.218696237366416,
+    "max_drawdown": 0.12013451520124196,
+    "n_trades": 304.0,
+    "turnover": 2906.0556204228865,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "rho_base",
+   "value": 0.00375,
+   "config_hash": "3c090cdf53b2c81e1f1fa1f25a5e912450de2e391aa121f59b0a8a8eab02caa8",
+   "metrics": {
+    "total_return": -0.12003634075724201,
+    "sharpe": -46.12414822580328,
+    "max_drawdown": 0.12003634075724201,
+    "n_trades": 303.0,
+    "turnover": 2906.2959572173218,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "rho_base",
+   "value": 0.00625,
+   "config_hash": "50f83747ff5ab83d5cf2ae494c227c6b5578d3b1cc4c4d0ae8492a04d6d3fac8",
+   "metrics": {
+    "total_return": -0.12003634075724201,
+    "sharpe": -46.12414822580328,
+    "max_drawdown": 0.12003634075724201,
+    "n_trades": 303.0,
+    "turnover": 2906.2959572173218,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "rho_base",
+   "value": 0.0075,
+   "config_hash": "ecb80f65609045742d782216c5dd0cabe8fc41c86706829b3118488cf37a51cc",
+   "metrics": {
+    "total_return": -0.12003634075724201,
+    "sharpe": -46.12414822580328,
+    "max_drawdown": 0.12003634075724201,
+    "n_trades": 303.0,
+    "turnover": 2906.2959572173218,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "lam",
+   "value": 0.88,
+   "config_hash": "e692616c9f981ab98726da01cfb9d16c05365a52022671aae250c136fe7478de",
+   "metrics": {
+    "total_return": -0.12007384616391259,
+    "sharpe": -45.821421884267686,
+    "max_drawdown": 0.12007384616391259,
+    "n_trades": 280.0,
+    "turnover": 2879.885610889743,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "lam",
+   "value": 0.92,
+   "config_hash": "8d51142e40e8a568e4b599df353da1a488d0971da042e8c850afb89bed0a451b",
+   "metrics": {
+    "total_return": -0.12017376206924202,
+    "sharpe": -46.00889253260144,
+    "max_drawdown": 0.12017376206924202,
+    "n_trades": 297.0,
+    "turnover": 2929.9524091421713,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "lam",
+   "value": 0.952,
+   "config_hash": "727a2baa9d993505e07962fd60726b5d1e5d3508311668cc27882a8f1e549e67",
+   "metrics": {
+    "total_return": -0.12014361125357131,
+    "sharpe": -46.59995731038991,
+    "max_drawdown": 0.12014361125357131,
+    "n_trades": 314.0,
+    "turnover": 2920.5704341706037,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "lam",
+   "value": 0.96,
+   "config_hash": "16633d2c5af6bf178afcae29d1a5968ff881f36b2e07273628c4598c243a278a",
+   "metrics": {
+    "total_return": -0.12015715400957128,
+    "sharpe": -47.012292655982314,
+    "max_drawdown": 0.12015715400957128,
+    "n_trades": 319.0,
+    "turnover": 2913.4082313155614,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "sigma_target",
+   "value": 0.1,
+   "config_hash": "8f1583d61bc5142fc7b430e533419c0d1b04eb5f77eef40d1ae38e31d428594f",
+   "metrics": {
+    "total_return": -0.120205701376079,
+    "sharpe": -59.723885038971424,
+    "max_drawdown": 0.120205701376079,
+    "n_trades": 544.0,
+    "turnover": 2914.9796468366944,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "sigma_target",
+   "value": 0.15,
+   "config_hash": "5a18e723cf6dbbdf262ced67532a3d2cae4386aa4cc8bc07e108f4612f7ef028",
+   "metrics": {
+    "total_return": -0.12004099091318143,
+    "sharpe": -51.19534142752069,
+    "max_drawdown": 0.12004099091318143,
+    "n_trades": 409.0,
+    "turnover": 2957.469542009749,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "sigma_target",
+   "value": 0.25,
+   "config_hash": "1161fff9b07b2613f773636378340a5ee123504256b01459ad1b5e977bf51e3a",
+   "metrics": {
+    "total_return": -0.12048549601163172,
+    "sharpe": -44.68895656253311,
+    "max_drawdown": 0.12048549601163172,
+    "n_trades": 262.0,
+    "turnover": 2926.4871791562696,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "sigma_target",
+   "value": 0.3,
+   "config_hash": "2fd3acfe790fde272af70efcc5e66d66d9220c9364169513fa34a5d38251ba9b",
+   "metrics": {
+    "total_return": -0.12000967898800008,
+    "sharpe": -43.65255804491618,
+    "max_drawdown": 0.12000967898800008,
+    "n_trades": 243.0,
+    "turnover": 2910.8068212056046,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "kappa_min",
+   "value": 0.21,
+   "config_hash": "5c5e552d8171af8d207436a8bbfe411372485084a3ca06b73f913bf3420ccea3",
+   "metrics": {
+    "total_return": -0.12014451181227037,
+    "sharpe": -48.904437693717696,
+    "max_drawdown": 0.12014451181227037,
+    "n_trades": 288.0,
+    "turnover": 2794.549158559388,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "kappa_min",
+   "value": 0.28,
+   "config_hash": "7e52583fe8d3fa093f406faf63492bcfcce60790277c0fac717e53a6f982f6fe",
+   "metrics": {
+    "total_return": -0.12000151005999993,
+    "sharpe": -49.595717800562134,
+    "max_drawdown": 0.12000151005999993,
+    "n_trades": 310.0,
+    "turnover": 2863.7973312646795,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "kappa_min",
+   "value": 0.42,
+   "config_hash": "35dee8583abd7b4c77abccd5b10217717fce13cee9db9810eebb2d3c4e5a0512",
+   "metrics": {
+    "total_return": -0.12000561003999988,
+    "sharpe": -47.06769073555168,
+    "max_drawdown": 0.12000561003999988,
+    "n_trades": 313.0,
+    "turnover": 3044.016535059327,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "kappa_min",
+   "value": 0.49,
+   "config_hash": "6549f054f3db31a217ae5964955ff191b6b9b4e9956a8c656f10cc4ff4ade02b",
+   "metrics": {
+    "total_return": -0.12002789120399993,
+    "sharpe": -47.967680686396506,
+    "max_drawdown": 0.12002789120399993,
+    "n_trades": 317.0,
+    "turnover": 2980.91199962537,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "n_atr",
+   "value": 7.0,
+   "config_hash": "e48b2d50f22fa8ae6242d2335a59554c7f050ea8ecc3bd9849ba3cf391e339f4",
+   "metrics": {
+    "total_return": -0.12028618937299995,
+    "sharpe": -47.3867444718262,
+    "max_drawdown": 0.12028618937299995,
+    "n_trades": 302.0,
+    "turnover": 2898.697455043906,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "n_atr",
+   "value": 10.0,
+   "config_hash": "0b7273d783626fd0951757845904f109ae262c08f3a4b7642188c17bb0ce9368",
+   "metrics": {
+    "total_return": -0.12003313646900005,
+    "sharpe": -47.23207639538401,
+    "max_drawdown": 0.12003313646900005,
+    "n_trades": 300.0,
+    "turnover": 2882.4849071660665,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "n_atr",
+   "value": 18.0,
+   "config_hash": "a58f08bb199ecbb53a00326a216283aefe63e101d5ee2ac16edd605689a024d1",
+   "metrics": {
+    "total_return": -0.12011395752924203,
+    "sharpe": -46.550447552211196,
+    "max_drawdown": 0.12011395752924203,
+    "n_trades": 307.0,
+    "turnover": 2953.0150253774577,
+    "psr": 0.0
+   }
+  },
+  {
+   "param": "n_atr",
+   "value": 21.0,
+   "config_hash": "d84f5ddc636a9d05208af48c088ea29ddd8b32be4c57bfdef365c509406deb29",
+   "metrics": {
+    "total_return": -0.12014033794924195,
+    "sharpe": -46.00584975769318,
+    "max_drawdown": 0.12014033794924195,
+    "n_trades": 302.0,
+    "turnover": 2937.5669891751213,
+    "psr": 0.0
+   }
+  }
+ ],
+ "tornado": [
+  {
+   "param": "sigma_target",
+   "symbol": "σ_target",
+   "label_uk": "цільова волатильність",
+   "base_value": 0.2,
+   "low_value": 0.1,
+   "high_value": 0.3,
+   "values": [
+    0.1,
+    0.15,
+    0.25,
+    0.3
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -59.723885038971424,
+   "sharpe_high": -43.65255804491618,
+   "sharpe_d_low": -13.599736813168143,
+   "sharpe_d_high": 2.4715901808871052,
+   "sharpe_swing": 16.071326994055248,
+   "sharpe_elasticity": 0.3484362879803697,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.120205701376079,
+   "max_drawdown_high": 0.12000967898800008,
+   "max_drawdown_d_low": 0.00016936061883698894,
+   "max_drawdown_d_high": -2.666176924193131e-05,
+   "max_drawdown_swing": 0.0004758170236316417,
+   "max_drawdown_elasticity": -0.0016330253558407802,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2914.9796468366944,
+   "turnover_high": 2910.8068212056046,
+   "turnover_d_low": 8.683689619372672,
+   "turnover_d_high": 4.510863988282836,
+   "turnover_swing": 51.17358479242739,
+   "turnover_elasticity": -0.0014357882653785795
+  },
+  {
+   "param": "u_exit",
+   "symbol": "u_exit",
+   "label_uk": "поріг виходу гістерезису",
+   "base_value": 0.12,
+   "low_value": 0.09,
+   "high_value": 0.15,
+   "values": [
+    0.09,
+    0.105,
+    0.135,
+    0.15
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -44.838346935801596,
+   "sharpe_high": -48.60561753954025,
+   "sharpe_d_low": 1.285801290001686,
+   "sharpe_d_high": -2.481469313736966,
+   "sharpe_swing": 3.767270603738652,
+   "sharpe_elasticity": -0.1633535034748294,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.120089249953242,
+   "max_drawdown_high": 0.12009280766499997,
+   "max_drawdown_d_low": 5.2909195999983893e-05,
+   "max_drawdown_d_high": 5.646690775795715e-05,
+   "max_drawdown_swing": 0.00016678896800004228,
+   "max_drawdown_elasticity": 5.927724446662817e-05,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2917.2812233165,
+   "turnover_high": 2909.431896216811,
+   "turnover_d_low": 10.985266099178261,
+   "turnover_d_high": 3.135938999489099,
+   "turnover_swing": 49.195822349652644,
+   "turnover_elasticity": -0.0054016020496444024
+  },
+  {
+   "param": "chi",
+   "symbol": "χ_ATR",
+   "label_uk": "множник ATR стопу",
+   "base_value": 2.0,
+   "low_value": 1.5,
+   "high_value": 2.5,
+   "values": [
+    1.5,
+    1.75,
+    2.25,
+    2.5
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -48.78224302179232,
+   "sharpe_high": -45.19214335652337,
+   "sharpe_d_low": -2.6580947959890366,
+   "sharpe_d_high": 0.9320048692799148,
+   "sharpe_swing": 3.5900996652689514,
+   "sharpe_elasticity": 0.15567115289342245,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.12023364248800006,
+   "max_drawdown_high": 0.12019465989324196,
+   "max_drawdown_d_low": 0.00019730173075804824,
+   "max_drawdown_d_high": 0.0001583191359999514,
+   "max_drawdown_swing": 0.00019730173075804824,
+   "max_drawdown_elasticity": -0.0006495132142845658,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2852.769140471008,
+   "turnover_high": 2922.855200647694,
+   "turnover_d_low": -53.52681674631367,
+   "turnover_d_high": 16.559243430372135,
+   "turnover_swing": 70.0860601766858,
+   "turnover_elasticity": 0.048230504538010505
+  },
+  {
+   "param": "kappa_min",
+   "symbol": "κ_min",
+   "label_uk": "нижня межа κ",
+   "base_value": 0.35,
+   "low_value": 0.21,
+   "high_value": 0.49,
+   "values": [
+    0.21,
+    0.28,
+    0.42,
+    0.49
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -48.904437693717696,
+   "sharpe_high": -47.967680686396506,
+   "sharpe_d_low": -2.7802894679144146,
+   "sharpe_d_high": -1.8435324605932237,
+   "sharpe_swing": 3.4715695747588526,
+   "sharpe_elasticity": 0.02538683757191693,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.12014451181227037,
+   "max_drawdown_high": 0.12002789120399993,
+   "max_drawdown_d_low": 0.000108171055028361,
+   "max_drawdown_d_high": -8.44955324208474e-06,
+   "max_drawdown_swing": 0.0001430017522704441,
+   "max_drawdown_elasticity": -0.001214430225200465,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2794.549158559388,
+   "turnover_high": 2980.91199962537,
+   "turnover_d_low": -111.7467986579336,
+   "turnover_d_high": 74.61604240804809,
+   "turnover_swing": 249.46737649993884,
+   "turnover_elasticity": 0.08015479316687418
+  },
+  {
+   "param": "u_enter",
+   "symbol": "u_enter",
+   "label_uk": "поріг входу гістерезису",
+   "base_value": 0.25,
+   "low_value": 0.2,
+   "high_value": 0.3,
+   "values": [
+    0.2,
+    0.225,
+    0.275,
+    0.3
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -49.43269051255658,
+   "sharpe_high": -46.907261711324246,
+   "sharpe_d_low": -3.308542286753301,
+   "sharpe_d_high": -0.783113485520964,
+   "sharpe_swing": 3.435681818150705,
+   "sharpe_elasticity": 0.13688213757731435,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.12036666561200005,
+   "max_drawdown_high": 0.12017699084743727,
+   "max_drawdown_d_low": 0.0003303248547580351,
+   "max_drawdown_d_high": 0.0001406500901952601,
+   "max_drawdown_swing": 0.0003303248547580351,
+   "max_drawdown_elasticity": -0.003950361269058671,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2967.0069106131996,
+   "turnover_high": 2966.999945709613,
+   "turnover_d_low": 60.71095339587782,
+   "turnover_d_high": 60.703988492291046,
+   "turnover_swing": 66.34687200327971,
+   "turnover_elasticity": -5.991220172777572e-06
+  },
+  {
+   "param": "n_atr",
+   "symbol": "n_ATR",
+   "label_uk": "період ATR",
+   "base_value": 14.0,
+   "low_value": 7.0,
+   "high_value": 21.0,
+   "values": [
+    7.0,
+    10.0,
+    18.0,
+    21.0
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -47.3867444718262,
+   "sharpe_high": -46.00584975769318,
+   "sharpe_d_low": -1.262596246022916,
+   "sharpe_d_high": 0.1182984681101047,
+   "sharpe_swing": 1.3808947141330208,
+   "sharpe_elasticity": 0.029938649649913867,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.12028618937299995,
+   "max_drawdown_high": 0.12014033794924195,
+   "max_drawdown_d_low": 0.0002498486157579416,
+   "max_drawdown_d_high": 0.00010399719199993829,
+   "max_drawdown_swing": 0.0002530529039999063,
+   "max_drawdown_elasticity": -0.0012150605628087994,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2898.697455043906,
+   "turnover_high": 2937.5669891751213,
+   "turnover_d_low": -7.598502173415909,
+   "turnover_d_high": 31.27103195779955,
+   "turnover_swing": 70.53011821139125,
+   "turnover_elasticity": 0.013374251866775363
+  },
+  {
+   "param": "lam",
+   "symbol": "λ_EWMA",
+   "label_uk": "λ EWMA волатильності",
+   "base_value": 0.94,
+   "low_value": 0.88,
+   "high_value": 0.96,
+   "values": [
+    0.88,
+    0.92,
+    0.952,
+    0.96
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -45.821421884267686,
+   "sharpe_high": -47.012292655982314,
+   "sharpe_d_low": 0.3027263415355961,
+   "sharpe_d_high": -0.8881444301790324,
+   "sharpe_swing": 1.1908707717146285,
+   "sharpe_elasticity": -0.02581881330110762,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.12007384616391259,
+   "max_drawdown_high": 0.12015715400957128,
+   "max_drawdown_d_low": 3.750540667057933e-05,
+   "max_drawdown_d_high": 0.00012081325232926599,
+   "max_drawdown_swing": 0.00013742131200000784,
+   "max_drawdown_elasticity": 0.0006940218698199578,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2879.885610889743,
+   "turnover_high": 2913.4082313155614,
+   "turnover_d_low": -26.410346327578736,
+   "turnover_d_high": 7.112274098239595,
+   "turnover_swing": 50.06679825242827,
+   "turnover_elasticity": 0.011534482695256922
+  },
+  {
+   "param": "rho_base",
+   "symbol": "ρ_base",
+   "label_uk": "ризик на угоду",
+   "base_value": 0.005,
+   "low_value": 0.0025,
+   "high_value": 0.0075,
+   "values": [
+    0.0025,
+    0.00375,
+    0.00625,
+    0.0075
+   ],
+   "sharpe_base": -46.12414822580328,
+   "sharpe_low": -46.218696237366416,
+   "sharpe_high": -46.12414822580328,
+   "sharpe_d_low": -0.09454801156313408,
+   "sharpe_d_high": 0.0,
+   "sharpe_swing": 0.09454801156313408,
+   "sharpe_elasticity": 0.00204985924293429,
+   "max_drawdown_base": 0.12003634075724201,
+   "max_drawdown_low": 0.12013451520124196,
+   "max_drawdown_high": 0.12003634075724201,
+   "max_drawdown_d_low": 9.817444399995434e-05,
+   "max_drawdown_d_high": 0.0,
+   "max_drawdown_swing": 9.817444399995434e-05,
+   "max_drawdown_elasticity": -0.0008178726823945716,
+   "turnover_base": 2906.2959572173218,
+   "turnover_low": 2906.0556204228865,
+   "turnover_high": 2906.2959572173218,
+   "turnover_d_low": -0.24033679443527944,
+   "turnover_d_high": 0.0,
+   "turnover_swing": 0.24033679443527944,
+   "turnover_elasticity": 8.269522373949612e-05
+  }
+ ]
+}

@@ -1,0 +1,70 @@
+@startuml deployment
+' Діаграма розгортання за docker-compose.yml і docker-compose.test.yml (HEAD b933802).
+' Автор: Андрій Жук, 2026.
+title FuzzHelm — розгортання (Docker Compose, робоча станція розробника)
+skinparam defaultFontName Helvetica
+skinparam shadowing false
+scale max 4000 width
+
+node "Робоча станція розробника\n(macOS, Docker Desktop; репозиторій ~/dev/fuzzhelm, не в iCloud)" as HOST {
+
+  node "compose-проєкт «fuzzhelm» (docker-compose.yml)" as PRJ {
+    node "db\n<<container>>\npostgres:16-alpine\nPOSTGRES_DB=fuzzhelm" as DB
+    database "volume pgdata\n→ /var/lib/postgresql/data" as VOL
+    node "api\n<<container>>\nuvicorn fuzzhelm.api.main:app\n(host 0.0.0.0, port 8000)\n(образ з Dockerfile: python:3.12-slim + uv)" as API
+    node "worker\n<<container>>\npython -m fuzzhelm.workers.trading_worker\n--profile replay" as WORKER
+    node "ui (profiles: [ui])\n<<container>>\nnode:22-alpine · npm run dev\n[не реалізовано — D-06]" as UI #EEEEEE
+  }
+
+  node "compose-проєкт «fuzzhelm-test» (docker-compose.test.yml)" as PRJT {
+    node "db-test\n<<container>>\npostgres:16-alpine\nPOSTGRES_DB=fuzzhelm_test\ntmpfs (нічого не зберігається)" as DBT
+  }
+
+  folder "робоче дерево" as TREE {
+    folder "./config\n(risk_limits.yaml, …)" as CFGDIR
+    folder "./data\n(funding_*.json, dataset_window.json)" as DATADIR
+    folder "./ui" as UIDIR
+  }
+
+  node "процеси хоста (uv run)" as HOSTPROC {
+    component "fuzzhelm.workers.ingest_worker" as INGW
+    component "fuzzhelm.scheduler.jobs" as SCHED
+    component "fuzzhelm CLI\n(backfill, calibrate, user, …)" as CLI
+    component "pytest -m integration" as PYT
+  }
+}
+
+cloud "Binance USDⓈ-M (read-only)\nfapi / fstream.binance.com" as BIN
+cloud "Kraken (read-only)\napi.kraken.com" as KRA
+cloud "Binance testnet\ntestnet.binancefuture.com" as TN
+cloud "api.telegram.org" as TG
+actor "Браузер / curl\n(Bearer JWT)" as CLIENT
+
+DB -- VOL
+API --> DB : asyncpg db:5432\nроль fuzzhelm_app\nLISTEN fuzzhelm_live
+WORKER --> DB : asyncpg db:5432\nNOTIFY fuzzhelm_live\nLISTEN fuzzhelm_control
+API ..> CFGDIR : ./config:/app/config (rw)\nPUT /risk/limits → os.replace
+API ..> DATADIR : ./data:/app/data:ro
+WORKER ..> CFGDIR : ./config:/app/config:ro\n(гаряча заміна лімітів)
+UI ..> UIDIR : ./ui:/ui
+CLIENT --> API : 127.0.0.1:8000 → 8000
+CLIENT ..> UI : 5173 → 5173
+INGW --> DB : localhost:5442 → 5432
+SCHED --> DB : localhost:5442 → 5432
+CLI --> DB : localhost:5442 → 5432
+PYT --> DBT : localhost:5443 → 5432
+INGW --> BIN : WSS market + public,\nREST-добір
+CLI --> BIN : REST (klines, exchangeInfo,\nfundingRate, aggTrades)
+CLI --> KRA : REST OHLC (крос-звірка)
+SCHED --> TG : щоденний звіт
+API --> TG : запит на зняття kill-switch
+HOSTPROC ..> TN : лише scripts/\ntestnet_one_order.py\n[ЛЮДИНА,\nключі в .env]
+
+note bottom of PRJ
+  Порти хоста: db 5442→5432; api 127.0.0.1:8000→8000 (лише localhost);
+  ui 5173→5173 (профіль ui). Тестова БД — окремий проєкт, порт 5443.
+  Порти 5432/5433 не використовуються: зайняті іншими проєктами (коміт 0b0cda4).
+  env_file .env — required: false; секрети лише в .env (у .gitignore).
+  Образ несе SHA коміту: build-arg GIT_SHA → FUZZHELM_GIT_SHA.
+end note
+@enduml

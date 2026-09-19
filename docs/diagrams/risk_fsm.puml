@@ -1,0 +1,53 @@
+@startuml risk_fsm
+' ЗГЕНЕРОВАНО docs/diagrams/gen_risk_fsm.py з fuzzhelm.risk.state.TRANSITIONS
+' (24 клітинок) і config/risk_limits.yaml. Не редагувати вручну.
+title Автомат ризик-станів (risk/state.py, RiskStateMachine)
+hide empty description
+skinparam defaultFontName Helvetica
+skinparam state {
+  BackgroundColor<<latch>> #FDE2E2
+}
+state NORMAL : κ_mode = 1.0
+state WARNING : κ_mode = 0.5
+state COOLDOWN : κ_mode = 0.25
+state HALTED <<latch>> : κ_mode = 0.0
+[*] --> NORMAL
+COOLDOWN --> HALTED : HALT_BREACH\n[kill-switch ∨ DD ≥ 0.12 ∨ PnL_day ≤ −0.03·E_open]
+COOLDOWN --> WARNING : RECOVERY\n[DD ≤ 0.05 ∧ dwell ≥ 30]
+HALTED --> COOLDOWN : ADMIN_RELEASE\n[release(Role.ADMIN) або KillSwitch.release(Role.ADMIN)\n(тоді — на наступному барі); пік і E_open перебазовано]
+NORMAL --> COOLDOWN : COOL_BREACH\n[DD ≥ 0.08 ∨ PnL_day ≤ −0.02·E_open]
+NORMAL --> HALTED : HALT_BREACH\n[kill-switch ∨ DD ≥ 0.12 ∨ PnL_day ≤ −0.03·E_open]
+NORMAL --> WARNING : WARN_BREACH\n[DD ≥ 0.04 ∨ σ_ann/σ_base > 1.6]
+WARNING --> COOLDOWN : COOL_BREACH\n[DD ≥ 0.08 ∨ PnL_day ≤ −0.02·E_open]
+WARNING --> HALTED : HALT_BREACH\n[kill-switch ∨ DD ≥ 0.12 ∨ PnL_day ≤ −0.03·E_open]
+WARNING --> NORMAL : RECOVERY\n[DD ≤ 0.025 ∧ dwell ≥ 15 ∧ ¬(σ_ann/σ_base > 1.6)]
+note right of COOLDOWN
+  cooldown_policy = scaled_entries (config/risk_limits.yaml, RF-01):
+  scaled_entries — новий вхід дозволено, розмір × κ_mode = 0.25;
+    наявну позицію не збільшувати;
+  reduce_only — буквально §5.12: жодного приросту;
+    пласка книга при DD > cool_exit — поглинаючий стан (ENG-14).
+  Політику застосовує гейт risk_mode (RiskModeGate),
+  таблиця переходів від неї не залежить.
+end note
+note left of HALTED
+  засувний: виходу за даними немає,
+  лише ADMIN_RELEASE — RiskStateMachine.release(Role.ADMIN)
+  (API: POST /risk/killswitch/release → команда воркеру) або
+  KillSwitch.release(Role.ADMIN), після чого update() наступного бару
+  синхронізує автомат; інша роль → PermissionDeniedError;
+  вхід у HALTED спрацьовує kill-switch, flatten-all
+end note
+legend bottom
+  Класифікація подій за пріоритетом: HALT_BREACH → COOL_BREACH → (COOLDOWN: RECOVERY|STEADY)
+  → WARN_BREACH → (WARNING: RECOVERY) → STEADY. У COOLDOWN подія WARN_BREACH не генерується.
+  Умова на ребрі діє лише тоді, коли жодна подія вищого пріоритету не спрацювала: напр. RECOVERY
+  вимагає ще й PnL_day > −0.02·E_open (інакше COOL_BREACH).
+  dwell — барів у поточному стані (скидається лише при зміні стану).
+  Петлі (стан не змінюється) — 15 клітинок:
+    NORMAL: RECOVERY, STEADY, ADMIN_RELEASE
+    WARNING: WARN_BREACH, STEADY, ADMIN_RELEASE
+    COOLDOWN: COOL_BREACH, WARN_BREACH, STEADY, ADMIN_RELEASE
+    HALTED: HALT_BREACH, COOL_BREACH, WARN_BREACH, RECOVERY, STEADY
+endlegend
+@enduml

@@ -1,0 +1,345 @@
+{
+ "experiment": "cost_models",
+ "passport": {
+  "experiment": "cost_models",
+  "command": "uv run python scripts/cost_models.py --db --symbol BTCUSDT --workers 8 --params @artifacts/exp_search/grid/grid_BTCUSDT_mamdani.json --out docs/report_tables/raw/cost_models_BTCUSDT",
+  "git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+  "git_dirty": false,
+  "git_dirty_any": true,
+  "git_dirty_paths": [],
+  "seed": 20260918,
+  "dataset_hash": "99382675fda6dcab9be0fa566ac6c602686bf19685aa9c5557f5b7cdf3b8c345",
+  "source": "db:BTCUSDT",
+  "symbol": "BTCUSDT",
+  "tf": "1m",
+  "n_bars": 64800,
+  "t_first_ns": 1785801600000000000,
+  "t_last_ns": 1789689540000000000,
+  "config_hashes": {
+   "zero": "913564a422fe0208b6ef3cf4de5220297144b9c02ae755a51b89337e81f835b3",
+   "sqrt_impact": "544078aeb01c1a6ad5e2e3915ae300d7a95357746c3da6c5d19b35cda2a92ae7",
+   "full": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee"
+  },
+  "fold_layout": "profile",
+  "folds": [
+   {
+    "index": 0,
+    "is_start": 0,
+    "is_end": 20554,
+    "embargo_bars": 1046,
+    "oos_start": 21600,
+    "oos_end": 28800
+   },
+   {
+    "index": 1,
+    "is_start": 7200,
+    "is_end": 27754,
+    "embargo_bars": 1046,
+    "oos_start": 28800,
+    "oos_end": 36000
+   },
+   {
+    "index": 2,
+    "is_start": 14400,
+    "is_end": 34954,
+    "embargo_bars": 1046,
+    "oos_start": 36000,
+    "oos_end": 43200
+   },
+   {
+    "index": 3,
+    "is_start": 21600,
+    "is_end": 42154,
+    "embargo_bars": 1046,
+    "oos_start": 43200,
+    "oos_end": 50400
+   },
+   {
+    "index": 4,
+    "is_start": 28800,
+    "is_end": 49354,
+    "embargo_bars": 1046,
+    "oos_start": 50400,
+    "oos_end": 57600
+   },
+   {
+    "index": 5,
+    "is_start": 36000,
+    "is_end": 56554,
+    "embargo_bars": 1046,
+    "oos_start": 57600,
+    "oos_end": 64800
+   }
+  ],
+  "scopes": [
+   "oos",
+   "full"
+  ],
+  "selection": "fixed",
+  "cells": null,
+  "risk_loop": "default",
+  "is_rule": null,
+  "dd_cap": null,
+  "params": {
+   "n_atr": 7,
+   "chi": 2.5,
+   "u_enter": 0.3,
+   "rho_base": 0.0025,
+   "lam": 0.97
+  },
+  "params_source": {
+   "kind": "file",
+   "path": "artifacts/exp_search/grid/grid_BTCUSDT_mamdani.json",
+   "selected_on_oos": true,
+   "front_space": "oos",
+   "selection_rule": "eps_constraint_max_sr",
+   "choice_rule": "fallback_min_dd",
+   "choice_index": 33,
+   "dd_cap": 0.08,
+   "source_git_sha": "b93380254e142a2766ecfb4ea875819ef6955567",
+   "source_command": "uv run python scripts/run_grid.py --db --symbol BTCUSDT --engine mamdani --workers 8"
+  },
+  "smoke": false,
+  "workers": 8,
+  "engine": "mamdani",
+  "warmup_bars": 523
+ },
+ "summary": [
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "oos",
+   "sharpe": 5.178566343425379,
+   "sharpe_fold_mean": 5.479294091786261,
+   "total_return": 0.014398635778358981,
+   "max_drawdown": 0.005357702624580241,
+   "turnover": 10395.965351111909,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "gross_pnl": 143.2223,
+   "n_trades": 673,
+   "n_fills": 1314,
+   "fees_per_day_pct": 0.0,
+   "psr": 0.9316849868505979,
+   "exposure": 0.05460648148148148,
+   "days": 29.995833333333337,
+   "n_segments": 6,
+   "halted_segments": 0,
+   "share_halted": 0.0,
+   "share_cooldown": 0.0,
+   "config_hash": "913564a422fe0208b6ef3cf4de5220297144b9c02ae755a51b89337e81f835b3",
+   "note": ""
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "oos",
+   "sharpe": 2.755921820673352,
+   "sharpe_fold_mean": 3.028758262085941,
+   "total_return": 0.00772061275574365,
+   "max_drawdown": 0.005968876439111259,
+   "turnover": 10395.059132350123,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 66.234194386567,
+   "gross_pnl": 77.0316,
+   "n_trades": 673,
+   "n_fills": 1314,
+   "fees_per_day_pct": 0.0,
+   "psr": 0.785538093500969,
+   "exposure": 0.05460648148148148,
+   "days": 29.995833333333337,
+   "n_segments": 6,
+   "halted_segments": 0,
+   "share_halted": 0.0,
+   "share_cooldown": 0.0,
+   "config_hash": "544078aeb01c1a6ad5e2e3915ae300d7a95357746c3da6c5d19b35cda2a92ae7",
+   "note": ""
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "oos",
+   "sharpe": -76.61662488727531,
+   "sharpe_fold_mean": -76.3808851424949,
+   "total_return": -0.2387219507149032,
+   "max_drawdown": 0.2387219507149032,
+   "turnover": 8453.585677208308,
+   "fees": 2716.4010382,
+   "funding": -0.16810532427,
+   "slippage_cost": 50.824349998737,
+   "gross_pnl": 53.296099999999996,
+   "n_trades": 669,
+   "n_fills": 1307,
+   "fees_per_day_pct": 0.905592789509654,
+   "psr": 0.0,
+   "exposure": 0.054375,
+   "days": 29.995833333333337,
+   "n_segments": 6,
+   "halted_segments": 0,
+   "share_halted": 0.0,
+   "share_cooldown": 0.003148148148148148,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "note": ""
+  },
+  {
+   "variant": "zero",
+   "label": "zero (без витрат)",
+   "scope": "full",
+   "sharpe": 7.346850510819266,
+   "sharpe_fold_mean": 7.346850510819266,
+   "total_return": 0.03187743000000487,
+   "max_drawdown": 0.007064650538969541,
+   "turnover": 11983.792173056498,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 0.0,
+   "gross_pnl": 318.7743,
+   "n_trades": 981,
+   "n_fills": 1919,
+   "fees_per_day_pct": 0.0,
+   "psr": 0.9952171675393884,
+   "exposure": 0.05183733159090202,
+   "days": 44.636805555555554,
+   "n_segments": 1,
+   "halted_segments": 0,
+   "share_halted": 0.0,
+   "share_cooldown": 0.0,
+   "config_hash": "913564a422fe0208b6ef3cf4de5220297144b9c02ae755a51b89337e81f835b3",
+   "note": ""
+  },
+  {
+   "variant": "sqrt_impact",
+   "label": "sqrt_impact (спред + √-імпакт)",
+   "scope": "full",
+   "sharpe": 4.6050720266111576,
+   "sharpe_fold_mean": 4.6050720266111576,
+   "total_return": 0.02002820999999977,
+   "max_drawdown": 0.009489037764780162,
+   "turnover": 11987.001855042667,
+   "fees": 0.0,
+   "funding": 0.0,
+   "slippage_cost": 116.193038324017,
+   "gross_pnl": 200.2821,
+   "n_trades": 981,
+   "n_fills": 1919,
+   "fees_per_day_pct": 0.0,
+   "psr": 0.9471393782588633,
+   "exposure": 0.05183733159090202,
+   "days": 44.636805555555554,
+   "n_segments": 1,
+   "halted_segments": 0,
+   "share_halted": 0.0,
+   "share_cooldown": 0.0,
+   "config_hash": "544078aeb01c1a6ad5e2e3915ae300d7a95357746c3da6c5d19b35cda2a92ae7",
+   "note": ""
+  },
+  {
+   "variant": "full",
+   "label": "full (√-імпакт + комісії + фандинг)",
+   "scope": "full",
+   "sharpe": -46.38548890990067,
+   "sharpe_fold_mean": -46.38548890990067,
+   "total_return": -0.12012743879288312,
+   "max_drawdown": 0.12012743879288312,
+   "turnover": 2932.57155306787,
+   "fees": 1284.47358184,
+   "funding": -0.539393911161,
+   "slippage_cost": 13.897313173208,
+   "gross_pnl": 82.6598,
+   "n_trades": 314,
+   "n_fills": 616,
+   "fees_per_day_pct": 0.28776108994657495,
+   "psr": 0.0,
+   "exposure": 0.015432963066679113,
+   "days": 44.636805555555554,
+   "n_segments": 1,
+   "halted_segments": 1,
+   "share_halted": 0.6635707395998631,
+   "share_cooldown": 0.18222408911291577,
+   "config_hash": "bdfa3fef3871f8bbd188a2ee0326489e224a49b5e4e06ca096633f92842938ee",
+   "note": ""
+  }
+ ],
+ "overstatement": {
+  "oos": {
+   "zero_vs_full": {
+    "sharpe": {
+     "metric": "sharpe",
+     "reference": -76.61662488727531,
+     "other": 5.178566343425379,
+     "diff": 81.79519123070068,
+     "ratio": null,
+     "sign_flip": true
+    },
+    "total_return": {
+     "metric": "total_return",
+     "reference": -0.2387219507149032,
+     "other": 0.014398635778358981,
+     "diff": 0.2531205864932622,
+     "ratio": null,
+     "sign_flip": true
+    }
+   },
+   "sqrt_impact_vs_full": {
+    "sharpe": {
+     "metric": "sharpe",
+     "reference": -76.61662488727531,
+     "other": 2.755921820673352,
+     "diff": 79.37254670794866,
+     "ratio": null,
+     "sign_flip": true
+    },
+    "total_return": {
+     "metric": "total_return",
+     "reference": -0.2387219507149032,
+     "other": 0.00772061275574365,
+     "diff": 0.24644256347064686,
+     "ratio": null,
+     "sign_flip": true
+    }
+   }
+  },
+  "full": {
+   "zero_vs_full": {
+    "sharpe": {
+     "metric": "sharpe",
+     "reference": -46.38548890990067,
+     "other": 7.346850510819266,
+     "diff": 53.73233942071994,
+     "ratio": null,
+     "sign_flip": true
+    },
+    "total_return": {
+     "metric": "total_return",
+     "reference": -0.12012743879288312,
+     "other": 0.03187743000000487,
+     "diff": 0.152004868792888,
+     "ratio": null,
+     "sign_flip": true
+    }
+   },
+   "sqrt_impact_vs_full": {
+    "sharpe": {
+     "metric": "sharpe",
+     "reference": -46.38548890990067,
+     "other": 4.6050720266111576,
+     "diff": 50.99056093651183,
+     "ratio": null,
+     "sign_flip": true
+    },
+    "total_return": {
+     "metric": "total_return",
+     "reference": -0.12012743879288312,
+     "other": 0.02002820999999977,
+     "diff": 0.1401556487928829,
+     "ratio": null,
+     "sign_flip": true
+    }
+   }
+  }
+ },
+ "chosen": {},
+ "choice_info": {}
+}
