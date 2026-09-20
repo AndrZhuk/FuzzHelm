@@ -1,0 +1,38 @@
+@startuml
+' IDEF0, декомпозиція A0 на п'ять функцій.
+' Найменування: docs/diagrams/idef0/a0_decomposition.puml
+' Призначення: показати, що потік даних односпрямований і кожна функція має власне
+'     керування; відповідає межам пакетів src/fuzzhelm. Звіт §2.3.
+' Автор: Андрій Жук, 2026.
+left to right direction
+skinparam defaultFontName "DejaVu Sans"
+skinparam rectangle {
+  BackgroundColor #F7F9FC
+  BorderColor #33507A
+}
+rectangle "**A1**\nАгрегувати\nта нормалізувати дані" as A1
+rectangle "**A2**\nОцінити\nстан ринку" as A2
+rectangle "**A3**\nУхвалити\nнечітке рішення" as A3
+rectangle "**A4**\nВизначити розмір\nі перевірити ліміти" as A4
+rectangle "**A5**\nВиконати\nта облікувати" as A5
+
+A1 --> A2 : нормалізовані\nбари, Q
+A2 --> A3 : T, R, V\n+ довіра детекторів
+A3 --> A4 : u_final, κ,\nслід виведення
+A4 --> A5 : затверджена\nкількість
+A5 --> A1 : стан рахунку\n(зворотний зв'язок обліку)
+
+note top of A1
+  Керування: регламент біржі, ваги AHP
+  Механізм: ingest, quality, storage
+end note
+note top of A3
+  Керування: конфігурація МФ і 45 правил
+  Механізм: fuzzy, decision
+end note
+note top of A4
+  Керування: шість лімітів ризику,
+  пороги автомата станів
+  Механізм: sizing, risk
+end note
+@enduml

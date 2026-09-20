@@ -1,0 +1,47 @@
+@startuml
+' Сітьовий графік робіт із критичним шляхом (метод передування, AON).
+' Найменування: docs/diagrams/network.puml
+' Призначення: залежності робіт і критичний шлях для звіту §1.6. У вузлі: номер, назва,
+'     тривалість (дн.), ранній початок ES і пізній початок LS; резерв = LS − ES.
+' Автор: Андрій Жук, 2026.
+left to right direction
+hide stereotype
+skinparam defaultFontName "DejaVu Sans"
+skinparam rectangle {
+  BackgroundColor<<crit>> #FFE5E5
+  BorderColor<<crit>> #C0392B
+  BackgroundColor<<slack>> #EEF3FA
+  BorderColor<<slack>> #5B7FA6
+}
+rectangle "1 Аналіз і огляд\nt=1  ES=0  LS=0" <<crit>> as W1
+rectangle "2 ТЗ і архітектура\nt=1  ES=1  LS=1" <<crit>> as W2
+rectangle "3 Інжест REST/WS\nt=1  ES=2  LS=2" <<crit>> as W3
+rectangle "4 Якість даних, MLP\nt=1  ES=3  LS=8  (резерв 5)" <<slack>> as W4
+rectangle "5 Детектори, консенсус\nt=1  ES=3  LS=3" <<crit>> as W5
+rectangle "6 Нечітке ядро, МФ\nt=2  ES=4  LS=4" <<crit>> as W6
+rectangle "7 Сайзинг, ризик-контур\nt=2  ES=6  LS=6" <<crit>> as W7
+rectangle "8 Виконання, бектест\nt=1  ES=8  LS=8" <<crit>> as W8
+rectangle "9 Експеримент\nt=1  ES=9  LS=9" <<crit>> as W9
+rectangle "10 API, безпека\nt=1  ES=9  LS=9  (резерв 0*)" <<slack>> as W10
+rectangle "11 Веб-панель\nt=1  ES=10  LS=10" <<slack>> as W11
+rectangle "12 Документування, звіт\nt=2  ES=11  LS=11" <<crit>> as W12
+
+W1 --> W2
+W2 --> W3
+W3 --> W4
+W3 --> W5
+W5 --> W6
+W6 --> W7
+W7 --> W8
+W8 --> W9
+W8 --> W10
+W10 --> W11
+W9 --> W12
+W11 --> W12
+
+note bottom of W12
+  Критичний шлях (червоний): 1→2→3→5→6→7→8→9→12, тривалість **12 днів**.
+  Роботи 4, 10, 11 мають резерв; * робота 10 лежить на майже критичному
+  шляху 1→2→3→5→6→7→8→10→11→12 тієї ж довжини 12 днів.
+end note
+@enduml

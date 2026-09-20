@@ -33,6 +33,7 @@ from fuzzhelm.core.ports import Clock
 from fuzzhelm.features.convert import to_float
 from fuzzhelm.infra.wallclock import SystemClock
 from fuzzhelm.ingest.backfill import backfill_klines
+from fuzzhelm.logging_setup import setup_logging
 from fuzzhelm.notify.telegram import SendResult, TelegramNotifier
 from fuzzhelm.quality.dq_score import (
     DqInputs,
@@ -463,7 +464,7 @@ async def _main() -> None:  # pragma: no cover — точка входу про�
     from fuzzhelm.ingest.rest_client import BinanceRestClient  # noqa: PLC0415
     from fuzzhelm.ingest.retry import RetryPolicy  # noqa: PLC0415
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging()
     settings = get_settings()
     clock = SystemClock()
     stop = asyncio.Event()

@@ -1,0 +1,23 @@
+{
+  "_comment": "Еталон паспорта офлайн-реплею; run_id і journal_head свідомо виключені (залежать від контексту запуску) — див. scripts/make_golden_replay.py",
+  "anomalies": 0,
+  "bars": 45,
+  "candles_released": 45,
+  "closed_trades": 1,
+  "equity_first": "10000",
+  "equity_hash": "d0f45aa3cd5ea81e60c96780ad988e2143f0c77a83eb43a89028af3a00909f1e",
+  "equity_last": "9992.720886400",
+  "error": null,
+  "fills": 2,
+  "final_state": "NORMAL",
+  "frames": 9111,
+  "gaps": 0,
+  "halted_at_ns": null,
+  "journal_entries": 68,
+  "kind": "replay",
+  "max_abs_u_final": 0.24270316816134185,
+  "q_last": 0.9805517410106811,
+  "status": "DONE",
+  "transitions": [],
+  "warmup_bars": 523
+}

@@ -33,7 +33,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import signal
 import sys
 import time
@@ -61,6 +60,7 @@ from fuzzhelm.ingest.pipeline import (
     journal_sink,
 )
 from fuzzhelm.ingest.recorder import ControlRecord, RawFrame, SessionItem
+from fuzzhelm.logging_setup import setup_logging
 from fuzzhelm.quality.anomaly_mlp import (
     AnomalyScorer,
     AnomalyVerdict,
@@ -457,8 +457,7 @@ def parse_args(argv: Sequence[str] | None = None) -> IngestOptions:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    logging.basicConfig(level=os.environ.get("FUZZHELM_LOG", "INFO"),
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging()
     opts = parse_args(argv)
 
     async def amain() -> dict[str, Any]:

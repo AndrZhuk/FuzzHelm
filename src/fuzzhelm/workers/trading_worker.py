@@ -34,7 +34,6 @@ import hashlib
 import json
 import logging
 import math
-import os
 import signal
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
@@ -57,6 +56,7 @@ from fuzzhelm.core.ports import Clock
 from fuzzhelm.ingest.pipeline import BackfillHook, IngestPipeline, PipelineReport, PipelineSinks
 from fuzzhelm.ingest.recorder import RawFrame, SessionItem
 from fuzzhelm.ingest.replay import FrameClock, iter_items, stream_kind
+from fuzzhelm.logging_setup import setup_logging
 from fuzzhelm.quality.anomaly_mlp import (
     AnomalyScorer,
     AnomalyVerdict,
@@ -1229,8 +1229,7 @@ def _kv(x: str) -> tuple[str, str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    logging.basicConfig(level=os.environ.get("FUZZHELM_LOG", "INFO"),
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging()
     opts = parse_args(argv)
 
     async def amain() -> SessionSummary:
