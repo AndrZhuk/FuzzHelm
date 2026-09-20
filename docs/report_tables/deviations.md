@@ -2,7 +2,7 @@
 
 Згенеровано `scripts/export_report_tables.py`. Автор: Андрій Жук, 2026.
 
-Усього розходжень з ідентифікатором: **227**.
+Усього розходжень з ідентифікатором: **235**.
 
 | ID | назва | файл |
 |---|---|---|
@@ -199,6 +199,14 @@
 | ST-12 | `ix_candle_lookup` дублює первинний ключ (замір) | `docs/deviations.d/storage.md` |
 | ST-13 | Режим округлення до масштабу NUMERIC(38,18): PostgreSQL ≠ `core.money` | `docs/deviations.d/storage.md` |
 | ST-14 | Аргумент брифінгу проти TimescaleDB не стосується `candle` | `docs/deviations.d/storage.md` |
+| UI-01 | Потік подій читаємо fetch + ReadableStream, а не EventSource | `docs/deviations.d/ui.md` |
+| UI-02 | Подія `decision` несе посилання, деталі панель добирає окремим запитом | `docs/deviations.d/ui.md` |
+| UI-03 | Смуга режимів ризику — HTML під графіком, а не заливка поверх кривої | `docs/deviations.d/ui.md` |
+| UI-04 | Шрифти самохостовані, CDN не використовується | `docs/deviations.d/ui.md` |
+| UI-05 | Локальні користувачі стенда створені скриптом, а не інтерактивно | `docs/deviations.d/ui.md` |
+| UI-06 | Скрипт екранограм лежить в `ui/scripts/`, а не в `scripts/` | `docs/deviations.d/ui.md` |
+| UI-07 | `docker compose` підіймає чотири сервіси; воркеру змонтовано `./data` | `docs/deviations.d/ui.md` |
+| UI-08 | Контракт панелі перевіряється тестом, а не домовленістю | `docs/deviations.d/ui.md` |
 | WIRE-01 | MLP-автокодувальник у робочому контурі; рішення про архітектуру (закриває «Стан на HEAD» PLAT-05) | `docs/deviations.d/wiring.md` |
 | WIRE-02 | WS-07: сторож тиші живого клієнта на монотонному годиннику | `docs/deviations.d/wiring.md` |
 | WIRE-03 | Одне визначення «брудного» коду для паспортів (XS-11, XA-19, W-11) | `docs/deviations.d/wiring.md` |

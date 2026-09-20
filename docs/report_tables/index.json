@@ -2,13 +2,19 @@
  "passport": {
   "experiment": "export_report_tables",
   "command": "uv run python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw --run-id 4e5be0de-a4b7-4ef1-b84e-4a563b248be3 --run-id b0638bf7-56a2-4ad7-8d62-11bad97cb2d6 --run-id 2c9344ad-726e-400a-80fc-cb8f98371099 --cov-file docs/report_tables/raw/coverage_combined.txt --out docs/report_tables",
-  "git_sha": "b0c0396ad615cbce7cc52a30026199f8a9e30cfa",
+  "git_sha": "0952954d8e1946d558601be92bbea58fc0c24b24",
   "git_dirty": true,
   "git_dirty_any": true,
   "git_dirty_paths": [
+   " M CHANGELOG.md",
    " M Makefile",
-   " M data/anomaly_mlp_ETHUSDT.json",
-   " M scripts/export_report_tables.py"
+   " M README.en.md",
+   " M README.md",
+   " M docker-compose.yml",
+   " M scripts/export_report_tables.py",
+   "?? .claude/",
+   "?? tests/arch/test_ui_contract.py",
+   "?? ui/"
   ],
   "seed": 20260918,
   "results_dirs": [

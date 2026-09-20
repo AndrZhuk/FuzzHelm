@@ -567,8 +567,15 @@ def section_traceability(rep: Report, found: dict[str, list[dict[str, Any]]], db
         if no == 9:
             rules = load_yaml("rules_mamdani").get("rules", [])
             extra.append(f"{len(rules)} правил у `config/rules_mamdani.yaml`")
-            extra.append("CRUD правил через UI — не виконано: Vue-панель — окремий етап (D-06); "
-                         "API `/strategies` з валідацією і версіонуванням уже є")
+            # Статус UI-CRUD виводимо з дерева, а не з тексту: зникне редактор — зникне і твердження.
+            editor = ROOT / "ui/src/components/RulesEditor.vue"
+            if editor.is_file():
+                extra.append("CRUD правил через UI — `ui/src/components/RulesEditor.vue` "
+                             "(стартує з `config/membership.yaml` і `config/rules_mamdani.yaml`, "
+                             "перевірка YAML у браузері, версіонування на боці API `/strategies`)")
+            else:
+                extra.append("CRUD правил через UI — не виконано: немає `ui/src/components/RulesEditor.vue`; "
+                             "API `/strategies` з валідацією і версіонуванням уже є")
         if no == 10:
             for t in ("test_risk_chain_never_increases_exposure", "test_risk_fsm_transition_table_is_total"):
                 if tests.get("total") is None:

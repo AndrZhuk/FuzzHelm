@@ -1,5 +1,5 @@
 name: fuzzhelm
-# 4 сервіси за брифінгом: db, api, worker, ui (ui — хвиля Vue, поки профіль "ui").
+# 4 сервіси за брифінгом §9: db, api, worker, ui — усі піднімаються одним `docker compose up`.
 services:
   db:
     image: postgres:16-alpine
@@ -45,15 +45,25 @@ services:
     environment:
       FUZZHELM_DATABASE_URL: postgresql+asyncpg://fuzzhelm:fuzzhelm@db:5432/fuzzhelm
     # той самий ./config, що в api, лише для читання: воркер ліміти не пише, а бачить кожну заміну API
+    # ./data — моделі аномалій anomaly_mlp_*.json і фандинг; у образ вони не потрапляють (.dockerignore)
     volumes:
       - ./config:/app/config:ro
+      - ./data:/app/data:ro
     depends_on: {db: {condition: service_healthy}}
+  # Vue-панель у режимі розробки: Vite проксіює /api на сервіс api (FUZZHELM_API),
+  # тож у браузері немає CORS, а адреса бекенда — одна змінна.
   ui:
-    profiles: ["ui"]
     image: node:22-alpine
     working_dir: /ui
-    volumes: ["./ui:/ui"]
+    environment:
+      FUZZHELM_API: http://api:8000
+    volumes:
+      - ./ui:/ui
+      # node_modules — іменований том: у контейнері Linux-збірки, на хості лишаються свої
+      - ui_node_modules:/ui/node_modules
     command: ["sh", "-c", "npm ci && npm run dev -- --host 0.0.0.0"]
     ports: ["5173:5173"]
+    depends_on: [api]
 volumes:
   pgdata:
+  ui_node_modules:

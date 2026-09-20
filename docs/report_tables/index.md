@@ -4,7 +4,7 @@
 
 Команда: `uv run python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw --run-id 4e5be0de-a4b7-4ef1-b84e-4a563b248be3 --run-id b0638bf7-56a2-4ad7-8d62-11bad97cb2d6 --run-id 2c9344ad-726e-400a-80fc-cb8f98371099 --cov-file docs/report_tables/raw/coverage_combined.txt --out docs/report_tables`
 
-* git_sha: `b0c0396ad615cbce7cc52a30026199f8a9e30cfa` — **код мав незакомічені зміни** ( M Makefile;  M data/anomaly_mlp_ETHUSDT.json;  M scripts/export_report_tables.py)
+* git_sha: `0952954d8e1946d558601be92bbea58fc0c24b24` — **код мав незакомічені зміни** ( M CHANGELOG.md;  M Makefile;  M README.en.md …)
 * seed: 20260918
 
 Таблиць: 15; маркерів TBD разом: **0** (кожен — відсутній вхід, а не підставлене число).

@@ -1,0 +1,126 @@
+/* Спільні примітиви сторінки: розділи, лінійки, таблиці, значки-вердикти.
+   Свідомо НЕ картковий макет: розділи відбиваються лінійками і простором. */
+
+.page { max-width: 1320px; margin: 0 auto; padding: var(--s8) var(--s6) var(--s16); }
+@media (max-width: 720px) { .page { padding: var(--s5) var(--s4) var(--s12); } }
+
+/* --- Розділ --------------------------------------------------------- */
+.section { margin-top: var(--s12); }
+.section:first-child { margin-top: 0; }
+
+.section-head {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--rule-strong);
+  margin-bottom: var(--s5);
+}
+.section-head h2 { flex: 0 1 auto; min-width: 0; }
+.section-step {
+  font-family: var(--font-mono); font-size: var(--t-small); font-weight: 500;
+  color: var(--accent); letter-spacing: 0.02em; flex: 0 0 auto;
+}
+.section-note {
+  margin-left: auto; font-size: var(--t-small); color: var(--ink-faint);
+  text-align: right; min-width: 0;
+}
+/* На вузькому екрані примітка стає окремим рядком, інакше margin-left:auto виштовхує її за край. */
+@media (max-width: 760px) {
+  .section-note { margin-left: 0; text-align: left; flex: 1 0 100%; }
+}
+
+.lead { font-size: var(--t-lead); color: var(--ink-soft); max-width: 68ch; line-height: 1.5; }
+
+/* --- Лінійчаті таблиці ---------------------------------------------- */
+.tbl { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.tbl th {
+  text-align: left; font-weight: 500; color: var(--ink-faint);
+  font-size: var(--t-micro); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 0 var(--s3) var(--s2); border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
+}
+.tbl td { padding: var(--s2) var(--s3); border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl .r { text-align: right; }
+.tbl tbody tr.is-active { background: var(--accent-soft); }
+.tbl-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+
+/* --- Пари «підпис / значення» --------------------------------------- */
+.facts { display: grid; gap: 0; }
+.fact {
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding: var(--s2) 0; border-bottom: 1px solid var(--rule);
+}
+.fact:last-child { border-bottom: 0; }
+.fact dt { flex: 1 1 auto; color: var(--ink-soft); font-size: var(--t-small); }
+.fact dd {
+  flex: 0 0 auto; font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--t-small); font-weight: 500;
+}
+
+/* --- Значки стану / вердикту ---------------------------------------- */
+.badge {
+  display: inline-flex; align-items: center; gap: var(--s1);
+  font-family: var(--font-mono); font-size: var(--t-micro); font-weight: 600;
+  letter-spacing: 0.04em; padding: 2px var(--s2); border-radius: var(--radius);
+  border: 1px solid transparent; white-space: nowrap;
+}
+.badge--normal, .badge--allow, .badge--long   { background: var(--long-soft);  color: var(--long);   border-color: oklch(48% 0.125 152 / 0.22); }
+.badge--warning, .badge--shrink               { background: var(--warn-soft);  color: var(--warn);   border-color: oklch(58% 0.135 72 / 0.26); }
+.badge--cooldown                               { background: var(--cool-soft);  color: var(--cool);   border-color: oklch(52% 0.105 300 / 0.24); }
+.badge--halted, .badge--veto, .badge--short   { background: var(--halt-soft);  color: var(--halt);   border-color: oklch(44% 0.195 20 / 0.26); }
+.badge--neutral                                { background: var(--paper-sunk); color: var(--ink-soft); border-color: var(--rule-strong); }
+.badge--accent                                 { background: var(--accent-soft); color: var(--accent); border-color: oklch(48% 0.154 258 / 0.22); }
+
+/* --- Кнопки ---------------------------------------------------------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+  padding: var(--s2) var(--s4); border-radius: var(--radius);
+  border: 1px solid var(--rule-strong); background: var(--paper-raised); color: var(--ink);
+  font-size: var(--t-small); font-weight: 500;
+  transition: background 140ms var(--ease), border-color 140ms var(--ease), color 140ms var(--ease);
+}
+.btn:hover:not(:disabled) { background: var(--paper-sunk); border-color: var(--ink-faint); }
+.btn:active:not(:disabled) { background: var(--rule); }
+.btn:disabled { opacity: 0.45; }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: oklch(99% 0 0); }
+.btn--primary:hover:not(:disabled) { background: oklch(42% 0.154 258); border-color: oklch(42% 0.154 258); }
+.btn--danger { background: var(--halt); border-color: var(--halt); color: oklch(99% 0 0); }
+.btn--danger:hover:not(:disabled) { background: oklch(38% 0.195 20); }
+.btn--sm { padding: var(--s1) var(--s3); font-size: var(--t-micro); }
+
+/* --- Поля ------------------------------------------------------------ */
+.field { display: flex; flex-direction: column; gap: var(--s1); }
+.field > label { font-size: var(--t-micro); color: var(--ink-faint); letter-spacing: 0.05em; text-transform: uppercase; }
+.input, .select, .textarea {
+  padding: var(--s2) var(--s3); border: 1px solid var(--rule-strong); border-radius: var(--radius);
+  background: var(--paper-raised); font-size: var(--t-small);
+  transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
+}
+.input:focus, .select:focus, .textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.textarea { font-family: var(--font-mono); line-height: 1.5; resize: vertical; tab-size: 2; }
+
+/* --- Стани ----------------------------------------------------------- */
+.state {
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2);
+  padding: var(--s8) var(--s6); border: 1px dashed var(--rule-strong); border-radius: var(--radius-lg);
+  background: var(--paper-sunk); color: var(--ink-soft); font-size: var(--t-small); max-width: 62ch;
+}
+.state h3 { font-size: var(--t-body); color: var(--ink); }
+.state--error { border-style: solid; border-color: oklch(50% 0.175 27 / 0.35); background: var(--short-soft); color: var(--halt); }
+.state--error h3 { color: var(--halt); }
+
+/* Кістяк завантаження: пульсує сама смуга, а не вся сторінка. */
+.skel { background: var(--paper-sunk); border-radius: var(--radius); animation: skel 1.4s ease-in-out infinite; }
+@keyframes skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+/* --- Дрібне ---------------------------------------------------------- */
+.hairline { border: 0; border-top: 1px solid var(--rule); margin: var(--s6) 0; }
+.muted { color: var(--ink-faint); }
+.small { font-size: var(--t-small); }
+.micro { font-size: var(--t-micro); }
+.stack { display: flex; flex-direction: column; }
+.row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s6) var(--s8); }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s6); }
+@media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); } }

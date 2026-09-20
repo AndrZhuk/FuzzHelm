@@ -10,7 +10,7 @@
 | `db` — PostgreSQL 16 (alpine), volume `pgdata` | **5442** → 5432 | робоча БД `fuzzhelm` (користувач/пароль `fuzzhelm` — лише для локального стенда) |
 | `api` — `uvicorn fuzzhelm.api.main:app` | 8000 | REST + SSE, `/docs` |
 | `worker` — `python -m fuzzhelm.workers.trading_worker --profile replay` | — | один реплей записаної сесії з темпом профілю (×30) і вихід |
-| `ui` (профіль `ui`) | 5173 | Vue-панель (хвиля UI) |
+| `ui` — Vite dev-сервер (`node:22-alpine`, том `ui_node_modules`) | **5173** | Vue-панель: три екрани, проксі `/api` → `api:8000` (`FUZZHELM_API`) |
 
 Окремо — **тестова** БД (`docker-compose.test.yml`, проєкт `fuzzhelm-test`): PostgreSQL 16 на **5443**, дані в tmpfs
 (нічого не зберігається). Порти 5432/5433 не використовуються — вони зайняті іншими проєктами на машині розробника.
@@ -52,7 +52,7 @@ LOGIN-роль `IN ROLE fuzzhelm_app` створюється адміністр�
 З хвилі 3 обидва контейнери бачать **один** файл — bind-mount теки `./config` хоста (PLAT-02):
 ```yaml
   api:    {volumes: ["./config:/app/config", "./data:/app/data:ro"]}   # api пише ліміти; data — фандинг для POST /backtests
-  worker: {volumes: ["./config:/app/config:ro"]}                        # воркер лише читає
+  worker: {volumes: ["./config:/app/config:ro", "./data:/app/data:ro"]} # воркер лише читає; data — моделі аномалій (UI-07)
 ```
 Наслідок: PUT /risk/limits у контейнері змінює `config/risk_limits.yaml` робочого дерева хоста (це той самий файл, що
 в git) — так і задумано: зміна видна воркеру, `git diff` і `audit_log`.

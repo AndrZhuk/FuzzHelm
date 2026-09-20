@@ -5,7 +5,7 @@ SYMBOL ?= BTCUSDT
 WORKERS ?= 8
 TEST_DB_URL ?= postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5443/fuzzhelm_test
 .PHONY: up down migrate ingest record replay backtest grid walkforward experiments verify test test-int cov lint \
-	audit report anomaly users backup restore
+	audit report anomaly users backup restore ui ui-build ui-check screens
 
 up:          ; docker compose up -d --build
 down:        ; docker compose down
@@ -37,5 +37,20 @@ users:
 	@echo "  uv run fuzzhelm user add --login <логін> --role admin|operator|analyst|auditor"
 	@echo "  docker compose run --rm -it api fuzzhelm user add --login <логін> --role admin   # у контейнері"
 	@echo "Переглянути / змінити роль:  uv run fuzzhelm user list  |  uv run fuzzhelm user set-role --help"
+# --- веб-панель (фаза 9) -------------------------------------------------------
+# Vite проксіює /api на FUZZHELM_API (типово http://127.0.0.1:8000), тож CORS не потрібен.
+ui:          ; cd ui && npm install && npm run dev
+ui-build:    ; cd ui && npm install && npm run build
+ui-check:    ; cd ui && npm run typecheck
+# 14 екранограм для звіту: потрібні піднятий API, Vite і (для LiveView) воркер реплею.
+# Креденшли лише з оточення: make screens UI_LOGIN=… UI_PASSWORD=…
+UI_LOGIN ?=
+UI_PASSWORD ?=
+screens:
+	@test -n "$(UI_LOGIN)" -a -n "$(UI_PASSWORD)" || \
+		(echo "Вкажіть UI_LOGIN і UI_PASSWORD: make screens UI_LOGIN=… UI_PASSWORD=…"; exit 2)
+	cd ui && FUZZHELM_UI_LOGIN=$(UI_LOGIN) FUZZHELM_UI_PASSWORD=$(UI_PASSWORD) \
+		FUZZHELM_SHOTS_DIR=$(CURDIR)/docs/figures/screens node scripts/capture_screens.mjs
+
 backup:      ; mkdir -p backups && docker compose exec -T db pg_dump -U fuzzhelm -Fc fuzzhelm > backups/fuzzhelm_$$(date +%Y%m%d_%H%M%S).dump
 restore:     ; docker compose exec -T db pg_restore -U fuzzhelm -d fuzzhelm --clean --if-exists < $(FILE)

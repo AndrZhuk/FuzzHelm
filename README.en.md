@@ -88,8 +88,12 @@ uv run python -m fuzzhelm.workers.trading_worker --profile replay --speed inf --
 Without `.env`, the default database URL is `postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5442/fuzzhelm` (`fuzzhelm.config`).
 The offline replay needs neither a database nor a network: 45 candles, `equity_hash d0f45aa3…`.
 
-With containers: `docker compose up -d --build db api worker` (api on `127.0.0.1:8000`, worker replays the `replay` profile).
-The `ui` service sits behind the `ui` profile, and the web panel is not implemented yet. Details:
+Web panel (phase 9): `make ui` starts Vite on `http://localhost:5173` and proxies `/api` to the API (`FUZZHELM_API`,
+`http://127.0.0.1:8000` by default), so no CORS is involved. Three screens — **Derivation** (`/explain/{id}`, the core of the
+demo), **Live** (`/live`) and **Backtest** (`/backtest`); the interface is Ukrainian by default with a `UK/EN` switch.
+
+With containers: `docker compose up -d --build` starts **four services** — `db`, `api` (`127.0.0.1:8000`), `worker`
+(replays the `replay` profile) and `ui` (`5173`). Details:
 [`docs/manuals/deployment.md`](docs/manuals/deployment.md) (in Ukrainian).
 
 The first API administrator is created manually. The password is typed twice without echo and never goes through argv:
@@ -208,14 +212,13 @@ Section §10 of the brief names 133 test functions. All 133 exist in `tests/` an
 
 ## Status
 
-**Done:** the Python backend (phases 0–8 of the brief), the phase-7 computational experiment with results, and the code part of
-phase 10 (coverage, mypy, CI, the MLP in the pipeline). Documentation is also done: technical specification, risk register,
-deviations, work journal and report tables.
+**Done:** the Python backend (phases 0–8 of the brief), the phase-7 computational experiment with results, **the phase-9 web
+panel** (three Vue 3 screens with Pinia and ECharts, uk/en i18n, 14 screenshots for the report), and the code part of
+phase 10 (coverage, mypy, CI, the MLP in the loop) together with its documentation (specification, risk register,
+deviations, journal, report tables).
 
 **Not done** (reason; what is needed and by whom):
 
-- Vue web panel (3 screens, i18n). Reason: work order D-06, backend first. The author builds it as a separate stage,
-  starting with `ExplainView`.
 - Live testnet order with a screenshot. Reason: there are no testnet keys. The student registers on Binance Futures Testnet,
   puts the keys into `.env` and runs `scripts/testnet_one_order.py --confirm`.
 - Fly.io deployment. Reason: it needs registration. The student follows [`docs/manuals/deployment.md`](docs/manuals/deployment.md)

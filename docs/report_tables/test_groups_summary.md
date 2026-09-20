@@ -2,7 +2,7 @@
 
 Згенеровано `scripts/export_report_tables.py`. Автор: Андрій Жук, 2026.
 
-Зібрано (`pytest --collect-only -q -m ""`): **1034** вузлів (1034 tests collected); із них інтеграційних (маркер `integration`): 54 (54/1034 tests collected (980 deselected)); у типовому прогоні (`uv run pytest`, відбір `addopts` із pyproject): 979 (979/1034 tests collected (55 deselected)).
+Зібрано (`pytest --collect-only -q -m ""`): **1040** вузлів (1040 tests collected); із них інтеграційних (маркер `integration`): 54 (54/1040 tests collected (986 deselected)); у типовому прогоні (`uv run pytest`, відбір `addopts` із pyproject): 985 (985/1040 tests collected (55 deselected)).
 Названих у §10 брифінгу тест-функцій: 133 (сума заголовків груп: 131; заголовок §10 — «92 кейси», D-02); знайдено дослівно: **133**.
 
 | група | назва | заявлено в заголовку | названо в §10 | знайдено дослівно | вузлів названих (з параметризацією) | усіх вузлів у файлах групи* |
