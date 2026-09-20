@@ -1,6 +1,6 @@
 # Екранограми веб-панелі
 
-Знято 2026-09-20 скриптом `scripts/capture_screens.mjs`
+Знято 2026-09-20 скриптом `ui/scripts/capture_screens.mjs`
 (1440×960, deviceScaleFactor 2, локаль uk-UA). Перезняти: `make screens`.
 
 | Файл | Що на екранограмі |

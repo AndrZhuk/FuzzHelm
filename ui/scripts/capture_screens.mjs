@@ -114,7 +114,7 @@ for (const [name, route, selector, caption] of SHOTS) {
 const md = [
   '# Екранограми веб-панелі',
   '',
-  `Знято ${new Date().toISOString().slice(0, 10)} скриптом \`scripts/capture_screens.mjs\``,
+  `Знято ${new Date().toISOString().slice(0, 10)} скриптом \`ui/scripts/capture_screens.mjs\``,
   '(1440×960, deviceScaleFactor 2, локаль uk-UA). Перезняти: `make screens`.',
   '',
   '| Файл | Що на екранограмі |',
