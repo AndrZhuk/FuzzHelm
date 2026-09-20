@@ -5,7 +5,7 @@ SYMBOL ?= BTCUSDT
 WORKERS ?= 8
 TEST_DB_URL ?= postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5443/fuzzhelm_test
 .PHONY: up down migrate ingest record replay backtest grid walkforward experiments verify test test-int cov lint \
-	audit report anomaly users backup restore ui ui-build ui-check screens
+	audit report anomaly users backup restore ui ui-build ui-check ui-data screens
 
 up:          ; docker compose up -d --build
 down:        ; docker compose down
@@ -28,7 +28,7 @@ audit:       ; $(PY) pip-audit --skip-editable --progress-spinner off
 # таблиці звіту з виводів експериментів і фактів БД (лише читання); відсутнє → <<TBD:…>>
 # прогони звіту: чистий прогін фази 6 (BTC) і робочі точки сітки BTC/ETH (docs/results.md); raw/ уже містить exp_search (FIN-02)
 REPORT_RUNS ?= 4e5be0de-a4b7-4ef1-b84e-4a563b248be3 b0638bf7-56a2-4ad7-8d62-11bad97cb2d6 2c9344ad-726e-400a-80fc-cb8f98371099
-report:      ; $(PY) python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw $(foreach r,$(REPORT_RUNS),--run-id $(r)) --cov-file docs/report_tables/raw/coverage_combined.txt --out docs/report_tables
+report:      ; $(PY) python scripts/export_ui_experiments.py && $(PY) python scripts/export_report_tables.py --db --results-dir docs/report_tables/raw $(foreach r,$(REPORT_RUNS),--run-id $(r)) --cov-file docs/report_tables/raw/coverage_combined.txt --out docs/report_tables
 # MLP-автокодувальник: ROC-AUC на ін'єкціях (docs/figures/quality_mlp_rocauc.md) + артефакт data/anomaly_mlp_$(SYMBOL).json
 anomaly:     ; $(PY) python scripts/train_anomaly_mlp.py --symbol $(SYMBOL)
 # користувачів API створює людина: пароль вводиться інтерактивно (getpass), ніколи не в argv [ЛЮДИНА]
@@ -42,6 +42,8 @@ users:
 ui:          ; cd ui && npm install && npm run dev
 ui-build:    ; cd ui && npm install && npm run build
 ui-check:    ; cd ui && npm run typecheck
+# зведення результатів фази 7 для вкладки «Експеримент» (walk-forward, Парето, чутливість)
+ui-data:     ; $(PY) python scripts/export_ui_experiments.py
 # 14 екранограм для звіту: потрібні піднятий API, Vite і (для LiveView) воркер реплею.
 # Креденшли лише з оточення: make screens UI_LOGIN=… UI_PASSWORD=…
 UI_LOGIN ?=

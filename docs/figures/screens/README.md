@@ -19,3 +19,6 @@
 | 12_live_fis_risk.png | LiveView — вихід нечіткого ядра, режим ризику і потік подій |
 | 13_backtest_equity.png | BacktestView — крива капіталу з просадкою і смугами режимів |
 | 14_backtest_passport.png | BacktestView — паспорт відтворюваності прогону |
+| 15_exp_walkforward.png | BacktestView — walk-forward: 6 фолдів парними стовпчиками IS vs OOS |
+| 16_exp_pareto.png | BacktestView — Парето-фронт сітки з обраною робочою точкою |
+| 17_exp_sensitivity.png | BacktestView — чутливість до 8 параметрів («торнадо») |

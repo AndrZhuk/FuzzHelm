@@ -8,7 +8,7 @@ import { useI18n } from 'vue-i18n'
 import { useMarket } from '@/stores/market'
 import { useRisk } from '@/stores/risk'
 import { useAuth } from '@/stores/auth'
-import CandleChart from '@/components/CandleChart.vue'
+import CandleChart, { type TradeMarker } from '@/components/CandleChart.vue'
 import DetectorGauge from '@/components/DetectorGauge.vue'
 import RiskStatePanel from '@/components/RiskStatePanel.vue'
 import RejectionLog from '@/components/RejectionLog.vue'
@@ -36,6 +36,15 @@ const lastDecision = ref<{
 } | null>(null)
 
 const notice = ref<string | null>(null)
+
+/**
+ * Маркери входів/виходів і лінія ліквідації (§8.2).
+ * Виконання приходять подією `fill` з потоку — окремого маршруту «ордери прогону» в API немає,
+ * тож на екрані видно ті угоди, що сталися при відкритій сторінці. Ціну ліквідації беремо з
+ * того самого `/explain`, що живить розкладку детекторів.
+ */
+const fills = ref<TradeMarker[]>([])
+const liquidation = ref<number | null>(null)
 
 function summarise(kind: string, data: unknown): string {
   const d = data as Record<string, unknown>
@@ -75,6 +84,8 @@ async function hydrate(id: number): Promise<void> {
       detectors: ex.detector_outputs ?? [],
       ts_ns: ex.open_time_ns, id: ex.decision_id,
     }
+    const liq = Number(ex.prices?.liq)
+    liquidation.value = Number.isFinite(liq) && liq > 0 ? liq : null
   } catch { /* рішення ще не закомічене — наступна подія принесе свіже */ }
   finally { inflight = false }
 }
@@ -94,6 +105,20 @@ function onEvent(kind: string, data: unknown): void {
       ts_ns: Number(d.open_time_ns ?? 0), id: Number.isFinite(id) ? id : null,
     }
     if (Number.isFinite(id)) void hydrate(id)
+  }
+  if (kind === 'fill') {
+    const side = Number(d.side) >= 0 ? 1 : -1
+    const price = Number(d.price)
+    const qty = Math.abs(Number(d.qty))
+    if (Number.isFinite(price) && price > 0) {
+      fills.value.push({
+        ts_ns: Number(d.ts_ns), price, side,
+        // Вхід збільшує позицію, вихід — зменшує; напрям угоди вже в `side`.
+        kind: 'entry',
+        label: `${side > 0 ? 'купівля' : 'продаж'} ${num(qty, 4)} @ ${num(price, 1)}`,
+      })
+      if (fills.value.length > 60) fills.value.splice(0, fills.value.length - 60)
+    }
   }
   if (kind === 'candle') void market.loadCandles()
   if (kind === 'risk' || kind === 'rejection') void Promise.all([risk.loadState(), risk.loadEvents()])
@@ -142,9 +167,17 @@ onBeforeUnmount(() => handle?.close())
         <section class="section" data-shot="live-market">
           <div class="section-head">
             <h2>{{ t('live.candles') }}</h2>
-            <span class="section-note num">{{ market.symbol }} · {{ market.tf }}</span>
+            <span class="section-note num">
+              {{ market.symbol }} · {{ market.tf }}
+              <template v-if="fills.length > 0"> · угод у потоці: {{ fills.length }}</template>
+            </span>
           </div>
-          <CandleChart :candles="market.candles" :height="340" />
+          <CandleChart
+            :candles="market.candles"
+            :markers="fills"
+            :liquidation="liquidation"
+            :height="340"
+          />
           <p v-if="market.error" class="small err">{{ market.error }}</p>
         </section>
 

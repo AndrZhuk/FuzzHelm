@@ -11,6 +11,10 @@ import { useAuth } from '@/stores/auth'
 import EquityCurve from '@/components/EquityCurve.vue'
 import MetricsTable from '@/components/MetricsTable.vue'
 import RulesEditor from '@/components/RulesEditor.vue'
+import WalkForwardChart from '@/components/WalkForwardChart.vue'
+import ParetoFront from '@/components/ParetoFront.vue'
+import SensitivityTable from '@/components/SensitivityTable.vue'
+import { experiments } from '@/lib/experiments'
 import { num, shortHash, tsFull } from '@/lib/format'
 import MEMBERSHIP_YAML from '../../../config/membership.yaml?raw'
 import RULES_YAML from '../../../config/rules_mamdani.yaml?raw'
@@ -21,7 +25,18 @@ const auth = useAuth()
 const { t } = useI18n()
 
 const notice = ref<{ ok: boolean; text: string } | null>(null)
-const tab = ref<'results' | 'editor'>('results')
+const tab = ref<'results' | 'experiment' | 'editor'>('results')
+
+/**
+ * Числа експерименту фази 7 (walk-forward, Парето, чутливість) беруться з того самого
+ * артефакту, з якого зроблено таблиці звіту (`scripts/export_ui_experiments.py`), тож панель
+ * і звіт не можуть розійтися. Символ підбираємо під вибраний прогін.
+ */
+const expSym = ref<string>(experiments.symbols[0] ?? 'BTCUSDT')
+const wf = computed(() => experiments.walkforward[expSym.value] ?? null)
+const pareto = computed(() => experiments.pareto[expSym.value] ?? null)
+const sens = computed(() => experiments.sensitivity[expSym.value] ?? null)
+const wfMetric = ref<'sharpe' | 'max_drawdown' | 'total_return'>('sharpe')
 
 /**
  * Редактор стартує з робочих config/*.yaml, імпортованих як текст. Копії бази правил у коді
@@ -98,6 +113,10 @@ onMounted(async () => {
           class="tab" :class="{ 'is-on': tab === 'results' }" role="tab"
           :aria-selected="tab === 'results'" @click="tab = 'results'"
         >{{ t('backtest.runs') }}</button>
+        <button
+          class="tab" :class="{ 'is-on': tab === 'experiment' }" role="tab"
+          :aria-selected="tab === 'experiment'" @click="tab = 'experiment'"
+        >Експеримент</button>
         <button
           class="tab" :class="{ 'is-on': tab === 'editor' }" role="tab"
           :aria-selected="tab === 'editor'" @click="tab = 'editor'"
@@ -203,6 +222,65 @@ onMounted(async () => {
       </div>
     </template>
 
+    <!-- ------- Експеримент фази 7 ------- -->
+    <template v-else-if="tab === 'experiment'">
+      <div class="exp-head">
+        <p class="small muted">
+          Результати обчислювального експерименту: walk-forward з embargo, Парето-фронт сітки і
+          аналіз чутливості. Це ті самі числа, що в таблицях звіту — спільне джерело
+          <code>docs/report_tables/raw/exp_search/</code>.
+        </p>
+        <div class="field exp-sym">
+          <label for="exp-symbol">Інструмент</label>
+          <select id="exp-symbol" v-model="expSym" class="select">
+            <option v-for="sym in experiments.symbols" :key="sym" :value="sym">{{ sym }}</option>
+          </select>
+        </div>
+      </div>
+
+      <section class="section section--first" data-shot="exp-walkforward">
+        <div class="section-head">
+          <h2>Walk-forward: IS проти OOS</h2>
+          <span class="section-note">
+            <span class="row">
+              <label v-for="m in (['sharpe', 'max_drawdown', 'total_return'] as const)" :key="m" class="pick">
+                <input v-model="wfMetric" type="radio" :value="m">
+                {{ m === 'sharpe' ? 'Шарп' : m === 'max_drawdown' ? 'просадка' : 'дохідність' }}
+              </label>
+            </span>
+          </span>
+        </div>
+        <WalkForwardChart v-if="wf" :data="wf" :metric="wfMetric" />
+        <p v-else class="muted small">Для {{ expSym }} результатів walk-forward немає.</p>
+      </section>
+
+      <section class="section" data-shot="exp-pareto">
+        <div class="section-head">
+          <h2>Парето-фронт сітки</h2>
+          <span class="section-note">{{ pareto ? `${pareto.cells.length} клітинок` : '' }}</span>
+        </div>
+        <!-- Правило вибору — довгий нормативний текст, тож він абзацом, а не приміткою в шапці. -->
+        <p v-if="pareto?.selection_rule_uk" class="small muted rule-text">{{ pareto.selection_rule_uk }}</p>
+        <ParetoFront v-if="pareto" :data="pareto" />
+        <p v-else class="muted small">Для {{ expSym }} сітки немає.</p>
+      </section>
+
+      <section class="section" data-shot="exp-sensitivity">
+        <div class="section-head">
+          <h2>Чутливість до параметрів</h2>
+          <span class="section-note">ціль: {{ sens?.target ?? '—' }}</span>
+        </div>
+        <SensitivityTable v-if="sens" :data="sens" />
+        <p v-else class="muted small">Для {{ expSym }} аналізу чутливості немає.</p>
+      </section>
+
+      <p class="micro muted prov" v-if="wf?.provenance?.git_sha">
+        Провенанс: git_sha <code>{{ shortHash(wf.provenance.git_sha, 12) }}</code>,
+        dataset_hash <code>{{ shortHash(wf.provenance.dataset_hash, 12) }}</code>,
+        дерево {{ wf.provenance.git_dirty ? 'брудне' : 'чисте' }}.
+      </p>
+    </template>
+
     <!-- ------- Редактор правил ------- -->
     <template v-else>
       <section class="section section--first" data-shot="backtest-editor">
@@ -288,7 +366,21 @@ onMounted(async () => {
 .run-id { font-size: var(--t-small); font-weight: 600; }
 .run-meta { display: flex; align-items: center; gap: var(--s2); }
 
+.rule-text { max-width: 86ch; margin-bottom: var(--s4); line-height: 1.5; }
+.exp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s6); flex-wrap: wrap; margin-bottom: var(--s6); }
+.exp-head p { max-width: 74ch; }
+.exp-sym { min-width: 160px; }
+.pick { display: inline-flex; align-items: center; gap: var(--s1); font-size: var(--t-small); color: var(--ink-soft); }
+.prov { margin-top: var(--s8); }
+
 .passport { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s8); }
-@media (max-width: 900px) { .passport { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .rule-text { max-width: 86ch; margin-bottom: var(--s4); line-height: 1.5; }
+.exp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s6); flex-wrap: wrap; margin-bottom: var(--s6); }
+.exp-head p { max-width: 74ch; }
+.exp-sym { min-width: 160px; }
+.pick { display: inline-flex; align-items: center; gap: var(--s1); font-size: var(--t-small); color: var(--ink-soft); }
+.prov { margin-top: var(--s8); }
+
+.passport { grid-template-columns: minmax(0, 1fr); } }
 .passport dd { font-size: var(--t-micro); }
 </style>

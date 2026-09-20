@@ -39,6 +39,9 @@ const SHOTS = [
   ['12_live_fis_risk',       '/live',                null,                             'LiveView — вихід нечіткого ядра, режим ризику і потік подій'],
   ['13_backtest_equity',     '/backtest',            '[data-shot=backtest-equity]',    'BacktestView — крива капіталу з просадкою і смугами режимів'],
   ['14_backtest_passport',   '/backtest',            '[data-shot=backtest-passport]',  'BacktestView — паспорт відтворюваності прогону'],
+  ['15_exp_walkforward',     '/backtest#exp',        '[data-shot=exp-walkforward]',    'BacktestView — walk-forward: 6 фолдів парними стовпчиками IS vs OOS'],
+  ['16_exp_pareto',          '/backtest#exp',        '[data-shot=exp-pareto]',         'BacktestView — Парето-фронт сітки з обраною робочою точкою'],
+  ['17_exp_sensitivity',     '/backtest#exp',        '[data-shot=exp-sensitivity]',    'BacktestView — чутливість до 8 параметрів («торнадо»)'],
 ]
 
 /** Чекаємо, доки всі полотна ECharts у кадрі намальовані (інакше в кадр потрапить порожнеча). */
@@ -81,7 +84,7 @@ let current = null
 
 for (const [name, route, selector, caption] of SHOTS) {
   if (route !== current) {
-    await page.goto(`${UI}${route}`, { waitUntil: 'domcontentloaded' })
+    await page.goto(`${UI}${route.replace('#exp', '')}`, { waitUntil: 'domcontentloaded' })
     current = route
     if (route === '/live') {
       // LiveView наповнюється з потоку подій: чекаємо, доки прийде перше рішення і
@@ -92,6 +95,11 @@ for (const [name, route, selector, caption] of SHOTS) {
       ).catch(() => console.warn('  ! рішення з потоку не дочекались — запустіть воркер реплею'))
       await page.waitForTimeout(1500)
     } else {
+      await page.waitForTimeout(1800)
+    }
+    // Вкладка «Експеримент» — окремий стан сторінки, а не окремий маршрут.
+    if (route.endsWith('#exp')) {
+      await page.getByRole('tab', { name: 'Експеримент' }).click()
       await page.waitForTimeout(1800)
     }
   }
