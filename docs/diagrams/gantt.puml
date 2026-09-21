@@ -1,8 +1,8 @@
 @startgantt
 ' Календарний план-графік виконання робіт (плановий) — звіт §1.6.
 ' Найменування: docs/diagrams/gantt.puml
-' Призначення: планові тривалості й залежності пакетів робіт; фактичні дати комітів —
-'     у docs/journal.md і в таблиці «Фактична хронологія» документа docs/teo/cost_estimate.md.
+' Призначення: планові тривалості й залежності пакетів робіт; фактичні дати —
+'     в історії комітів репозиторію.
 ' Автор: Андрій Жук, 2026.
 printscale daily
 skinparam dpi 200
@@ -11,36 +11,36 @@ Project starts 2026-09-15
 [Аналіз і огляд аналогів] lasts 1 day
 [ТЗ, архітектура, контракти] lasts 1 day
 [Інжест REST і WebSocket] lasts 1 day
-[Якість даних і детектор аномалій] lasts 1 day
+[Нормалізація і якість даних] lasts 1 day
 [Детектори патернів і консенсус] lasts 1 day
-[Нечітке ядро і калібрування МФ] lasts 2 days
+[Нечітке ядро і функції належності] lasts 2 days
 [Сайзинг і ризик-контур] lasts 2 days
 [Симулятор виконання і бектест] lasts 1 day
-[Обчислювальний експеримент] lasts 1 day
+[Прогони бектесту і аналіз] lasts 1 day
 [API, безпека, сервісність] lasts 1 day
 [Веб-панель оператора] lasts 1 day
 [Документування і звіт] lasts 2 days
 
 [ТЗ, архітектура, контракти] starts at [Аналіз і огляд аналогів]'s end
 [Інжест REST і WebSocket] starts at [ТЗ, архітектура, контракти]'s end
-[Якість даних і детектор аномалій] starts at [Інжест REST і WebSocket]'s end
+[Нормалізація і якість даних] starts at [Інжест REST і WebSocket]'s end
 [Детектори патернів і консенсус] starts at [Інжест REST і WebSocket]'s end
-[Нечітке ядро і калібрування МФ] starts at [Детектори патернів і консенсус]'s end
-[Сайзинг і ризик-контур] starts at [Нечітке ядро і калібрування МФ]'s end
+[Нечітке ядро і функції належності] starts at [Детектори патернів і консенсус]'s end
+[Сайзинг і ризик-контур] starts at [Нечітке ядро і функції належності]'s end
 [Симулятор виконання і бектест] starts at [Сайзинг і ризик-контур]'s end
-[Обчислювальний експеримент] starts at [Симулятор виконання і бектест]'s end
+[Прогони бектесту і аналіз] starts at [Симулятор виконання і бектест]'s end
 [API, безпека, сервісність] starts at [Симулятор виконання і бектест]'s end
 [Веб-панель оператора] starts at [API, безпека, сервісність]'s end
-[Документування і звіт] starts at [Обчислювальний експеримент]'s end
+[Документування і звіт] starts at [Прогони бектесту і аналіз]'s end
 
 ' Критичний шлях позначено кольором
 [Аналіз і огляд аналогів] is colored in Crimson/LightCoral
 [ТЗ, архітектура, контракти] is colored in Crimson/LightCoral
 [Інжест REST і WebSocket] is colored in Crimson/LightCoral
 [Детектори патернів і консенсус] is colored in Crimson/LightCoral
-[Нечітке ядро і калібрування МФ] is colored in Crimson/LightCoral
+[Нечітке ядро і функції належності] is colored in Crimson/LightCoral
 [Сайзинг і ризик-контур] is colored in Crimson/LightCoral
 [Симулятор виконання і бектест] is colored in Crimson/LightCoral
-[Обчислювальний експеримент] is colored in Crimson/LightCoral
+[Прогони бектесту і аналіз] is colored in Crimson/LightCoral
 [Документування і звіт] is colored in Crimson/LightCoral
 @endgantt

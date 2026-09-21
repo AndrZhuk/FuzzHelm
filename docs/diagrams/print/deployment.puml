@@ -16,7 +16,7 @@ node "Хост розробника (Docker Compose)" {
   node "worker\ntrading_worker" as WK
   database "db\npostgres:16-alpine\n:5442" as DB
 }
-cloud "Binance testnet /\nпублічні read-only" as EX
+cloud "Binance\n(публічні дані,\nлише читання)" as EX
 BR --> UI : HTTP
 UI --> API : /api (проксі)
 API --> DB : SQL, LISTEN

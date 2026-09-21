@@ -12,7 +12,6 @@ skinparam ranksep 30
 skinparam nodesep 25
 top to bottom direction
 cloud "Binance\nREST / WS" as BIN
-cloud "Kraken\nREST" as KRA
 database "PostgreSQL 16" as PG
 component "ingest" as ING
 component "quality" as QUA
@@ -26,7 +25,6 @@ component "api" as API
 component "workers" as WRK
 component "ui (Vue 3)" as UI
 BIN --> ING
-KRA --> ING
 ING --> QUA
 QUA --> STO
 STO --> PG
