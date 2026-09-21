@@ -1,9 +1,9 @@
-"""Перший повний прогін на фіксованому 45-денному наборі з БД → паспорт `run` DONE + звіт і рисунок (фаза 6).
+"""Повний бектест на фіксованому 45-денному наборі з БД → паспорт `run` DONE + звіт і рисунок.
 
 Найменування: run_backtest.py
-Призначення: gate фази 6 брифінгу — «у БД є run зі статусом DONE і повним паспортом»; артефакти:
-    docs/figures/first_run_metrics.md (паспорт, 17 метрик + PSR, лічильники, шлях автомата ризику, час)
-    і docs/figures/first_run_equity.png (крива капіталу, просадка, смуги режимів ризику).
+Призначення: прогін зі статусом DONE і повним паспортом у БД; артефакти:
+    docs/figures/metrics_<SYMBOL>.md (паспорт, 17 метрик, лічильники, шлях автомата ризику, час)
+    і docs/figures/equity_<SYMBOL>.png (крива капіталу, просадка, смуги режимів ризику).
 Автор: Андрій Жук, 2026.
 
 Запуск:  uv run python scripts/run_backtest.py [--symbol BTCUSDT] [--profile backtest] [--database-url URL]
@@ -291,11 +291,11 @@ def report_md(r: dict[str, Any], figure: Path) -> str:
         and run.journal_head_hash.hex() == r["journal_head_db"]
     )
     lines = [
-        f"# Перший повний прогін: {r['symbol']}, 45 днів, профіль `{r['profile']}`",
+        f"# Бектест: {r['symbol']}, 45 днів, профіль `{r['profile']}`",
         "",
         "Згенеровано `scripts/run_backtest.py` з рядків PostgreSQL (таблиці `run`, `run_metric`,",
         "`equity_point`, `risk_event`, `event_journal`). Стратегія може бути збитковою: тема роботи — метод",
-        "і перевірюваний стенд, а не прибутковість (брифінг §0.2).",
+        "і перевірюваний стенд, а не прибутковість.",
         "",
         "## Паспорт прогону",
         "",
@@ -337,13 +337,11 @@ def report_md(r: dict[str, Any], figure: Path) -> str:
     lines += [
         "## Що записано",
         "",
-        f"* `decision`: {r['n_decisions']} (профіль `backtest`: повне трасування лише рішень із заявками, "
-        "ENG-10);",
+        f"* `decision`: {r['n_decisions']} (профіль `backtest`: повне трасування лише рішень із заявками);",
         f"* `sim_order`: {r['n_orders']}, кожен з `decision_id` (NOT NULL + FK); "
         f"`position`: {r['n_positions']} "
         f"({', '.join(f'{k}: {v}' for k, v in sorted(r['exits'].items(), key=lambda kv: str(kv[0])))});",
-        f"* `risk_event`: {r['n_risk']} (з них VETO: {len(r['vetoes'])}); `equity_point`: {len(r['curve'])} "
-        "(з VaR₉₅/CVaR₉₅ у USDT на вікні 500 бар-дохідностей).",
+        f"* `risk_event`: {r['n_risk']} (з них VETO: {len(r['vetoes'])}); `equity_point`: {len(r['curve'])}.",
         "",
         "## Шлях автомата ризику",
         "",
@@ -453,7 +451,7 @@ def plot(r: dict[str, Any], out: Path) -> None:
     ax1.plot(t, eq, color=series, lw=1.4)
     ax1.set_ylabel("Капітал, USDT")
     ax1.set_title(
-        f"{r['symbol']}: крива капіталу першого повного прогону (run {str(r['run'].id)[:8]}…)",
+        f"{r['symbol']}: крива капіталу за 45 днів (run {str(r['run'].id)[:8]}…)",
         loc="left",
         color=ink,
         fontsize=11,
@@ -485,16 +483,18 @@ def plot(r: dict[str, Any], out: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="First full persisted backtest run on the 45-day DB window.")
+    ap = argparse.ArgumentParser(description="Full persisted backtest run on the 45-day DB window.")
     ap.add_argument("--symbol", default="BTCUSDT", choices=("BTCUSDT", "ETHUSDT"))
     ap.add_argument("--profile", default="backtest")
     ap.add_argument("--database-url", default=None)
-    ap.add_argument("--report", type=Path, default=FIG_DIR / "first_run_metrics.md")
-    ap.add_argument("--figure", type=Path, default=FIG_DIR / "first_run_equity.png")
+    ap.add_argument("--report", type=Path, default=None, help="default: docs/figures/metrics_<SYMBOL>.md")
+    ap.add_argument("--figure", type=Path, default=None, help="default: docs/figures/equity_<SYMBOL>.png")
     ap.add_argument("--no-verify", dest="verify", action="store_false",
                     help="when an identical run is already stored, do not re-run the engine to check "
                          "that the current code reproduces its hashes")
     args = ap.parse_args(argv)
+    args.report = args.report or FIG_DIR / f"metrics_{args.symbol}.md"
+    args.figure = args.figure or FIG_DIR / f"equity_{args.symbol}.png"
     r = asyncio.run(run(args))
     run_row = r["run"]
     plot(r, args.figure)
