@@ -1,7 +1,7 @@
-# REST-фікстури (сирі байти бірж, записано 2026-09-18)
+# REST-фікстури (сирі байти біржі, записано 2026-09-18)
 
 Записано один раз скриптом `capture_rest_fixtures.py` з публічних read-only хостів
-(`fapi.binance.com`, `api.kraken.com`); тести мережу не чіпають — respx-моки віддають ці байти.
+(`fapi.binance.com`); тести мережу не чіпають — respx-моки віддають ці байти.
 Метадані запису (часи, сторінки, виміряні ваги) — `capture_meta.json`. Автор: Андрій Жук, 2026.
 
 | Файл | Джерело | Вміст |
@@ -11,6 +11,4 @@
 | `premium_index.json` | `GET /fapi/v1/premiumIndex?symbol=BTCUSDT` | без змін |
 | `server_time.json` | `GET /fapi/v1/time` | без змін (локальні часи відправлення/отримання — у `capture_meta.json`) |
 | `binance_error_invalid_symbol.json` | `GET /fapi/v1/premiumIndex?symbol=NOSUCHSYMBOL` | HTTP 400, `{"code":-1121,"msg":"Invalid symbol."}` |
-| `kraken_ohlc.json` | `GET /0/public/OHLC?pair=XBTUSD&interval=1` | без змін: 721 бар (останній — незакритий), `last` |
-| `kraken_asset_pairs.json` | `GET /0/public/AssetPairs?pair=XBTUSD` | без змін |
 | `capture_meta.json` | — | сторінки klines, `kline_weight_measurements` (вага за приростом `X-MBX-USED-WEIGHT-1M`) |

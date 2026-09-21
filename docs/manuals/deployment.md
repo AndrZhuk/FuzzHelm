@@ -1,153 +1,59 @@
 # Інструкція з розгортання FuzzHelm
 
-Автор: Андрій Жук, 2026. Цільова машина — робоча станція розробника (macOS/Linux) з Docker і `uv`. Репозиторій —
-**не в iCloud** (`~/dev/fuzzhelm`, §0.3 брифінгу): синхронізація псує volume PostgreSQL.
+Автор: Андрій Жук, 2026. Цільова машина — робоча станція з Docker, [uv](https://docs.astral.sh/uv/) і Node.js 20+.
+Репозиторій краще тримати поза iCloud/Dropbox (напр. `~/dev/fuzzhelm`): синхронізація псує дані PostgreSQL.
 
 ## 1. Склад
 
-| сервіс (`docker-compose.yml`, проєкт `fuzzhelm`) | порт хоста | що робить |
+| сервіс (`docker-compose.yml`) | порт хоста | що робить |
 |---|---|---|
-| `db` — PostgreSQL 16 (alpine), volume `pgdata` | **5442** → 5432 | робоча БД `fuzzhelm` (користувач/пароль `fuzzhelm` — лише для локального стенда) |
-| `api` — `uvicorn fuzzhelm.api.main:app` | 8000 | REST + SSE, `/docs` |
-| `worker` — `python -m fuzzhelm.workers.trading_worker --profile replay` | — | один реплей записаної сесії з темпом профілю (×30) і вихід |
-| `ui` — Vite dev-сервер (`node:22-alpine`, том `ui_node_modules`) | **5173** | Vue-панель: три екрани, проксі `/api` → `api:8000` (`FUZZHELM_API`) |
+| `db` — PostgreSQL 16 | **5442** → 5432 | робоча база `fuzzhelm` (користувач і пароль `fuzzhelm` — лише для локального стенда) |
+| `api` — `uvicorn fuzzhelm.api.main:app` | 8000 | REST API + потік подій (SSE), документація — `/docs` |
+| `worker` — `python -m fuzzhelm.workers.trading_worker --profile replay` | — | реплей записаної сесії через торговий цикл |
+| `ui` — Vite dev-сервер | **5173** | веб-панель, проксі `/api` → `api:8000` |
 
-Окремо — **тестова** БД (`docker-compose.test.yml`, проєкт `fuzzhelm-test`): PostgreSQL 16 на **5443**, дані в tmpfs
-(нічого не зберігається). Порти 5432/5433 не використовуються — вони зайняті іншими проєктами на машині розробника.
+Окремо — **тестова** база (`docker-compose.test.yml`): PostgreSQL 16 на порту **5443**, дані в пам'яті.
 
 ## 2. Змінні оточення
 
-`.env` (у `.gitignore`) створює людина: `cp .env.example .env` і заповнити **[ЛЮДИНА]** (агент секретів не вводить).
-Без `.env` стенд працює на значеннях за замовчуванням (`env_file: required: false`).
+`cp .env.example .env`; без `.env` стенд працює на значеннях за замовчуванням.
 
 | змінна | за замовчуванням | призначення |
 |---|---|---|
-| `FUZZHELM_DATABASE_URL` | `postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5442/fuzzhelm` | БД (у контейнерах compose підставляє `db:5432`) |
-| `FUZZHELM_JWT_SECRET` | `dev-only-change-me` (API попереджає в журналі) | підпис JWT HS256 — **змінити** поза локальним стендом |
-| `FUZZHELM_VENUE_BASE_URL` | `https://testnet.binancefuture.com` | лише testnet-хости (інакше `MainnetHostRejected` на старті) |
-| `BINANCE_TESTNET_KEY/SECRET` | — | лише для `scripts/testnet_one_order.py` **[ЛЮДИНА]** |
-| `TELEGRAM_BOT_TOKEN/CHAT_ID` | — | нотифікації; без них — no-op |
+| `FUZZHELM_DATABASE_URL` | `postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5442/fuzzhelm` | адреса бази |
+| `FUZZHELM_JWT_SECRET` | `dev-only-change-me` | ключ підпису токенів входу — **змінити** поза локальним стендом |
+| `FUZZHELM_VENUE_BASE_URL` | `https://testnet.binancefuture.com` | захисна межа: основну мережу біржі вказати неможливо |
 | `FUZZHELM_SEED` | 20260918 | seed відтворюваності |
-| `FUZZHELM_LOG` | INFO | рівень журналу воркерів |
 
 ## 3. Перший запуск
 
 ```bash
-docker compose up -d db                                         # або: make up (усі сервіси, з білдом образу)
-docker compose ps                                              # db — healthy
-uv sync                                                        # залежності з uv.lock
-uv run alembic upgrade head                                    # ревізії 0001…0004 (роль fuzzhelm_app, REVOKE журналу)
-uv run fuzzhelm backfill --days 45 && uv run fuzzhelm fetch-funding
-uv run fuzzhelm db-stats
-uv run uvicorn fuzzhelm.api.main:app --port 8000               # або сервіс api з compose
-uv run python -m fuzzhelm.workers.trading_worker --profile replay
-```
-Поточна ревізія робочої БД (2026-09-19): `0004_decision_trace_extras` (`docker exec fuzzhelm-db-1 psql -U fuzzhelm -d
-fuzzhelm -Atc "select version_num from alembic_version"`). Застосунок і воркери працюють роллю `fuzzhelm_app`
-(`make_engine(role=…)`): UPDATE/DELETE журналу подій і аудиту відхиляє СУБД. Для продакшн-розгортання окрема
-LOGIN-роль `IN ROLE fuzzhelm_app` створюється адміністратором **[ЛЮДИНА]** (`docs/deviations.d/storage.md` ST-02).
-
-**Гаряча заміна лімітів у контейнерах.** PUT /risk/limits атомарно переписує `config/risk_limits.yaml` (tmp →
-`os.replace` у тій самій теці) і будить воркер каналом `fuzzhelm_control`; воркер перечитує `config/risk_limits.yaml`.
-З хвилі 3 обидва контейнери бачать **один** файл — bind-mount теки `./config` хоста (PLAT-02):
-```yaml
-  api:    {volumes: ["./config:/app/config", "./data:/app/data:ro"]}   # api пише ліміти; data — фандинг для POST /backtests
-  worker: {volumes: ["./config:/app/config:ro", "./data:/app/data:ro"]} # воркер лише читає; data — моделі аномалій (UI-07)
-```
-Наслідок: PUT /risk/limits у контейнері змінює `config/risk_limits.yaml` робочого дерева хоста (це той самий файл, що
-в git) — так і задумано: зміна видна воркеру, `git diff` і `audit_log`.
-
-## 3a. Збирання образів і запуск у контейнерах (перевірено 2026-09-19)
-
-Образи `api`/`worker` будуються з `Dockerfile` (`uv sync --frozen --no-dev`; у образ копіюються `src`, `config`,
-`alembic`, `fixtures`); `.dockerignore` не пускає в контекст `.env`, `.venv`, `.git`, тести й документацію.
-```bash
-docker compose build api worker                 # 85 с з порожнім кешем; контекст 15.57 МБ; образи по 852 МБ
-docker compose up -d --build db api worker      # db не перестворюється: хеш конфігурації db не змінився
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/docs      # 200
-docker compose logs worker                      # JSON-підсумок реплею
-docker compose stop api worker                  # db лишається запущеною
-```
-Фактичний результат (2026-09-19, 12:45 UTC): `db` — той самий контейнер `fuzzhelm-db-1` («Up 17 hours», volume
-`fuzzhelm_pgdata` не чіпався; `docker compose config --hash db` = мітка контейнера `db19a781…`). `api`: `/healthz` 200,
-`/docs` 200, `/openapi.json` 200 (OpenAPI 3.1.0, 22 шляхи, у `/risk/events` — `until_ns`, `cursor`, відповідь
-`RiskEventPageOut`), захищений маршрут без токена — 401; у журналі старту — попередження про типовий
-`FUZZHELM_JWT_SECRET` (`.env` на стенді немає). `worker` (профіль replay, ×30): прогрів 523 барами з БД, 9 111 кадрів,
-45 барів, 2 виконання, 1 закрита угода, режим NORMAL, капітал 10000 → 9992.72088640, `status: DONE`, вихід з кодом 0
-за 93 с (12:45:47 → 12:47:20 UTC); `equity_hash d0f45aa3…` збігся з реплеєм `c1dbbdf6…`, запущеним раніше з хоста
-(відтворюваність хост ↔ контейнер). Спільний `config/`: sha256 `risk_limits.yaml` однаковий на хості й в обох
-контейнерах (`a5d212b57856aec9…`); в `api` тека `config` rw, `data` ro, у `worker` `config` ro (`touch` → «Read-only
-file system»). Після перевірки `docker compose stop api worker`; `db` працює далі.
-
-Обмеження перевірки: (1) наскрізно «PUT /risk/limits у контейнері → воркер перечитав» не проганялось — у робочій БД
-немає адміністратора (створює людина: `docker compose run --rm -it api fuzzhelm user add --login <логін> --role admin`
-або `uv run fuzzhelm user add …` з хоста). (2) У образі немає `.git`, тож SHA коміту передається під час збирання:
-`GIT_SHA=$(git rev-parse HEAD) docker compose build api worker` (build-arg → `FUZZHELM_GIT_SHA`;
-`backtest.manifest.read_git_state` бере його, коли git недоступний, і тоді `git_dirty = NULL` — стан дерева невідомий, а
-не «чистий»). Без build-arg прогони з контейнера мають `run.git_sha = NULL`. (2a) Моделі аномалій `data/anomaly_mlp_*.json`
-у образ не потрапляють (`.dockerignore` виключає `data/`), а сервіс `worker` не монтує `./data`: воркер у контейнері
-пише попередження «anomaly model … not found» і працює без MLP. Щоб увімкнути — змонтувати `./data:/app/data:ro` і в
-`worker` (як уже зроблено для `api`) або копіювати артефакти в образ (відкрите питання власнику Dockerfile/compose).
-(3) Якщо `docker compose build` зависає на `load metadata for docker.io/library/python:3.12-slim`, винен
-credential-helper Docker Desktop у неінтерактивній сесії (`docker-credential-desktop get` не повертається). Обхід для
-публічних образів — тимчасовий `DOCKER_CONFIG` без `credsStore`:
-```bash
-mkdir -p /tmp/dcfg && echo '{"auths": {}}' > /tmp/dcfg/config.json && ln -sfn ~/.docker/cli-plugins /tmp/dcfg/cli-plugins
-DOCKER_CONFIG=/tmp/dcfg DOCKER_HOST=unix://$HOME/.docker/run/docker.sock docker compose build api worker
+docker compose up -d db
+uv sync --frozen
+uv run alembic upgrade head                        # схема бази і роль fuzzhelm_app
+uv run fuzzhelm backfill --days 45                 # 45 днів хвилинних свічок з Binance
+uv run fuzzhelm fetch-funding                      # ставки фінансування
+uv run fuzzhelm user add --login admin --role admin   # пароль — з клавіатури
+uv run uvicorn fuzzhelm.api.main:app --port 8000
 ```
 
-## 4. Тести
+Застосунок і воркери працюють роллю `fuzzhelm_app`: змінити чи видалити записи журналу подій і журналу аудиту
+їй не дозволяє сама СУБД.
+
+## 4. Усе в контейнерах
 
 ```bash
-uv run pytest -q                                               # unit + property + e2e (офлайн, без мережі й sleep)
-docker compose -f docker-compose.test.yml up -d --wait         # тестова БД 5443
-FUZZHELM_TEST_DATABASE_URL=postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5443/fuzzhelm_test \
-  uv run pytest -q -m integration -p no:randomly
-docker compose -f docker-compose.test.yml down
+docker compose up -d --build                       # db, api, worker, ui
+docker compose logs -f worker                      # хід реплею
 ```
-Інтеграційні тести самі мігрують тестову БД і перед кожним тестом очищають таблиці; без БД — пропускаються (skip).
 
-**CI** — `.github/workflows/ci.yml` (GitHub Actions, `astral-sh/setup-uv`, Python 3.12, `uv sync --frozen`), 4 задачі:
-`lint` (ruff → mypy `--strict` на core/fuzzy/risk), після неї `test` (`pytest -q --cov`; поріг 80 % — з
-`[tool.coverage.report] fail_under`, звіт `coverage.xml` — артефакт задачі) та `integration` (сервіс `postgres:16` на
-5432 усередині раннера, `FUZZHELM_TEST_DATABASE_URL=…@localhost:5432/fuzzhelm_test`, `pytest -m integration`; якщо
-тести пропущено через недосяжну БД — задача червона, а не зелена), і незалежна `audit` (`pip-audit --skip-editable`
-над середовищем з `uv.lock`). Секретів CI не потребує. Локальні відповідники: `make lint`, `make cov`, `make test-int`,
-`make audit` (2026-09-19: `pip-audit` — «No known vulnerabilities found», сам проєкт пропущено як editable).
-Пуш у GitHub і підключення репозиторію — крок **[ЛЮДИНА]**.
+Теку `./config` контейнери бачать спільно: зміна лімітів ризику через API (`PUT /risk/limits`) одразу видна воркеру.
 
-## 5. Зупинка
-
-`docker compose stop` зупиняє сервіси, дані лишаються у volume `pgdata`; `docker compose down -v` **знищує** volume
-(перед цим — резервна копія, `docs/manuals/backup_runbook.md`).
-
-## 6. Fly.io (безкоштовний рівень) — **[ЛЮДИНА]**
-
-`fly.toml` у корені описує лише сервіс API (агент нічого не деплоїть; реєстрація і деплой — кроки людини, брифінг
-§12.9 п. 3). Що в ньому: `app = "fuzzhelm-change-me"` (плейсхолдер — імена глобально унікальні), регіон `waw`, збирання
-з `Dockerfile`, процес `uvicorn fuzzhelm.api.main:app --host 0.0.0.0 --port 8000` (у Dockerfile немає CMD), `internal_port
-= 8000`, HTTPS, перевірка здоров'я `GET /healthz` (liveness без БД), `release_command = "alembic upgrade head"` (міграції
-до перемикання трафіку), машина `shared-cpu-1x` / 256 МБ, що засинає без трафіку (`auto_stop_machines`). Імпорт застосунку
-API локально займає ≈ 96 МБ RSS (`/usr/bin/time -l`, 2026-09-19); для важких `POST /backtests` на 45 днях може
-знадобитись 512 МБ (умови безкоштовної квоти Fly.io перевіряє людина під час реєстрації).
+## 5. Тести і зупинка
 
 ```bash
-fly auth login                                                   # [ЛЮДИНА] акаунт Fly.io
-fly launch --no-deploy --copy-config --name <унікальне-ім'я>     # або вписати ім'я в fly.toml
-fly postgres create   # або будь-яка керована PostgreSQL 16 (Neon, Supabase…)
-fly secrets set FUZZHELM_DATABASE_URL='postgresql+asyncpg://…' FUZZHELM_JWT_SECRET="$(openssl rand -hex 32)"
-fly deploy --build-arg GIT_SHA=$(git rev-parse HEAD)
-curl -s https://<ім'я>.fly.dev/healthz                            # {"status":"ok",…}
-fly ssh console -C "fuzzhelm user add --login <логін> --role admin"   # перший адміністратор, пароль — з клавіатури
+make test         # офлайн-тести
+make test-int     # інтеграційні з тестовою базою (порт 5443)
+docker compose down            # зупинити; дані бази лишаються в томі pgdata
+docker compose down -v         # зупинити і стерти базу
 ```
-Обмеження: у образі немає `data/` (фандинг для `POST /backtests`, моделі аномалій) — див. §3a (2a); воркерів
-(інжест, торговий) `fly.toml` не описує — на безкоштовній машині працює лише API. Лише paper/testnet: `Settings` відхиляє
-будь-який mainnet-хост на старті.
-
-## 7. Цілі Makefile
-
-`make -n <ціль>` показує команду без виконання. Стенд: `up`, `down`, `migrate`, `backup`, `restore FILE=…`. Дані:
-`ingest` (45-денний добір), `record` (45-хв WS-сесія), `replay`, `verify`. Експерименти: `backtest`, `grid`, `walkforward`,
-`experiments` (увесь `scripts/run_all_experiments.sh`), `report` (`export_report_tables.py --db`), `anomaly` (MLP-модель
-і звіт ROC-AUC); параметри `SYMBOL=…` (типово BTCUSDT), `WORKERS=…` (типово 8). Якість: `test`, `test-int`, `cov`, `lint`,
-`audit`. `users` — лише підказка з командами створення користувачів (пароль вводить людина).
