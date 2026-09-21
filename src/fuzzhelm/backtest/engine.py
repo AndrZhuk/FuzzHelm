@@ -93,7 +93,6 @@ RECORD_MODES: tuple[str, ...] = ("all", "trades", "none")
 ENGINE_KINDS: tuple[str, ...] = ("mamdani",)
 COST_MODES: tuple[str, ...] = ("zero", "sqrt_impact", "full")
 COOLDOWN_POLICIES: tuple[str, ...] = tuple(p.value for p in CooldownPolicy)
-GRID_KEYS: tuple[str, ...] = ("n_atr", "chi", "u_enter", "rho_base", "lam")
 TREE_FILES: dict[str, str] = {
     "engine": "engine", "risk_limits": "risk_limits", "detectors": "detectors",
     "cost_model": "cost_model", "membership": "membership", "rules": "rules_mamdani",
@@ -300,7 +299,7 @@ class BacktestConfig:
         return cls(**kw)
 
     def with_params(self, **params: Any) -> BacktestConfig:
-        """Клітинка сітки backtest.grid (n_atr, chi, u_enter, rho_base, lam) або будь-які інші поля."""
+        """Та сама конфігурація з іншими значеннями полів (n_atr, chi, u_enter, rho_base, lam, …)."""
         return dataclasses.replace(self, **params)
 
     def to_dict(self) -> dict[str, Any]:

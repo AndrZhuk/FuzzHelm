@@ -1,20 +1,19 @@
-# Торговий цикл і рушій бектесту (брифінг §4.1, §5.8–5.16). Спільний для backtest / paper / replay / grid.
+# Торговий цикл і рушій бектесту. Спільний для backtest / paper / replay.
 # Параметри сайзера, гістерезису і лімітів — у risk_limits.yaml, детекторів — у detectors.yaml,
-# витрат — у cost_model.yaml; тут лише те, чого брифінг не задає (джерело кожного числа — у коментарі;
-# обґрунтування — docs/deviations.d/engine.md, ENG-xx).
+# витрат — у cost_model.yaml; тут — решта параметрів рушія (джерело кожного числа — у коментарі).
 version: 1
 engine: mamdani                # нечітке ядро Мамдані (єдине)
-cost_mode: full                # zero | sqrt_impact | full — перекриває mode з cost_model.yaml (§5.14)
+cost_mode: full                # zero | sqrt_impact | full — перекриває mode з cost_model.yaml
 initial_equity: "10000"        # USDT, як у профілях запуску
 take_profit:
-  multiple_of_stop: 2.0        # source: expert — TP = P_ref ± 2·Δ_stop, Δ_stop = χ·ATR (§6 має tp_price, але не правило; ENG-01)
+  multiple_of_stop: 2.0        # source: expert — TP = P_ref ± 2·Δ_stop, Δ_stop = χ·ATR
 sigma_base:
-  method: warmup_median        # σ_base для σ_ann/σ_base > 1.6 (§5.12) = медіана σ_ann на вікні прогріву (брифінг не визначає; ENG-02)
+  method: warmup_median        # σ_base для σ_ann/σ_base > 1.6 = медіана σ_ann на вікні прогріву
 warmup:
-  bars: null                   # null → max(FeaturePipeline.max_lookback, прогрів детекторів) = 523 при дефолтах (ENG-08)
+  bars: null                   # null → max(FeaturePipeline.max_lookback, прогрів детекторів) = 523 при дефолтах
 funding:
-  fallback_rate: 0.0001        # source: Binance — відсоткова складова 0.01 %/8 год (EXE-05), якщо ряду ставок немає
-  match_window_s: 60           # запис fundingTime (мс-«хвіст») зараховується моменту 00/08/16 у межах ±60 с (ENG-07)
-record_traces: trades          # all | trades | none — які рішення зберігають повне DecisionTrace (ENG-10)
+  fallback_rate: 0.0001        # source: Binance — відсоткова складова 0.01 %/8 год, якщо ряду ставок немає
+  match_window_s: 60           # запис fundingTime (мс-«хвіст») зараховується моменту 00/08/16 у межах ±60 с
+record_traces: trades          # all | trades | none — які рішення зберігають повне DecisionTrace
 check_invariants: false        # тотожність обліку на кожному барі (у тестах вмикається)
-invariant_tolerance: "1E-9"    # допуск тотожності (брифінг §10 K: 1e−9)
+invariant_tolerance: "1E-9"    # допуск тотожності обліку

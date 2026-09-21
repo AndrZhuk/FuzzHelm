@@ -1,8 +1,8 @@
-# Модель витрат виконання (брифінг §5.14).
+# Модель витрат виконання: половина спреду, вплив на ціну, комісія біржі, фінансування.
 mode: full              # zero | sqrt_impact | full (= sqrt_impact + fee + funding)
 k_s: 0.5
 taker_fee: 0.0004
 maker_fee: 0.0002
 default_spread_ticks: 1
 funding_hours_utc: [0, 8, 16]
-noise_bps: 0.5          # seeded шум ковзання (джерело залежності equity від seed; docs/deviations.md D-07)
+noise_bps: 0.5          # відтворюваний (за seed) шум проковзування

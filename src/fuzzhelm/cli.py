@@ -44,7 +44,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import orjson
 
-from fuzzhelm.config import FIXTURES_DIR, ROOT, Settings, get_settings, load_yaml
+from fuzzhelm.config import FIXTURES_DIR, ROOT, Settings, get_settings
 from fuzzhelm.core.enums import GapStatus, Role, Venue
 from fuzzhelm.core.money import dec_str
 from fuzzhelm.ingest.ratelimit import USED_WEIGHT_HEADER, klines_weight, request_weight
@@ -66,6 +66,7 @@ GAP_SESSION: Final = FIXTURES_DIR / "ws" / "pathological" / "gap.jsonl.gz"
 GAP_REFERENCE: Final = FIXTURES_DIR / "ws" / "sample_btcusdt_4m.jsonl.gz"
 DEFAULT_SYMBOLS: Final = ("BTCUSDT", "ETHUSDT")
 MAX_KLINES_LIMIT: Final = 1500
+FIRST_WINDOW_DAYS: Final = 15            # дні 1–15: на них підібрано параметри функцій належності
 TIME_SAMPLES: Final = 3                  # замірів /time для оцінки зсуву годинника (мін. RTT)
 
 # палітра рисунків (docs/figures — ті самі ролі, що в scripts/plot_membership.py; слоти 1–3 валідні all-pairs)
@@ -467,8 +468,7 @@ async def _record_backfill_gaps(*, factory: async_sessionmaker[AsyncSession],
 
 def window_document(window: DatasetWindow, stats: Mapping[str, Any]) -> dict[str, Any]:
     """Машиночитне вікно датасету (data/dataset_window.json): джерело fetch-funding і бектесту."""
-    wf = (load_yaml("profiles/backtest").get("walkforward") or {})
-    is_days = int(wf.get("is_days", 15))
+    is_days = FIRST_WINDOW_DAYS
     lo, hi = window.sub_window(1, is_days)
     ending = ("at the explicit --end-date" if stats.get("end_date_explicit")
               else "at the last full UTC day before the backfill run")
@@ -479,8 +479,7 @@ def window_document(window: DatasetWindow, stats: Mapping[str, Any]) -> dict[str
         "window": window.to_dict(),
         "first_is_window": {"days": [1, is_days], "start_ms": lo, "end_ms": hi, "start_utc": utc_iso(lo),
                             "end_utc_exclusive": utc_iso(hi),
-                            "note": "calibration uses ONLY this window: every walk-forward OOS window starts "
-                                    "after it (config/profiles/backtest.yaml, docs/deviations.md D-03)"},
+                            "note": "membership functions were fitted on this window only"},
         "symbols": {sym: {k: st[k] for k in ("symbol_canon", "rows_in_db_window", "first_open_utc",
                                               "last_open_utc", "dataset_hash", "dataset_hash_columns")}
                     for sym, st in stats["symbols"].items()},

@@ -1,4 +1,4 @@
-# Ліміти ризик-контуру і автомат станів (брифінг §5.8–5.12, §7).
+# Ліміти ризик-контуру, автомат станів, сайзер і гістерезис.
 limits:
   max_position_notional: {value: 0.30, unit: equity_fraction, action: shrink}
   max_gross_leverage:    {value: 3.0,  action: shrink}
@@ -18,8 +18,8 @@ state_machine:
   halt_enter: 0.12
   halt_daily_loss: 0.03
   kappa_mode: {NORMAL: 1.0, WARNING: 0.5, COOLDOWN: 0.25, HALTED: 0.0}
-  # COOLDOWN: scaled_entries — нові входи з κ_mode = 0.25, наявну позицію не збільшувати (рішення автора,
-  # ENG-14 / RF-01); reduce_only — буквально §5.12 (пласка книга в COOLDOWN поглинаюча, для звіту)
+  # COOLDOWN: scaled_entries — нові входи з κ_mode = 0.25, наявну позицію не збільшувати;
+  # reduce_only — лише закриття позицій (тоді стан COOLDOWN стає поглинаючим)
   cooldown_policy: scaled_entries
 sizing:
   ewma_lambda: 0.94

@@ -1,4 +1,4 @@
-# Ансамбль детекторів патернів (брифінг §5.2, §7). weight = ω_k у консенсусі.
+# Ансамбль детекторів патернів. weight = ω_k у консенсусі.
 detectors:
   ema_slope:       {weight: 1.0, n_ema: 21, horizon: 5, scale: 0.15, r2_points: 5}           # r2_points: expert
   donchian:        {weight: 1.0, n: 20, decay: 0.3}

@@ -389,7 +389,6 @@ def test_config_roundtrip_identity_and_profiles() -> None:
     assert trees["risk_limits"]["sizing"]["chi_atr"] == 1.5
     assert trees["risk_limits"]["hysteresis"]["enter"] == 0.3
     assert cfg.with_params(record_traces="all", check_invariants=True).config_hash == cfg.config_hash
-    assert BacktestConfig.from_profile("grid").record_traces == "none"
     assert BacktestConfig.from_profile("backtest").record_traces == "trades"
     with pytest.raises(ValueError):
         cfg.with_params(detectors=("no_such_detector",))
