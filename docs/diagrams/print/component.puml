@@ -10,7 +10,7 @@ skinparam component {
 }
 skinparam ranksep 30
 skinparam nodesep 25
-top to bottom direction
+left to right direction
 cloud "Binance\nREST / WS" as BIN
 database "PostgreSQL 16" as PG
 component "ingest" as ING
