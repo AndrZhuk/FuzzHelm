@@ -1,0 +1,27 @@
+@startuml
+' Діаграма станів ризик-автомата (друкарська версія) — risk/state.py::TRANSITIONS.
+' Показано лише переходи, що змінюють стан; решта з 24 клітинок таблиці — петлі.
+' Автор: Андрій Жук, 2026.
+skinparam dpi 200
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam state {
+  BackgroundColor #F7F9FC
+  BorderColor #33507A
+}
+[*] --> NORMAL
+NORMAL --> WARNING : WARN_BREACH
+NORMAL --> COOLDOWN : COOL_BREACH
+NORMAL --> HALTED : HALT_BREACH
+WARNING --> NORMAL : RECOVERY
+WARNING --> COOLDOWN : COOL_BREACH
+WARNING --> HALTED : HALT_BREACH
+COOLDOWN --> WARNING : RECOVERY
+COOLDOWN --> HALTED : HALT_BREACH
+HALTED --> COOLDOWN : ADMIN_RELEASE\n(лише адміністратор)
+state HALTED #FFE5E5
+note right of HALTED
+  Засувка: автоматичного
+  виходу немає
+end note
+@enduml

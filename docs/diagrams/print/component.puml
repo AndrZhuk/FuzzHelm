@@ -1,0 +1,43 @@
+@startuml
+' Діаграма компонентів (друкарська версія): пакети src/fuzzhelm і зовнішні системи.
+' Автор: Андрій Жук, 2026.
+skinparam dpi 200
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam component {
+  BackgroundColor #F7F9FC
+  BorderColor #33507A
+}
+skinparam ranksep 30
+skinparam nodesep 25
+top to bottom direction
+cloud "Binance\nREST / WS" as BIN
+cloud "Kraken\nREST" as KRA
+database "PostgreSQL 16" as PG
+component "ingest" as ING
+component "quality" as QUA
+component "storage" as STO
+component "features +\ndetectors" as DET
+component "decision +\nfuzzy" as FUZ
+component "sizing" as SIZ
+component "risk" as RISK
+component "execution +\nbacktest" as EXE
+component "api" as API
+component "workers" as WRK
+component "ui (Vue 3)" as UI
+BIN --> ING
+KRA --> ING
+ING --> QUA
+QUA --> STO
+STO --> PG
+STO --> DET
+DET --> FUZ
+FUZ --> SIZ
+SIZ --> RISK
+RISK --> EXE
+EXE --> STO
+WRK ..> ING : запускає
+WRK ..> EXE : запускає
+API --> STO
+UI --> API : REST + SSE
+@enduml

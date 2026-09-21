@@ -1,0 +1,44 @@
+@startuml
+' Діаграма прецедентів (друкарська версія). Ролі й права — з api/auth.py::ACCESS_MATRIX.
+' Автор: Андрій Жук, 2026.
+skinparam dpi 200
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam usecase {
+  BackgroundColor #F7F9FC
+  BorderColor #33507A
+}
+skinparam actorStyle awesome
+left to right direction
+actor "Користувач" as U
+actor "Аналітик" as AN
+actor "Оператор" as OP
+actor "Аудитор" as AU
+actor "Адміністратор" as AD
+AN -up-|> U
+OP -up-|> U
+AU -up-|> U
+AD -up-|> U
+rectangle "FuzzHelm" {
+  usecase "Переглядати ринок\nі здоров'я конвеєра" as UC1
+  usecase "Переглядати виведення\nрішення" as UC2
+  usecase "Переглядати прогони\nі метрики" as UC3
+  usecase "Запускати бектест" as UC4
+  usecase "Редагувати й активувати\nстратегії" as UC5
+  usecase "Переглядати журнал\nаудиту" as UC6
+  usecase "Змінювати ліміти\nризику" as UC7
+  usecase "Знімати аварійний\nстоп (HALTED)" as UC8
+}
+U --> UC1
+U --> UC2
+U --> UC3
+AN --> UC4
+OP --> UC4
+OP --> UC5
+AU --> UC6
+AD --> UC4
+AD --> UC5
+AD --> UC6
+AD --> UC7
+AD --> UC8
+@enduml

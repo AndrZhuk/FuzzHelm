@@ -1,0 +1,71 @@
+@startuml
+' ER-діаграма (логічна, друкарська версія). Суцільні лінії — зовнішні ключі зі схеми БД;
+' пунктир — посилання на run/app_user без FK (журнали лише на додавання).
+' Автор: Андрій Жук, 2026.
+skinparam dpi 200
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam class {
+  BackgroundColor #F7F9FC
+  BorderColor #33507A
+}
+hide circle
+hide methods
+top to bottom direction
+entity instrument {
+  *id
+  symbol_canon
+}
+entity candle {
+  *instrument_id : FK
+  *open_time
+  o, h, l, c, volume
+}
+entity strategy {
+  *id
+  name, version
+}
+entity run {
+  *id
+  instrument_id : FK
+  strategy_id : FK
+  config_hash, equity_hash
+}
+entity decision {
+  *id
+  run_id : FK
+  u_raw, κ, u_final
+}
+entity sim_order {
+  *id
+  run_id : FK
+  decision_id : FK
+}
+entity risk_event {
+  *id
+  run_id
+  rule, verdict
+}
+entity equity_point {
+  run_id
+  ts, equity, drawdown
+}
+entity app_user {
+  *id
+  login, role
+}
+entity audit_log {
+  *id
+  user_id
+  before, after
+}
+instrument ||--o{ candle
+instrument ||--o{ run
+strategy |o--o{ run
+run ||--o{ decision
+run ||--o{ sim_order
+decision |o--o{ sim_order
+run ..o{ risk_event
+run ..o{ equity_point
+app_user ..o{ audit_log
+@enduml

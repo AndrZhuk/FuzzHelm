@@ -1,0 +1,29 @@
+@startuml
+' Діаграма послідовності (друкарська версія): автентифікація і зміна ліміту — api/auth.py, routers/risk.py.
+' Автор: Андрій Жук, 2026.
+skinparam dpi 200
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam sequence {
+  ParticipantBackgroundColor #F7F9FC
+  ParticipantBorderColor #33507A
+}
+actor "Адмін" as A
+participant "UI" as UI
+participant "API" as API
+database "БД" as DB
+A -> UI : логін, пароль
+UI -> API : POST /auth/login
+API -> DB : користувач
+API -> API : bcrypt
+API --> UI : JWT (HS256, 8 год)
+A -> UI : змінити ліміт
+UI -> API : PUT /risk/limits\nBearer JWT
+API -> API : підпис і роль\n(ACCESS_MATRIX)
+API -> DB : роль ще admin?
+group одна транзакція
+  API -> DB : новий ліміт
+  API -> DB : audit_log\n(до / після)
+end
+API --> UI : 200 OK
+@enduml

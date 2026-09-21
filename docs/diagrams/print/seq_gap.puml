@@ -1,0 +1,24 @@
+@startuml
+' Діаграма послідовності (друкарська версія): розрив WebSocket і добір прогалини через REST.
+' Автор: Андрій Жук, 2026.
+skinparam dpi 200
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam sequence {
+  ParticipantBackgroundColor #F7F9FC
+  ParticipantBorderColor #33507A
+}
+participant "WS-клієнт" as WS
+participant "Детектор\nпрогалин" as GD
+participant "REST-клієнт" as REST
+database "БД" as DB
+WS -> WS : розрив, код закриття
+WS -> WS : перепідключення\n(витримка)
+WS -> GD : бар t+k
+GD -> GD : очікувано t+1
+GD -> REST : добрати [t+1; t+k−1]
+REST -> REST : бюджет ваги
+REST --> GD : бари
+GD -> DB : INSERT … ON CONFLICT
+note over GD, DB : 6 патологічних сценаріїв —\n0 втрачених подій
+@enduml

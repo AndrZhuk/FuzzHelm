@@ -1,0 +1,42 @@
+@startuml
+' Діаграма класів (друкарська версія): шаблон «Стратегія» для детекторів — detectors/*.py.
+' Автор: Андрій Жук, 2026.
+skinparam dpi 200
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
+skinparam class {
+  BackgroundColor #F7F9FC
+  BorderColor #33507A
+}
+hide empty members
+left to right direction
+interface Detector <<Protocol>> {
+  +name: str
+  +group: DetectorGroup
+  +update(bar): DetectorOutput
+}
+class DetectorOutput <<frozen>> {
+  +s: float  // сила, [−1; 1]
+  +c: float  // довіра, [0; 1]
+  +name, group, weight
+}
+enum DetectorGroup {
+  TREND
+  REVERSION
+  CONTEXT
+}
+class EmaSlope
+class Donchian
+class RsiExhaustion
+class BollingerZ
+class CandleGeometry
+class VolRegime
+Detector <|.. EmaSlope
+Detector <|.. Donchian
+Detector <|.. RsiExhaustion
+Detector <|.. BollingerZ
+Detector <|.. CandleGeometry
+Detector <|.. VolRegime
+Detector ..> DetectorOutput : повертає
+Detector --> DetectorGroup
+@enduml
