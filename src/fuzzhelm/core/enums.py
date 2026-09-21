@@ -13,7 +13,7 @@ from enum import IntEnum, StrEnum
 class Venue(StrEnum):
     BINANCE_USDM = "BINANCE_USDM"      # публічні read-only дані Binance USDⓈ-M Futures
     BINANCE_TESTNET = "BINANCE_TESTNET"  # testnet-виконання (єдине місце, де існують ордери поза симуляцією)
-    KRAKEN = "KRAKEN"                  # крос-звірка цін
+    KRAKEN = "KRAKEN"                  # лише для читання старих рядків instrument
     PAPER = "PAPER"                    # симульоване виконання
 
 

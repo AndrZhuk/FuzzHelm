@@ -1,4 +1,4 @@
-"""Нормалізація: venue-JSON (Binance REST/WS, Kraken REST) → канонічні DTO на Decimal.
+"""Нормалізація: venue-JSON (Binance REST/WS) → канонічні DTO на Decimal.
 
 Найменування: ingest/normalize.py
 Призначення: межа нормалізації. Усе, що далі йде в журнал, БД і рушій рішень, проходить тут.
@@ -33,8 +33,6 @@ from fuzzhelm.core.errors import NormalizationError
 from fuzzhelm.core.money import D0, dec
 from fuzzhelm.ingest.symbols import (
     SymbolRef,
-    kraken_asset,
-    kraken_pair_from_result_key,
     make_canonical,
     symbol_ref,
 )
@@ -48,15 +46,12 @@ TF_MS: Final[dict[str, int]] = {
     "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000, "8h": 28_800_000,
     "12h": 43_200_000, "1d": 86_400_000,
 }
-KRAKEN_INTERVAL_TF: Final[dict[int, str]] = {1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 240: "4h",
-                                             1440: "1d"}
 
 InstrumentLike = Instrument | SymbolRef
 
 _DEC_RE: Final = re.compile(r"-?\d+(?:\.\d+)?")
 
 _BIN = Venue.BINANCE_USDM.value
-_KRK = Venue.KRAKEN.value
 
 # ---------------------------------------------------------------- білі списки полів (строга схема)
 
@@ -72,7 +67,6 @@ WS_DEPTH_REQUIRED: Final = WS_DEPTH_FIELDS - {"ps", "st"}
 PREMIUM_INDEX_FIELDS: Final = frozenset({"symbol", "markPrice", "indexPrice", "estimatedSettlePrice",
                                          "lastFundingRate", "interestRate", "nextFundingTime", "time"})
 REST_KLINE_LEN: Final = 12      # [t, o, h, l, c, v, T, qv, n, takerBuyBase, takerBuyQuote, ignore]
-KRAKEN_OHLC_LEN: Final = 8      # [time_s, o, h, l, c, vwap, volume, count]
 
 # ---------------------------------------------------------------- примітиви
 
@@ -513,92 +507,6 @@ def normalize_exchange_info(data: Mapping[str, Any], symbols: Iterable[str] | No
     if wanted is not None and (missing := wanted - out.keys()):
         _fail(f"symbols not found in exchangeInfo: {sorted(missing)}", f"symbols[{sorted(missing)[0]}]", _BIN)
     return out
-
-
-# ---------------------------------------------------------------- Kraken REST
-
-
-def _kraken_pair_key(result: Mapping[str, Any], instrument: InstrumentLike) -> str:
-    keys = [k for k in result if k != "last"]
-    for k in keys:
-        if kraken_pair_from_result_key(k) != instrument.symbol_venue:
-            _fail(f"unknown field result.{k}", f"result.{k}", _KRK)
-    if len(keys) != 1:
-        _fail(f"expected exactly one pair in result, got {keys}", "result", _KRK)
-    return keys[0]
-
-
-def normalize_kraken_ohlc(result: Mapping[str, Any], instrument: InstrumentLike, ts_ingest_ns: int, *,
-                          tf: str = "1m", src: Src = Src.REST) -> list[Candle]:
-    """`result` відповіді `/0/public/OHLC` → список Candle.
-
-    Рядок Kraken: [time(с, відкриття), open, high, low, close, vwap, volume, count]. `last` — курсор
-    останнього ЗАФІКСОВАНОГО бару: бар із time > last — поточний, незакритий. Kraken не дає часу
-    закриття і обсягу в котирувальній валюті: close_time = open + tf − 1 мс (конвенція Binance),
-    quote_volume = 0 (значення DTO «не надано»), vwap = None при нульовому обсязі (VWAP не визначений).
-    """
-    _check_ingest(ts_ingest_ns)
-    r = _mapping(result, "result", _KRK)
-    if "last" not in r:
-        _fail("result.last missing", "result.last", _KRK)
-    last = _int(r["last"], "result.last", _KRK)
-    key = _kraken_pair_key(r, instrument)
-    rows = r[key]
-    if not isinstance(rows, list):
-        _fail("OHLC rows must be a list", f"result.{key}", _KRK)
-    step_ms = TF_MS.get(tf)
-    if step_ms is None:
-        _fail(f"unsupported timeframe {tf!r}", "tf", _KRK)
-    out: list[Candle] = []
-    for i, row in enumerate(rows):
-        p = f"result.{key}[{i}]"
-        if not isinstance(row, list) or len(row) != KRAKEN_OHLC_LEN:
-            n = len(row) if isinstance(row, list) else 0
-            _fail(f"OHLC row must have {KRAKEN_OHLC_LEN} fields", f"{p}[{min(n, KRAKEN_OHLC_LEN)}]", _KRK)
-        t_s = _int(row[0], f"{p}[0]", _KRK)
-        volume = _dec(row[6], f"{p}[6]", _KRK)
-        count = _int(row[7], f"{p}[7]", _KRK)
-        vwap = _dec(row[5], f"{p}[5]", _KRK)
-        open_ns = s_to_ns(t_s)
-        close_ns = open_ns + (step_ms - 1) * NS_PER_MS
-        out.append(_build(
-            Candle, _KRK,
-            instrument=instrument.symbol_canon, venue=instrument.venue, tf=tf,
-            open_time_ns=open_ns, close_time_ns=close_ns,
-            o=_dec(row[1], f"{p}[1]", _KRK), h=_dec(row[2], f"{p}[2]", _KRK),
-            l=_dec(row[3], f"{p}[3]", _KRK), c=_dec(row[4], f"{p}[4]", _KRK),
-            volume=volume, trades_count=count,
-            vwap=vwap if volume > D0 else None,
-            is_closed=t_s <= last, src=src,
-            ts_event_ns=close_ns, ts_ingest_ns=ts_ingest_ns,
-            event_uid=kline_uid(instrument.venue, instrument.symbol_canon, tf, open_ns),
-        ))
-    return out
-
-
-def normalize_kraken_asset_pair(result: Mapping[str, Any], pair: str = "XBTUSD") -> Instrument:
-    """`result` відповіді `/0/public/AssetPairs?pair=…` → Instrument (спот, для крос-звірки)."""
-    r = _mapping(result, "result", _KRK)
-    key = next((k for k in r if kraken_pair_from_result_key(k) == pair.upper()), None)
-    if key is None:
-        _fail(f"pair {pair!r} not in AssetPairs result", "result", _KRK)
-    p = _mapping(r[key], f"result.{key}", _KRK)
-    for req in ("altname", "base", "quote", "tick_size", "lot_decimals", "costmin"):
-        if req not in p:
-            _fail(f"{req} missing", f"result.{key}.{req}", _KRK)
-    base = kraken_asset(_str(p["base"], f"result.{key}.base", _KRK))
-    quote = kraken_asset(_str(p["quote"], f"result.{key}.quote", _KRK))
-    lot_decimals = _int(p["lot_decimals"], f"result.{key}.lot_decimals", _KRK)
-    altname = _str(p["altname"], f"result.{key}.altname", _KRK)
-    return _build(
-        Instrument, _KRK,
-        venue=Venue.KRAKEN, symbol_venue=altname,
-        symbol_canon=make_canonical(base, quote, ContractType.SPOT),
-        base_asset=base, quote_asset=quote, contract_type=ContractType.SPOT,
-        tick_size=_dec(p["tick_size"], f"result.{key}.tick_size", _KRK),
-        step_size=Decimal(1).scaleb(-lot_decimals),
-        min_notional=_dec(p["costmin"], f"result.{key}.costmin", _KRK),
-    )
 
 
 # ---------------------------------------------------------------- REST aggTrades (добір угод, WS-04)

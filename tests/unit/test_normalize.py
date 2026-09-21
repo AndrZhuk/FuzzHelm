@@ -29,8 +29,6 @@ from fuzzhelm.ingest.normalize import (
     ms_to_ns,
     normalize_binance,
     normalize_exchange_info,
-    normalize_kraken_asset_pair,
-    normalize_kraken_ohlc,
     normalize_premium_index,
     normalize_rest_kline,
     normalize_rest_klines,
@@ -45,14 +43,7 @@ from fuzzhelm.ingest.quantize import (
     quantize_to_tick,
     reject_below_min_notional,
 )
-from fuzzhelm.ingest.symbols import (
-    BTC_USD_SPOT,
-    BTC_USDT_PERP,
-    canonical_symbol,
-    kraken_result_key,
-    parse_canonical,
-    venue_symbol,
-)
+from fuzzhelm.ingest.symbols import BTC_USDT_PERP, canonical_symbol, parse_canonical, venue_symbol
 
 ROOT = Path(__file__).resolve().parents[2]
 REST = ROOT / "fixtures" / "rest"
@@ -212,26 +203,6 @@ def test_unknown_field_raises_normalization_error(kind: str, path: tuple[str, ..
     assert ei.value.field == field and ei.value.venue == "BINANCE_USDM"
     # контроль: без зайвого поля той самий кадр нормалізується
     normalize_binance(fr["stream"], fr["data"], fr["ts_ingest_ns"], BTC_USDT_PERP)
-
-
-def test_unknown_field_in_rest_and_kraken_payloads() -> None:
-    row = _klines()[0]
-    with pytest.raises(NormalizationError) as ei:
-        normalize_rest_kline([*row, "extra"], BTC_USDT_PERP, INGEST_NS)
-    assert ei.value.field == "row[12]"
-    prem = {**_json("premium_index.json"), "newField": "0"}
-    with pytest.raises(NormalizationError) as ei:
-        normalize_premium_index(prem, BTC_USDT_PERP, INGEST_NS)
-    assert ei.value.field == "newField"
-    k = _json("kraken_ohlc.json")["result"]
-    with pytest.raises(NormalizationError) as ei:
-        normalize_kraken_ohlc({**k, "XETHZUSD": []}, BTC_USD_SPOT, INGEST_NS)
-    assert ei.value.field == "result.XETHZUSD"
-    bad = copy.deepcopy(k)
-    bad["XXBTZUSD"][5].append("9")
-    with pytest.raises(NormalizationError) as ei:
-        normalize_kraken_ohlc(bad, BTC_USD_SPOT, INGEST_NS)
-    assert ei.value.field == "result.XXBTZUSD[5][8]"
 
 
 @pytest.mark.parametrize(("mutate", "field"), [
@@ -421,39 +392,23 @@ def test_rest_kline_row_mapping_and_closedness() -> None:
     assert ei.value.field == "__root__"
 
 
-def test_kraken_ohlc_and_asset_pair() -> None:
-    res = _json("kraken_ohlc.json")["result"]
-    rows = res["XXBTZUSD"]
-    cs = normalize_kraken_ohlc(res, BTC_USD_SPOT, INGEST_NS)
-    assert len(cs) == len(rows)
-    assert all(c.instrument == "BTC-USD-SPOT" and c.venue is Venue.KRAKEN for c in cs)
-    # `last` — останній зафіксований бар; усі пізніші — незакриті
-    assert [c.is_closed for c in cs] == [r[0] <= res["last"] for r in rows]
-    assert not cs[-1].is_closed and cs[-2].is_closed
-    c0, r0 = cs[0], rows[0]
-    assert c0.open_time_ns == r0[0] * 10**9 and c0.close_time_ns == c0.open_time_ns + 59_999_000_000
-    assert (c0.o, c0.c, c0.vwap, c0.volume, c0.trades_count) == \
-        (Decimal(r0[1]), Decimal(r0[4]), Decimal(r0[5]), Decimal(r0[6]), r0[7])
-    assert c0.quote_volume == 0                          # Kraken не надає — значення DTO «не надано»
-    zero = copy.deepcopy(res)
-    zero["XXBTZUSD"][0][6] = "0.00000000"
-    zero["XXBTZUSD"][0][5] = "0.0"
-    # VWAP без обсягу не визначений
-    assert normalize_kraken_ohlc(zero, BTC_USD_SPOT, INGEST_NS)[0].vwap is None
-    pair = normalize_kraken_asset_pair(_json("kraken_asset_pairs.json")["result"])
-    assert (pair.symbol_venue, pair.symbol_canon, pair.contract_type) == \
-        ("XBTUSD", "BTC-USD-SPOT", ContractType.SPOT)
-    assert pair.tick_size == Decimal("0.1") and pair.step_size == Decimal("0.00000001")
-    assert pair.min_notional == Decimal("0.5")
+
+
+def test_unknown_field_in_rest_payloads() -> None:
+    row = _klines()[0]
+    with pytest.raises(NormalizationError) as ei:
+        normalize_rest_kline([*row, "extra"], BTC_USDT_PERP, INGEST_NS)
+    assert ei.value.field == "row[12]"
+    prem = {**_json("premium_index.json"), "newField": "0"}
+    with pytest.raises(NormalizationError) as ei:
+        normalize_premium_index(prem, BTC_USDT_PERP, INGEST_NS)
+    assert ei.value.field == "newField"
 
 
 def test_symbols_mapping() -> None:
     assert canonical_symbol(Venue.BINANCE_USDM, "BTCUSDT") == "BTC-USDT-PERP"
     assert canonical_symbol(Venue.BINANCE_USDM, "ethusdt") == "ETH-USDT-PERP"
-    assert canonical_symbol(Venue.KRAKEN, "XBTUSD") == "BTC-USD-SPOT"
-    assert canonical_symbol(Venue.KRAKEN, "XXBTZUSD") == "BTC-USD-SPOT"
-    assert venue_symbol(Venue.KRAKEN, "BTC-USD-SPOT") == "XBTUSD"
-    assert kraken_result_key("XBTUSD") == "XXBTZUSD"
+    assert venue_symbol(Venue.BINANCE_USDM, "ETH-USDT-PERP") == "ETHUSDT"
     assert parse_canonical("BTC-USDT-PERP") == ("BTC", "USDT", ContractType.PERP)
     with pytest.raises(NormalizationError):
         canonical_symbol(Venue.BINANCE_USDM, "DOGEUSDT")

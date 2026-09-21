@@ -222,20 +222,6 @@ def test_replay_run_id_is_deterministic_per_session_file(tmp_path: Path) -> None
     assert cli.replay_run_id(a).version == 5
 
 
-# ================================================================== крос-звірка зі збережених відповідей
-
-
-def _raw_from_fixtures() -> dict[str, Any]:
-    kraken = orjson.loads((REST / "kraken_ohlc.json").read_bytes())
-    rows = orjson.loads(gzip.decompress((REST / "binance_klines.json.gz").read_bytes()))
-    server_ms = orjson.loads((REST / "server_time.json").read_bytes())["serverTime"]
-    return {"v": 1, "captured_utc": "2026-09-18T19:25:37Z",
-            "kraken": {"pair": "XBTUSD", "interval": 1, "ts_ingest_ns": server_ms * 1_000_000,
-                       "result": kraken["result"]},
-            "binance": {"symbol": "BTCUSDT", "interval": "1m", "ts_ingest_ns": server_ms * 1_000_000,
-                        "server_time_ms": server_ms, "rows": rows}}
-
-
 # ================================================================== funding: нормалізація, файл, хеш
 
 

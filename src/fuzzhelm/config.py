@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import Field, SecretStr, field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fuzzhelm.core.errors import ConfigValidationError, MainnetHostRejected
@@ -34,8 +34,6 @@ ALLOWED_TESTNET_HOSTS: frozenset[str] = frozenset({
 ALLOWED_READONLY_HOSTS: frozenset[str] = frozenset({
     "fapi.binance.com",
     "fstream.binance.com",
-    "api.kraken.com",
-    "ws.kraken.com",
 }) | ALLOWED_TESTNET_HOSTS | frozenset({"stream.binancefuture.com", "fstream.binancefuture.com"})
 
 
@@ -66,18 +64,14 @@ class Settings(BaseSettings):
     # --- сховище
     database_url: str = "postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5442/fuzzhelm"
 
-    # --- виконання: ЛИШЕ testnet
+    # --- виконання: лише симуляція (PaperBroker). Хост нижче — захисна межа: навіть у конфігурації
+    # неможливо вказати основну мережу біржі (перевіряє assert_testnet_url).
     venue_base_url: str = "https://testnet.binancefuture.com"
-    binance_testnet_key: SecretStr | None = Field(default=None, validation_alias="BINANCE_TESTNET_KEY")
-    binance_testnet_secret: SecretStr | None = Field(default=None, validation_alias="BINANCE_TESTNET_SECRET")
 
     # --- публічні ринкові дані (read-only)
     binance_rest_base: str = "https://fapi.binance.com"
     binance_ws_market: str = "wss://fstream.binance.com/market/stream"   # kline/aggTrade/markPrice
     binance_ws_public: str = "wss://fstream.binance.com/public/stream"   # depth
-    kraken_rest_base: str = "https://api.kraken.com"
-
-    # --- нотифікації
 
     # --- API/безпека
     jwt_secret: SecretStr = SecretStr("dev-only-change-me")
@@ -94,7 +88,7 @@ class Settings(BaseSettings):
     def _testnet_only(cls, v: str) -> str:
         return assert_testnet_url(v)
 
-    @field_validator("binance_rest_base", "binance_ws_market", "binance_ws_public", "kraken_rest_base")
+    @field_validator("binance_rest_base", "binance_ws_market", "binance_ws_public")
     @classmethod
     def _readonly_only(cls, v: str) -> str:
         return assert_readonly_url(v)

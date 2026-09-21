@@ -169,6 +169,3 @@ def binance_request_bucket(clock: Clock, *, limit_per_min: int = BINANCE_WEIGHT_
     return TokenBucket(capacity, capacity / 60.0, clock, sleep=sleep)
 
 
-def kraken_public_bucket(clock: Clock, *, sleep: SleepFn = asyncio.sleep) -> TokenBucket:
-    """Консервативне відро для публічних ендпоінтів Kraken: 1 запит/с без сплеску (власний вибір)."""
-    return TokenBucket(1.0, 1.0, clock, sleep=sleep)

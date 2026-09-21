@@ -43,7 +43,6 @@ from fuzzhelm.ingest.symbols import BTC_USDT_PERP
 ROOT = Path(__file__).resolve().parents[2]
 REST = ROOT / "fixtures" / "rest"
 BINANCE = "https://fapi.binance.com"
-KRAKEN = "https://api.kraken.com"
 ROWS: list[list[Any]] = orjson.loads(gzip.decompress((REST / "binance_klines.json.gz").read_bytes()))
 MIN_MS = 60_000
 FIRST_OPEN = ROWS[0][0]

@@ -38,7 +38,6 @@ class ExecutionVenue(Protocol):
 
     PaperBroker: `submit` ставить заявку в чергу; `on_bar(bar)` виконує MARKET-заявки за bar.o
     (рішення на закритті t → виконання на відкритті t+1) і перевіряє STOP_MARKET у межах бару.
-    BinanceTestnetVenue: `submit` робить підписаний POST /fapi/v1/order; `on_bar` звіряє стан.
     """
 
     name: str

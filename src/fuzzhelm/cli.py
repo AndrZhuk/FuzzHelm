@@ -1,15 +1,10 @@
-"""Командний рядок FuzzHelm: реальні дані (добір, крос-звірка, фінансування), калібрування МФ, журнал, БД.
+"""Командний рядок FuzzHelm: реальні дані (добір, фінансування), журнал, БД, користувачі.
 
 Найменування: cli.py
 Призначення: точка входу `fuzzhelm` (pyproject [project.scripts] → fuzzhelm.cli:main). Підкоманди:
   backfill        — N повних UTC-днів 1m-свічок у PostgreSQL; прогалини → ingest_gap → REST-добір;
                     звіт docs/figures/backfill_report.md і зафіксоване вікно data/dataset_window.json;
-  crosscheck      — Binance BTC-USDT-PERP ↔ Kraken BTC-USD-SPOT на останніх ~720 хв Kraken (+ розклад
-                    розбіжності на премію перпетуала, курс USDT/USD і залишок) → docs/figures/crosscheck_*;
   fetch-funding   — історія ставок фінансування за вікном датасету → data/funding_<SYMBOL>.json;
-  calibrate       — T-перцентилі {8,25,50,75,92} і KMeans(k=3) для V на ПЕРШОМУ IS-вікні (без заглядання
-                    в OOS) → config/membership.yaml, data/calibration_manifest.json,
-                    docs/figures/calibration_report.md, docs/figures/regimes_clusters.png;
   replay-gap      — реплей fixtures/ws/pathological/gap.jsonl.gz через IngestPipeline з БД-стоками і
                     справжнім REST-добором → реальні рядки ingest_gap зі статусом FILLED;
   verify-journal  — перерахунок ланцюга хешів event_journal (і звірка з run.journal_head_hash, якщо є);
@@ -67,8 +62,6 @@ NS_PER_MS: Final = 1_000_000
 DATA_DIR: Final = ROOT / "data"
 FIG_DIR: Final = ROOT / "docs" / "figures"
 WINDOW_JSON: Final = DATA_DIR / "dataset_window.json"
-CAL_MANIFEST_JSON: Final = DATA_DIR / "calibration_manifest.json"
-CROSSCHECK_INPUT: Final = DATA_DIR / "crosscheck_input.json.gz"
 GAP_SESSION: Final = FIXTURES_DIR / "ws" / "pathological" / "gap.jsonl.gz"
 GAP_REFERENCE: Final = FIXTURES_DIR / "ws" / "sample_btcusdt_4m.jsonl.gz"
 DEFAULT_SYMBOLS: Final = ("BTCUSDT", "ETHUSDT")
@@ -473,7 +466,7 @@ async def _record_backfill_gaps(*, factory: async_sessionmaker[AsyncSession],
 
 
 def window_document(window: DatasetWindow, stats: Mapping[str, Any]) -> dict[str, Any]:
-    """Машиночитне вікно датасету (data/dataset_window.json): джерело calibrate, fetch-funding, бектесту."""
+    """Машиночитне вікно датасету (data/dataset_window.json): джерело fetch-funding і бектесту."""
     wf = (load_yaml("profiles/backtest").get("walkforward") or {})
     is_days = int(wf.get("is_days", 15))
     lo, hi = window.sub_window(1, is_days)
@@ -633,26 +626,6 @@ async def cmd_fetch_funding(args: argparse.Namespace) -> int:
     print(f"HTTP: {log.by_path()}; X-MBX-USED-WEIGHT-1M on fundingRate responses: "
           f"{[u for p, _, u in log.calls if p.endswith('fundingRate')]}")
     return 0
-
-
-# ================================================================== calibrate
-
-
-K_RANGE: Final = range(2, 7)
-N_INIT: Final = 10
-SILHOUETTE_SAMPLE: Final = 10_000
-# σ гаусіан V: "cover" — покриття без мертвих зон (≥ e^−½), бо буквальне «0.5·d до найближчого» (§5.5) на
-# реальних даних лишає max μ < 0.5 біля V = 1 (docs/deviations.d/data.md, DATA-05)
-SIGMA_RULE: Final = "cover"
-# T-точки — перцентилі симетризованої вибірки T ∪ −T: база правил і R непарно-симетричні, і дрейф одного
-# 15-денного IS-вікна не має робити систему «довгою» чи «короткою» за побудовою МФ (DATA-06)
-T_SYMMETRIC: Final = True
-
-
-FEATURE_LABELS: Final = ("vol_pct", "нахил EMA", "z обсягу")
-
-
-CAL_OUTPUTS: Final = ("membership", "manifest", "report", "figure")
 
 
 # ================================================================== replay-gap
@@ -1217,7 +1190,7 @@ def _utc_date(text: str) -> date:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="fuzzhelm", description="FuzzHelm data & calibration tools "
+    p = argparse.ArgumentParser(prog="fuzzhelm", description="FuzzHelm data tools "
                                 "(read-only market data; paper/testnet only — no mainnet by construction).")
     p.add_argument("--database-url", default=None,
                    help="SQLAlchemy URL (default: FUZZHELM_DATABASE_URL / .env)")
