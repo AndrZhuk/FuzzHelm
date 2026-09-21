@@ -14,3 +14,4 @@ htmlcov/
 artifacts/
 backups/
 *.dump
+.claude/
