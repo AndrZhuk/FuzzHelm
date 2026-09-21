@@ -4,9 +4,11 @@
 ' Призначення: залежності робіт і критичний шлях для звіту §1.6. У вузлі: номер, назва,
 '     тривалість (дн.), ранній початок ES і пізній початок LS; резерв = LS − ES.
 ' Автор: Андрій Жук, 2026.
-left to right direction
+top to bottom direction
 hide stereotype
+skinparam dpi 200
 skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
 skinparam rectangle {
   BackgroundColor<<crit>> #FFE5E5
   BorderColor<<crit>> #C0392B

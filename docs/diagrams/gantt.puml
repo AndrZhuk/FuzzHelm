@@ -5,6 +5,7 @@
 '     у docs/journal.md і в таблиці «Фактична хронологія» документа docs/teo/cost_estimate.md.
 ' Автор: Андрій Жук, 2026.
 printscale daily
+skinparam dpi 200
 Project starts 2026-09-15
 
 [Аналіз і огляд аналогів] lasts 1 day

@@ -4,7 +4,9 @@
 ' Призначення: покроковий алгоритм ядра для звіту §2.6: фазифікація → активація →
 '     імплікація → агрегація → дефазифікація → стиснення коефіцієнтом довіри κ.
 ' Автор: Андрій Жук, 2026.
+skinparam dpi 200
 skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
 skinparam activityBorderColor #33507A
 skinparam activityBackgroundColor #EEF3FA
 start

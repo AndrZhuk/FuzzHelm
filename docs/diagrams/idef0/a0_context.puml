@@ -1,35 +1,28 @@
 @startuml
 ' IDEF0, контекстна діаграма A-0: система як одна функція.
 ' Найменування: docs/diagrams/idef0/a0_context.puml
-' Призначення: межі системи у нотації IDEF0 — вхід (ліворуч), керування (згори),
-'     механізм (знизу), вихід (праворуч). Звіт §2.3.
+' Призначення: межі системи в нотації IDEF0 — входи ліворуч, керування згори,
+'     механізми знизу, виходи праворуч. Звіт §2.3.
 ' Автор: Андрій Жук, 2026.
+skinparam dpi 200
 skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
 skinparam rectangle {
   BackgroundColor #F7F9FC
   BorderColor #33507A
 }
-rectangle "**A-0**\nУхвалити й виконати торговельне рішення\nз контролем ризиків і лімітів" as A0
-
-rectangle "Потік ринкових даних\n(REST, WebSocket)" as I1
-rectangle "Стан рахунку\n(капітал, позиції)" as I2
-rectangle "Конфігурація МФ\nі база 45 правил" as C1
-rectangle "Ліміти ризику\n(6 обмежень)" as C2
-rectangle "Регламент біржі\n(ваговий ліміт, ToS)" as C3
-rectangle "Програмний сервіс\n(Python 3.12, PostgreSQL 16)" as M1
-rectangle "Оператор\n(4 ролі доступу)" as M2
-rectangle "Ордери\n(симулятор / testnet)" as O1
-rectangle "Журнал рішень\nі вердиктів ризику" as O2
-rectangle "Метрики прогону\nі паспорт відтворюваності" as O3
-
-I1 -right-> A0
-I2 -right-> A0
-C1 -down-> A0
-C2 -down-> A0
-C3 -down-> A0
-A0 -right-> O1
-A0 -right-> O2
-A0 -right-> O3
-M1 -up-> A0
-M2 -up-> A0
+skinparam rectangle<<data>> {
+  BackgroundColor #FFFFFF
+  BorderColor #9AA7B8
+}
+hide stereotype
+rectangle "Керування:\n• МФ і база з 45 правил\n• шість лімітів ризику\n• регламент біржі" <<data>> as C
+rectangle "Входи:\n• ринкові дані\n  (REST, WebSocket)\n• стан рахунку" <<data>> as I
+rectangle "**A-0**\nУхвалити й виконати\nторговельне рішення\nз контролем ризиків" as A0
+rectangle "Виходи:\n• ордери\n• журнал рішень\n  і вердиктів\n• метрики, паспорт" <<data>> as O
+rectangle "Механізми:\n• програмний сервіс\n• оператор (4 ролі)" <<data>> as M
+C -down-> A0
+I -right-> A0
+A0 -right-> O
+M -up-> A0
 @enduml

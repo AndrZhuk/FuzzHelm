@@ -4,7 +4,9 @@
 ' Призначення: показати три системні вади ручного процесу — невідтворюваність рішення,
 '     реактивний контроль ризику, обмеження масштабування. Звіт §2.1.
 ' Автор: Андрій Жук, 2026.
+skinparam dpi 200
 skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
 skinparam activityBorderColor #8A5A2B
 skinparam activityBackgroundColor #FDF3E7
 start

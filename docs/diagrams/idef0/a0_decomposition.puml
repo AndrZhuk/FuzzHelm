@@ -4,8 +4,10 @@
 ' Призначення: показати, що потік даних односпрямований і кожна функція має власне
 '     керування; відповідає межам пакетів src/fuzzhelm. Звіт §2.3.
 ' Автор: Андрій Жук, 2026.
-left to right direction
+top to bottom direction
+skinparam dpi 200
 skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 15
 skinparam rectangle {
   BackgroundColor #F7F9FC
   BorderColor #33507A
@@ -22,15 +24,15 @@ A3 --> A4 : u_final, κ,\nслід виведення
 A4 --> A5 : затверджена\nкількість
 A5 --> A1 : стан рахунку\n(зворотний зв'язок обліку)
 
-note top of A1
+note right of A1
   Керування: регламент біржі, ваги AHP
   Механізм: ingest, quality, storage
 end note
-note top of A3
+note right of A3
   Керування: конфігурація МФ і 45 правил
   Механізм: fuzzy, decision
 end note
-note top of A4
+note right of A4
   Керування: шість лімітів ризику,
   пороги автомата станів
   Механізм: sizing, risk
