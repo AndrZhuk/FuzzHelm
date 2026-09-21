@@ -51,7 +51,6 @@ METRIC_LABELS: dict[str, str] = {
     "turnover": "Оборот (капіталів/рік)",
     "exposure": "Частка часу в ринку",
     "tail_ratio": "Tail ratio",
-    "psr": "PSR (SR* = 0)",
 }
 
 

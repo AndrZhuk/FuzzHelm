@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -55,12 +53,3 @@ def fingerprint(
     return out
 
 
-def brief_ddl(brief: Path) -> list[str]:
-    """SQL-блок розділу «## 6. Модель даних» брифінгу як список команд (коментарі `--` вирізано)."""
-    md = brief.read_text(encoding="utf-8")
-    section = md.split("## 6. Модель даних", 1)[1].split("\n## 7.", 1)[0]
-    m = re.search(r"```sql\n(.*?)```", section, flags=re.S)
-    if m is None:
-        raise AssertionError("SQL block not found in brief §6")
-    sql = re.sub(r"--[^\n]*", "", m.group(1))
-    return [stmt.strip() for stmt in sql.split(";") if stmt.strip()]

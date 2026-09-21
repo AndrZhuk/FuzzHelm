@@ -437,7 +437,7 @@ async def test_equity_hash_from_db_matches_on_half_ties(
         assert all(p != quantize_internal(x) for p, x in zip(pg, ties, strict=True))
         run_id = await add_run(s, seed=32 if use_copy else 31)
     points = [
-        EquityPoint(ts_ns=T0_NS + i * NS_PER_MIN, equity=x, cash=x, var95=x) for i, x in enumerate(ties)
+        EquityPoint(ts_ns=T0_NS + i * NS_PER_MIN, equity=x, cash=x) for i, x in enumerate(ties)
     ]
     ts_in = [p.ts_ns for p in points]
     async with session_scope(factory) as s:
@@ -446,7 +446,7 @@ async def test_equity_hash_from_db_matches_on_half_ties(
         ts, eq = await EquityRepo(s).equity_series(run_id)
         curve = await EquityRepo(s).curve(run_id)
     assert eq == [quantize_internal(x) for x in ties]
-    assert [r.cash for r in curve] == eq and [r.var95 for r in curve] == eq
+    assert [r.cash for r in curve] == eq
     assert ts == ts_in and equity_hash(eq, ts) == equity_hash(ties, ts_in)
 
 

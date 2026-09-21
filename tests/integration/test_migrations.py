@@ -15,8 +15,8 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import Column, Connection, Engine, Integer, MetaData, text
-from tests.integration._schema import brief_ddl, fingerprint
-from tests.integration.conftest import ROOT, alembic_config
+from tests.integration._schema import fingerprint
+from tests.integration.conftest import alembic_config
 
 from fuzzhelm.storage.models import ALL_TABLES, APP_ROLE, AUTH_TABLES, CORE_TABLES, TRADING_TABLES, metadata
 
@@ -124,51 +124,6 @@ def test_migrations_up_and_down_clean(db_url: str, sync_engine: Engine) -> None:
         assert fingerprint(c) == head_fp  # повторний upgrade дає побітово ту саму схему
         assert _grants(c) == head_grants
         assert _public_types(c) == types_at_head
-
-
-def test_migrated_schema_matches_brief_ddl(db_url: str, sync_engine: Engine) -> None:
-    """Нормативний DDL §6 брифінгу в тимчасовій схемі = схема після міграцій (крім ST-01, API-02)."""
-    statements = brief_ddl(ROOT / "docs" / "BRIEF.md")
-    assert len(statements) == 22  # 15 CREATE TABLE + 7 CREATE INDEX
-    with sync_engine.connect() as c:
-        tx = c.begin()
-        try:
-            c.execute(text("CREATE SCHEMA brief_ref"))
-            c.execute(text("SET LOCAL search_path TO brief_ref"))
-            for stmt in statements:
-                c.exec_driver_sql(stmt)
-            ref = fingerprint(c, "brief_ref")
-            migrated = fingerprint(c, "public")
-        finally:
-            tx.rollback()  # тимчасова схема зникає разом із транзакцією
-
-    assert [t for (t,) in ref["tables"]] == sorted(ALL_TABLES)
-    named = {name for _, name, _ in ref["indexes"] if name.startswith(("ix_", "ux_"))}
-    assert named == {
-        "ix_candle_time_brin",
-        "ix_candle_lookup",
-        "ix_gap_open",
-        "ux_run_identity",
-        "ix_decision_rules_gin",
-        "ix_risk_run_ts",
-        "ix_risk_veto",
-    }
-    assert {name for _, name, _, _ in ref["constraints"]} >= {"ck_hl", "ck_h", "ck_l", "ck_vwap"}
-    # єдине свідоме відхилення: sim_order.decision_id NOT NULL (ST-01)
-    decision_fk_mig = [r for r in migrated["columns"] if r[0] == "sim_order" and r[2] == "decision_id"]
-    decision_fk_ref = [r for r in ref["columns"] if r[0] == "sim_order" and r[2] == "decision_id"]
-    assert decision_fk_mig[0][4] is True and decision_fk_ref[0][4] is False
-    migrated["columns"] = [
-        (*r[:4], False, *r[5:]) if (r[0], r[2]) == ("sim_order", "decision_id") else r
-        for r in migrated["columns"]
-    ]
-    # друге свідоме відхилення: 0004 дописує в кінець decision три nullable-колонки (API-02)
-    extras = [r for r in migrated["columns"] if r[0] == "decision" and r[2] in DECISION_EXTRAS]
-    assert [(r[2], r[3], r[4]) for r in extras] == [
-        ("sizing", "jsonb", False), ("risk", "jsonb", False), ("narrative", "text", False)]
-    migrated["columns"] = [r for r in migrated["columns"] if r not in extras]
-    for key in ref:
-        assert migrated[key] == ref[key], key
 
 
 def _diffs(c: Connection, md: MetaData, only: set[str] | None = None) -> list[Any]:

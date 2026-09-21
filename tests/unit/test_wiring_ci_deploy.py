@@ -48,11 +48,11 @@ def test_ci_workflow_runs_lint_tests_integration_and_audit() -> None:
 
 @pytest.mark.skipif(shutil.which("make") is None, reason="make is not installed")
 def test_makefile_targets_expand() -> None:
-    targets = ("up", "down", "migrate", "ingest", "record", "replay", "backtest", "verify", "test", "test-int",
-               "cov", "lint", "audit", "users", "backup")
+    targets = ("up", "down", "migrate", "ingest", "record", "replay", "backtest", "verify", "test",
+               "test-int", "cov", "lint", "audit", "users", "backup")
     for t in targets:
         out = subprocess.run(["make", "-n", t], cwd=ROOT, capture_output=True, text=True, check=True).stdout
         assert out.strip(), t
-    bt = subprocess.run(["make", "-n", "backtest", "SYMBOL=ETHUSDT"], cwd=ROOT, capture_output=True, text=True,
-                        check=True).stdout
+    bt = subprocess.run(["make", "-n", "backtest", "SYMBOL=ETHUSDT"], cwd=ROOT, capture_output=True,
+                        text=True, check=True).stdout
     assert "scripts/run_backtest.py --symbol ETHUSDT" in bt

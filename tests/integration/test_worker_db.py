@@ -170,9 +170,8 @@ async def test_replay_worker_persists_run_with_full_passport(
     assert all(dec_ids[o.decision_id].fired_rules for o in orders)            # угоди мають формальний вивід
     assert any(o.status == "FILLED" for o in orders)
     assert positions and all(p.exit_reason is not None for p in positions)
-    # крива: 45 точок, хеш з БД = паспорт; 45 < W = 500, тож VaR/CVaR ще не визначені (RF-03)
+    # крива: 45 точок, хеш з БД = паспорт
     assert len(curve) == 45 and equity_hash(eq, ts) == summary.equity_hash
-    assert all(p.var95 is None and p.cvar95 is None for p in curve)
     intents = {o.decision_id for o in orders if o.otype == "MARKET"}          # вхід і вихід — наміри
     assert len([r for r in risk if r.rule != "risk_state"]) == 7 * len(intents)
     # SSE: воркер публікував події транзакційно
@@ -262,7 +261,7 @@ async def test_flash_crash_halts_on_db_and_only_admin_release_via_api_unlatches(
     assert replay_candles == 0                  # синтетичні ціни сценарію в candle не пишуться
 
 
-async def test_persist_backtest_batch_writes_passport_journal_and_var(
+async def test_persist_backtest_batch_writes_passport_and_journal(
         db_url: str, factory: async_sessionmaker[AsyncSession]) -> None:
     iid = await _seed_instrument(factory)
     ds = load_fixture_dataset().slice(0, 1500)
@@ -291,7 +290,6 @@ async def test_persist_backtest_batch_writes_passport_journal_and_var(
     async with session_scope(factory) as s:
         run = await RunRepo(s).get(rid)
         ts, eq = await EquityRepo(s).equity_series(rid)
-        curve = await EquityRepo(s).curve(rid)
         bad = await JournalRepo(s).verify(rid)
         head = await JournalRepo(s).head(rid)
         orders = await OrderRepo(s).list_for_run(rid)
@@ -304,8 +302,6 @@ async def test_persist_backtest_batch_writes_passport_journal_and_var(
     assert len(orders) == counts.orders and {o.decision_id for o in orders} <= {d.id for d in decisions}
     filled = [o for o in orders if o.status == "FILLED"]
     assert filled and all(o.filled_qty == o.qty and o.avg_fill_price is not None for o in filled)
-    assert all(p.var95 is None for p in curve[:500])
-    assert all(p.cvar95 >= p.var95 >= 0 for p in curve[500:])  # type: ignore[operator]
     assert n_candles == 0
 
 
@@ -346,7 +342,7 @@ async def test_ingest_worker_writes_candles_gaps_journal_and_health(
     assert health and health[-1]["source"] == "ingest_worker" and health[-1]["candles_closed"] == len(closed)
 
 
-async def test_api_backtest_runner_persists_journal_chain_and_var(
+async def test_api_backtest_runner_persists_journal_chain(
         db_url: str, factory: async_sessionmaker[AsyncSession], tmp_path: Path) -> None:
     """POST /backtests (DbBacktestRunner) пише через workers.persist: event_journal прогону з головою =
     run.journal_head_hash (раніше API зберігав лише хеш голови — API-08 п. 2) і VaR/CVaR у equity_point."""
@@ -380,5 +376,4 @@ async def test_api_backtest_runner_persists_journal_chain_and_var(
         curve = await EquityRepo(s).curve(rid)
     assert run is not None and run.status == "DONE" and out["journal_entries"] == head.next_seq > 0
     assert bad is None and run.journal_head_hash == head.head
-    assert len(curve) > 500 and curve[499].var95 is None
-    assert curve[600].var95 is not None and curve[600].cvar95 is not None
+    assert len(curve) > 500

@@ -787,8 +787,7 @@ class DbSink:
                     "run_id": rid, "ts_ns": p.ts_ns, "equity": _dec_s(p.equity),
                     "drawdown": _dec_s(p.drawdown), "risk_state": p.risk_state.value,
                     "kappa": _dec_s(p.kappa),
-                    "position_qty": _dec_s(p.position_qty), "var95": _dec_s(w.var95),
-                    "cvar95": _dec_s(w.cvar95)})
+                    "position_qty": _dec_s(p.position_qty)})
             await self._notify(s, "health", sess.health())
 
     async def on_out_of_band(self, sess: TradingSession, *, risk: Sequence[RiskEventRecord],

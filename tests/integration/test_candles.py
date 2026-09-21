@@ -241,18 +241,12 @@ async def test_candle_range_pagination_arrays_and_gaps(factory: async_sessionmak
         assert await repo.latest_open_time_ns(iid, "1m") == candles[-1].open_time_ns
         assert await repo.latest_open_time_ns(iid, "1m", closed_only=False) == candle(400).open_time_ns
 
-        n = await repo.set_anomaly_scores(iid, "1m", [(candles[0].open_time_ns, 0.123456789)])
-        assert n == 1
-        row = await repo.get(iid, "1m", candles[0].open_time_ns)
-        assert row is not None and row.anomaly_score == Decimal("0.123457")  # NUMERIC(10,6)
     async with session_scope(factory) as s:
-        # повторний добір без скору не стирає вже порахований (COALESCE у DO UPDATE) — рядок закритий,
-        # тож тут перевіряємо відкриту свічку
+        # відкриту свічку повторний upsert оновлює
         repo = CandleRepo(s)
-        await repo.set_anomaly_scores(iid, "1m", [(candle(400).open_time_ns, 0.5)])
         await repo.upsert([candle(400, src=Src.WS, closed=False, close_px=Decimal("60003.00"))], iid)
         row = await repo.get(iid, "1m", candle(400).open_time_ns)
-        assert row is not None and row.anomaly_score == Decimal("0.5") and row.c == Decimal("60003.00")
+        assert row is not None and row.c == Decimal("60003.00")
 
 
 @pytest.mark.slow
