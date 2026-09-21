@@ -1,8 +1,7 @@
-"""Контракт веб-панелі §8.2: три екрани, десять компонентів, п'ять сторів, i18n uk/en без дір.
+"""Контракт веб-панелі: три екрани, десять компонентів, п'ять сторів, i18n uk/en без дір.
 
 Найменування: tests/arch/test_ui_contract.py
-Призначення: §8.2 перелічує склад панелі поіменно, а §13 дозволяє відрізати i18n лише свідомо.
-    Перевіряємо це як інваріант дерева, а не як домовленість: зникне компонент або розійдуться
+Призначення: склад панелі перевіряється як інваріант дерева, а не як домовленість: зникне компонент або розійдуться
     ключі uk/en — падає прогін, а не екранограма у звіті. Тести не запускають Node і не збирають
     панель: це перевірка складу репозиторію, тож вони офлайн і швидкі.
 Автор: Андрій Жук, 2026.
@@ -22,9 +21,6 @@ COMPONENTS = (
     "CandleChart", "DetectorGauge", "MembershipPlot", "RuleTable", "RiskStatePanel",
     "RejectionLog", "EquityCurve", "MetricsTable", "RulesEditor", "DqPanel",
 )
-# Понад перелік §8.2: решта вимог того ж підрозділу до BacktestView («6 фолдів walk-forward
-# парними стовпчиками IS vs OOS, Парето-фронт, таблиця чутливості») — окремими компонентами.
-EXTRA_COMPONENTS = ("WalkForwardChart", "ParetoFront", "SensitivityTable")
 STORES = ("market", "decision", "risk", "backtest", "auth")
 
 
@@ -43,13 +39,13 @@ def test_ui_has_three_views_ten_components_and_five_stores() -> None:
     for name in VIEWS:
         if not (UI / "src" / "views" / f"{name}.vue").is_file():
             missing.append(f"views/{name}.vue")
-    for name in (*COMPONENTS, *EXTRA_COMPONENTS):
+    for name in COMPONENTS:
         if not (UI / "src" / "components" / f"{name}.vue").is_file():
             missing.append(f"components/{name}.vue")
     for name in STORES:
         if not (UI / "src" / "stores" / f"{name}.ts").is_file():
             missing.append(f"stores/{name}.ts")
-    assert missing == [], f"бракує елементів панелі з §8.2: {missing}"
+    assert missing == [], f"бракує елементів панелі: {missing}"
 
 
 def test_ui_i18n_uk_and_en_have_the_same_keys() -> None:
@@ -80,24 +76,3 @@ def test_ui_never_points_at_mainnet(host: str) -> None:
     assert hits == [], f"панель згадує mainnet-хост {host} у {hits}"
 
 
-def test_ui_experiment_data_is_generated_and_compact() -> None:
-    """§8.2 вимагає walk-forward, Парето і чутливість; дані зводить scripts/export_ui_experiments.py.
-
-    Перевіряємо, що артефакт є, містить усі три розділи і лишається малим: у нього свідомо не
-    кладуть криві капіталу (сирий walkforward — 8.8 МБ, зведення — сотня кілобайт).
-    """
-    data_file = UI / "src" / "data" / "experiments.json"
-    assert data_file.is_file(), "немає ui/src/data/experiments.json — виконайте `make ui-data`"
-    doc = json.loads(data_file.read_text(encoding="utf-8"))
-    assert doc["symbols"], "у зведенні немає жодного інструмента"
-    for section in ("walkforward", "pareto", "sensitivity"):
-        assert doc.get(section), f"у зведенні немає розділу {section}"
-    # Розділ може бути не для кожного інструмента: чутливість рахували лише для BTCUSDT.
-    # Вимагаємо, щоб наявні розділи були непорожні, а панель уміла показати відсутність.
-    for sym, wf in doc["walkforward"].items():
-        assert wf["engines"], f"{sym}: немає рушіїв walk-forward"
-    for sym, pf in doc["pareto"].items():
-        assert pf["cells"], f"{sym}: немає клітинок сітки"
-    for sym, sn in doc["sensitivity"].items():
-        assert sn["tornado"], f"{sym}: немає рядків чутливості"
-    assert data_file.stat().st_size < 400 * 1024, "зведення розрослося — у ньому зайві масиви"

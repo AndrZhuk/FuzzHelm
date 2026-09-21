@@ -84,7 +84,6 @@ export interface Candle {
   o: string | null; h: string | null; l: string | null; c: string | null
   volume: string | null; quote_volume: string | null; trades_count: number | null
   vwap: string | null; is_closed: boolean; is_synthetic: boolean; src: number
-  anomaly_score: string | null
 }
 export interface CandlePage {
   symbol: string; instrument_id: number; tf: string; items: Candle[]; next_after_ns: number | null
@@ -109,7 +108,7 @@ export interface RiskLimits { config: Record<string, unknown>; sha256: string }
 
 export interface DqRow {
   hour_start_ns: number; expected_buckets: number | null; observed_buckets: number | null
-  invalid_count: number | null; anomaly_count: number | null; gap_seconds: number | null
+  invalid_count: number | null; gap_seconds: number | null
   lag_p95_ms: number | null; completeness: number | null; validity: number | null
   timeliness: number | null; continuity: number | null; score: number | null
 }
@@ -142,7 +141,6 @@ export interface EquityPoint {
   ts_ns: number; equity: string | null; cash: string | null; unrealized: string | null
   gross_exposure: string | null; leverage: number | null; drawdown: number | null
   risk_state: RiskStateName | null; kappa: number | null
-  var95: string | null; cvar95: string | null
 }
 export interface EquityCurveData { run_id: string; n_total: number; stride: number; items: EquityPoint[] }
 

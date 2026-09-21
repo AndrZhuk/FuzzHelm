@@ -7,11 +7,11 @@ import type {
 
 /** Порядок метрик у таблиці звіту: спершу дохідність, тоді ризик, тоді службові. */
 export const METRIC_ORDER = [
-  'total_return', 'cagr', 'sharpe', 'sortino', 'calmar', 'psr',
-  'max_drawdown', 'ulcer_index', 'ann_vol', 'var95', 'cvar95',
+  'total_return', 'cagr', 'sharpe', 'sortino', 'calmar',
+  'max_drawdown', 'ulcer_index', 'ann_vol',
   'win_rate', 'profit_factor', 'expectancy', 'avg_win', 'avg_loss',
   'n_trades', 'n_fills', 'turnover', 'exposure', 'traded_notional',
-  'skew', 'kurt', 'tail_ratio', 'sr_period', 'n_obs', 'halted',
+  'tail_ratio', 'halted',
 ] as const
 
 export const useBacktest = defineStore('backtest', () => {

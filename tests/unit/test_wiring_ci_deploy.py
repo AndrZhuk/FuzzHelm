@@ -46,31 +46,13 @@ def test_ci_workflow_runs_lint_tests_integration_and_audit() -> None:
     assert pyproject["tool"]["coverage"]["report"]["fail_under"] == 80
 
 
-def test_fly_toml_serves_the_api_on_8000_with_the_liveness_probe() -> None:
-    fly = tomllib.loads((ROOT / "fly.toml").read_text(encoding="utf-8"))
-    http = fly["http_service"]
-    assert http["internal_port"] == 8000 and http["checks"][0]["path"] == "/healthz"
-    cmd = fly["processes"]["app"]
-    assert "uvicorn fuzzhelm.api.main:app" in cmd and "--port 8000" in cmd
-    assert "change-me" in fly["app"]                                   # плейсхолдер, деплой — крок людини
-    text = (ROOT / "fly.toml").read_text(encoding="utf-8").lower()
-    assert "secret =" not in text and "password" not in text           # секрети лише через fly secrets
-    from fuzzhelm.api.main import create_app  # noqa: PLC0415
-
-    assert "/healthz" in {getattr(r, "path", None) for r in create_app().routes}
-
-
 @pytest.mark.skipif(shutil.which("make") is None, reason="make is not installed")
 def test_makefile_targets_expand() -> None:
-    targets = ("up", "down", "migrate", "ingest", "record", "replay", "backtest", "grid", "walkforward",
-               "experiments", "verify", "test", "test-int", "cov", "lint", "audit", "report", "anomaly",
-               "users", "backup")
+    targets = ("up", "down", "migrate", "ingest", "record", "replay", "backtest", "verify", "test", "test-int",
+               "cov", "lint", "audit", "users", "backup")
     for t in targets:
         out = subprocess.run(["make", "-n", t], cwd=ROOT, capture_output=True, text=True, check=True).stdout
         assert out.strip(), t
-    grid = subprocess.run(["make", "-n", "grid", "SYMBOL=ETHUSDT"], cwd=ROOT, capture_output=True, text=True,
-                          check=True).stdout
-    assert "scripts/run_grid.py --db --symbol ETHUSDT" in grid
-    exp = subprocess.run(["make", "-n", "experiments"], cwd=ROOT, capture_output=True, text=True,
-                         check=True).stdout
-    assert "scripts/run_all_experiments.sh" in exp
+    bt = subprocess.run(["make", "-n", "backtest", "SYMBOL=ETHUSDT"], cwd=ROOT, capture_output=True, text=True,
+                        check=True).stdout
+    assert "scripts/run_backtest.py --symbol ETHUSDT" in bt

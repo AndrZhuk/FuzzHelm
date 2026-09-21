@@ -1,3 +1,0 @@
-uv run ruff check src tests scripts && uv run mypy src/fuzzhelm/core src/fuzzhelm/fuzzy src/fuzzhelm/risk
-All checks passed!
-Success: no issues found in 35 source files
