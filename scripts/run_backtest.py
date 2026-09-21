@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import math
 import sys
@@ -116,6 +117,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         timings["load_db_s"] = time.perf_counter() - t
         prof = load_yaml(f"profiles/{args.profile}")
         cfg = BacktestConfig.from_profile(args.profile)
+        if args.cost_mode is not None:          # напр. zero — той самий прогін без витрат виконання
+            cfg = dataclasses.replace(cfg, cost_mode=args.cost_mode)
         seed = int(prof["seed"])
         # git_dirty — зміни КОДУ (поза artifacts/, docs/): одне визначення з експериментами (WIRE-03)
         gs = read_git_state()
@@ -486,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Full persisted backtest run on the 45-day DB window.")
     ap.add_argument("--symbol", default="BTCUSDT", choices=("BTCUSDT", "ETHUSDT"))
     ap.add_argument("--profile", default="backtest")
+    ap.add_argument("--cost-mode", default=None, choices=("zero", "sqrt_impact", "full"),
+                    help="override the cost model of the profile (zero = no execution costs)")
     ap.add_argument("--database-url", default=None)
     ap.add_argument("--report", type=Path, default=None, help="default: docs/figures/metrics_<SYMBOL>.md")
     ap.add_argument("--figure", type=Path, default=None, help="default: docs/figures/equity_<SYMBOL>.png")
@@ -493,8 +498,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="when an identical run is already stored, do not re-run the engine to check "
                          "that the current code reproduces its hashes")
     args = ap.parse_args(argv)
-    args.report = args.report or FIG_DIR / f"metrics_{args.symbol}.md"
-    args.figure = args.figure or FIG_DIR / f"equity_{args.symbol}.png"
+    tag = "" if args.cost_mode in (None, "full") else f"_{args.cost_mode}"
+    args.report = args.report or FIG_DIR / f"metrics_{args.symbol}{tag}.md"
+    args.figure = args.figure or FIG_DIR / f"equity_{args.symbol}{tag}.png"
     r = asyncio.run(run(args))
     run_row = r["run"]
     plot(r, args.figure)
