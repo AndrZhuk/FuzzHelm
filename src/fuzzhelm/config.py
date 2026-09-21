@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     # --- API/безпека
     jwt_secret: SecretStr = SecretStr("dev-only-change-me")
     jwt_ttl_hours: int = 8
+    # Кнопки швидкого входу під демо-користувачами (demo_<роль>) без пароля. ЛИШЕ для локального стенда:
+    # за замовчуванням вимкнено, вмикається явно FUZZHELM_DEMO_LOGIN=1.
+    demo_login: bool = False
 
     # --- відтворюваність
     seed: int = 20260918

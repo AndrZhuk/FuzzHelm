@@ -65,6 +65,16 @@ class TokenResponse(_Out):
     login: str
 
 
+class DemoUser(_Out):
+    login: str
+    role: Role
+
+
+class DemoUsersResponse(_Out):
+    enabled: bool = Field(description="Whether quick demo sign-in is switched on (FUZZHELM_DEMO_LOGIN=1).")
+    users: list[DemoUser] = Field(description="Existing demo users (login `demo_<role>`), one per role.")
+
+
 class MeResponse(_Out):
     uid: int
     login: str

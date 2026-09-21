@@ -42,7 +42,8 @@ DEV_JWT_SECRETS = frozenset({"dev-only-change-me", "change-me", ""})
 MIN_JWT_SECRET_CHARS = 32  # HS256: ключ ≥ 256 біт (RFC 7518 §3.2)
 DEFAULT_CORS_ORIGINS: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
 PUBLIC_PATHS: frozenset[str] = frozenset(
-    {"/auth/login", "/healthz", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
+    {"/auth/login", "/auth/demo", "/auth/demo/{login}", "/healthz", "/docs", "/docs/oauth2-redirect",
+     "/redoc", "/openapi.json"}
 )
 
 DESCRIPTION = """
@@ -179,6 +180,9 @@ def create_app(
         if svc is not None and weak_jwt_secret(svc.settings.jwt_secret.get_secret_value()):
             log.warning("FUZZHELM_JWT_SECRET is a development default or shorter than %d chars; "
                         "set a random secret in .env", MIN_JWT_SECRET_CHARS)
+        if svc is not None and svc.settings.demo_login:
+            log.warning("FUZZHELM_DEMO_LOGIN is on: demo users can sign in without a password "
+                        "(local stand only, never expose this API)")
         try:
             yield
         finally:

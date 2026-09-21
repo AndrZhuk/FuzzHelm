@@ -1,4 +1,4 @@
-"""Маршрути автентифікації: POST /auth/login (OAuth2-форма або JSON) → JWT; GET /auth/me.
+"""Маршрути автентифікації: POST /auth/login (OAuth2-форма або JSON) → JWT; GET /auth/me; демо-вхід.
 
 Найменування: api/routers/auth.py
 Призначення: обмін логіна/пароля на токен доступу з роллю; кожна спроба входу (успішна і невдала)
@@ -7,6 +7,11 @@
 
 Повідомлення про помилку однакове для «немає користувача» і «хибний пароль», а bcrypt рахується і для
 неіснуючого логіна (dummy_verify) — перелік користувачів не витікає ні текстом, ні часом відповіді.
+
+Демо-вхід (GET /auth/demo, POST /auth/demo/{login}) — кнопки швидкого входу на екрані логіну для
+локального стенда: токен видається демо-користувачу (логін `demo_<роль>`) без пароля. Працює лише при
+FUZZHELM_DEMO_LOGIN=1 (за замовчуванням вимкнено; інакше 404), кожен такий вхід пишеться в audit_log.
+Паролів у коді панелі немає: список кнопок вона отримує від сервера.
 """
 
 from __future__ import annotations
@@ -21,12 +26,22 @@ from pydantic import ValidationError
 
 from fuzzhelm.api.auth import ACCESS_MATRIX, Permission, Principal, issue_token
 from fuzzhelm.api.deps import ServicesDep, client_ip, require
-from fuzzhelm.api.schemas import ErrorResponse, LoginJson, MeResponse, TokenResponse
+from fuzzhelm.api.schemas import (
+    DemoUser,
+    DemoUsersResponse,
+    ErrorResponse,
+    LoginJson,
+    MeResponse,
+    TokenResponse,
+)
 from fuzzhelm.api.services import role_of
+from fuzzhelm.core.enums import Role
 from fuzzhelm.storage.repositories import UserRow
 from fuzzhelm.storage.repositories.user import verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+DEMO_PREFIX = "demo_"                     # демо-користувачі стенда: demo_admin, demo_operator, …
 
 _FORM_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -168,4 +183,61 @@ async def me(principal: Annotated[Principal, Depends(require(Permission.SELF_REA
         role=principal.role,
         permissions=perms,
         expires_at_s=principal.exp_s,
+    )
+
+
+@router.get(
+    "/demo",
+    response_model=DemoUsersResponse,
+    summary="Demo users for quick sign-in (local stand only)",
+    description="Lists the existing demo users (`demo_<role>`, one per role) for the quick sign-in buttons "
+    "of the login screen. Returns `enabled: false` and no users unless the server runs with "
+    "FUZZHELM_DEMO_LOGIN=1.",
+)
+async def demo_users(services: ServicesDep) -> DemoUsersResponse:
+    if not services.settings.demo_login:
+        return DemoUsersResponse(enabled=False, users=[])
+    users: list[DemoUser] = []
+    async with services.uow() as repos:
+        for role in (Role.ADMIN, Role.OPERATOR, Role.ANALYST, Role.AUDITOR):
+            user = await repos.users.get_by_login(f"{DEMO_PREFIX}{role.value}")
+            if user is not None and user.login is not None and role_of(user) is role:
+                users.append(DemoUser(login=user.login, role=role))
+    return DemoUsersResponse(enabled=True, users=users)
+
+
+@router.post(
+    "/demo/{login}",
+    response_model=TokenResponse,
+    summary="Quick sign-in as a demo user (local stand only)",
+    description="Issues the same JWT as `POST /auth/login` for a demo user (`demo_<role>`) without a "
+    "password. Answers 404 unless the server runs with FUZZHELM_DEMO_LOGIN=1; every sign-in is written to "
+    "the audit log.",
+    responses={404: {"model": ErrorResponse}},
+)
+async def demo_login(login: str, request: Request, services: ServicesDep) -> TokenResponse:
+    if not services.settings.demo_login or not login.startswith(DEMO_PREFIX):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
+    async with services.uow() as repos:
+        user = await repos.users.get_by_login(login)
+        role = role_of(user)
+        if user is None or role is None or user.login is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
+        issued = issue_token(
+            uid=user.id,
+            login=user.login,
+            role=role,
+            secret=services.settings.jwt_secret.get_secret_value(),
+            ttl_hours=services.settings.jwt_ttl_hours,
+            clock=services.clock,
+        )
+        await repos.audit.append(
+            "auth.demo_login",
+            f"user/{user.login}",
+            user_id=user.id,
+            ip=client_ip(request),
+            after={"role": role.value, "jti": issued.jti, "expires_at_s": issued.expires_at_s},
+        )
+    return TokenResponse(
+        access_token=issued.token, expires_in=issued.expires_in_s, role=role, login=user.login
     )

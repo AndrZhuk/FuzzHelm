@@ -66,6 +66,7 @@ API і веб-панель:
 ```bash
 uv run fuzzhelm user add --login admin --role admin               # пароль вводиться з клавіатури
 uv run uvicorn fuzzhelm.api.main:app --port 8000                  # API: http://127.0.0.1:8000/docs
+# або: make api-demo — те саме API з кнопками швидкого входу під demo_admin, demo_operator, … (лише локально)
 make replay                                                       # реплей записаної сесії (дані для екрана «Онлайн»)
 make ui                                                           # панель: http://localhost:5173
 ```

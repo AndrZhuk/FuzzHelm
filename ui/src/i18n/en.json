@@ -15,7 +15,15 @@
     "title": "Sign in",
     "sub": "Role-based access: analyst reads, operator edits strategies, admin owns limits and the kill switch.",
     "login": "Login", "password": "Password", "submit": "Sign in", "pending": "Checking…",
-    "hint": "Local stand: users are created by the student with fuzzhelm user add."
+    "hint": "Local stand: users are created by the student with fuzzhelm user add.",
+    "hintDemo": "Demo sign-in is on (FUZZHELM_DEMO_LOGIN=1) — local stand only.",
+    "quick": "Quick sign-in", "quickNote": "demo users, no password", "quickPending": "Signing in…",
+    "or": "or with a password",
+    "roles": { "admin": "Administrator", "operator": "Operator", "analyst": "Analyst", "auditor": "Auditor" },
+    "roleNote": {
+      "admin": "everything: risk limits, HALTED release", "operator": "strategies, rules, backtests",
+      "analyst": "viewing and backtests", "auditor": "viewing and the audit log"
+    }
   },
   "explain": {
     "title": "Decision derivation",

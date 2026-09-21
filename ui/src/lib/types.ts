@@ -7,6 +7,9 @@ export type VerdictKind = 'ALLOW' | 'SHRINK' | 'VETO'
 export interface TokenResponse {
   access_token: string; token_type: string; expires_in: number; role: Role; login: string
 }
+/** Кнопки швидкого входу: демо-користувачі стенда (сервер віддає їх лише при FUZZHELM_DEMO_LOGIN=1). */
+export interface DemoUser { login: string; role: Role }
+export interface DemoUsersResponse { enabled: boolean; users: DemoUser[] }
 export interface MeResponse {
   uid: number; login: string; role: Role; permissions: string[]; expires_at_s: number
 }

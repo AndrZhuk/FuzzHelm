@@ -3,7 +3,7 @@ PY := uv run
 SYMBOL ?= BTCUSDT
 TEST_DB_URL ?= postgresql+asyncpg://fuzzhelm:fuzzhelm@localhost:5443/fuzzhelm_test
 .PHONY: up down migrate ingest record replay backtest verify test test-int cov lint \
-	audit users backup restore ui ui-build ui-check screens
+	audit users backup restore api-demo ui ui-build ui-check screens
 
 up:          ; docker compose up -d --build
 down:        ; docker compose down
@@ -25,6 +25,8 @@ users:
 	@echo "  docker compose run --rm -it api fuzzhelm user add --login <логін> --role admin   # у контейнері"
 	@echo "Переглянути / змінити роль:  uv run fuzzhelm user list  |  uv run fuzzhelm user set-role --help"
 # --- веб-панель ----------------------------------------------------------------
+# API з кнопками швидкого входу під демо-користувачами (лише локальний стенд!)
+api-demo:    ; FUZZHELM_DEMO_LOGIN=1 $(PY) uvicorn fuzzhelm.api.main:app --port 8000
 # Vite проксіює /api на FUZZHELM_API (типово http://127.0.0.1:8000), тож CORS не потрібен.
 ui:          ; cd ui && npm install && npm run dev
 ui-build:    ; cd ui && npm install && npm run build

@@ -419,7 +419,8 @@ ROUTE_CASES = _route_cases()
 
 def test_every_route_is_protected_or_explicitly_public() -> None:
     routes = list(iter_api_routes())
-    assert len(routes) == len(ROUTE_CASES) + 1  # +1: POST /auth/login
+    # +3: POST /auth/login, GET /auth/demo, POST /auth/demo/{login}
+    assert len(routes) == len(ROUTE_CASES) + 3
     for route in routes:
         if route_permission(route) is None:
             assert route.path in PUBLIC_PATHS, f"{route.path} has no permission dependency"
@@ -1070,7 +1071,7 @@ async def test_openapi_is_complete_and_english(env: Env) -> None:
     spec = (await env.client.get("/openapi.json")).json()
     assert spec["info"]["title"] == "FuzzHelm API"
     ops = [(p, m, op) for p, item in spec["paths"].items() for m, op in item.items()]
-    assert len(ops) == len(ROUTE_CASES) + 2  # + login + healthz
+    assert len(ops) == len(ROUTE_CASES) + 4  # + login + demo (GET, POST) + healthz
     for path, method, op in ops:
         assert op.get("summary") and op.get("description") and op.get("tags"), (method, path)
         assert not CYRILLIC.search(op["summary"]), (method, path)
@@ -1208,3 +1209,35 @@ def test_detector_outputs_parser_rejects_incomplete_rows() -> None:
     assert parse_detector_outputs([]) is None
     assert parse_detector_outputs([{"name": "x", "s": 2.0, "c": 0.5}]) is None  # s поза [−1; 1]
     assert parse_detector_outputs([{"s": 0.1, "c": 0.5}]) is None  # немає імені
+
+
+async def test_demo_login_is_off_by_default(env: Env) -> None:
+    """Без FUZZHELM_DEMO_LOGIN кнопок немає, а вхід без пароля — 404 навіть для demo_-логіна."""
+    await env.db.repos().users.create("demo_admin", "demo-password-123", Role.ADMIN)
+    r = await env.client.get("/auth/demo")
+    assert r.status_code == 200 and r.json() == {"enabled": False, "users": []}
+    assert (await env.client.post("/auth/demo/demo_admin")).status_code == 404
+    assert not any(a.action == "auth.demo_login" for a in env.db.state.audit)
+
+
+async def test_demo_login_issues_token_only_for_demo_users_and_audits_it(env: Env) -> None:
+    env.services.settings = env.services.settings.model_copy(update={"demo_login": True})
+    repos = env.db.repos()
+    for role in (Role.AUDITOR, Role.ADMIN, Role.OPERATOR):      # analyst свідомо не створено
+        await repos.users.create(f"demo_{role.value}", "demo-password-123", role)
+    body = (await env.client.get("/auth/demo")).json()
+    assert body["enabled"] is True
+    assert body["users"] == [
+        {"login": "demo_admin", "role": "admin"},
+        {"login": "demo_operator", "role": "operator"},
+        {"login": "demo_auditor", "role": "auditor"},
+    ]
+    r = await env.client.post("/auth/demo/demo_operator")
+    assert r.status_code == 200 and r.json()["role"] == "operator" and r.json()["login"] == "demo_operator"
+    me = await env.client.get("/auth/me", headers={"Authorization": f"Bearer {r.json()['access_token']}"})
+    assert me.status_code == 200 and me.json()["login"] == "demo_operator" and me.json()["role"] == "operator"
+    # звичайний користувач (не demo_) і неіснуючий демо-логін — 404, токена немає
+    assert (await env.client.post("/auth/demo/admin")).status_code == 404
+    assert (await env.client.post("/auth/demo/demo_analyst")).status_code == 404
+    demo = [a for a in env.db.state.audit if a.action == "auth.demo_login"]
+    assert len(demo) == 1 and demo[0].target == "user/demo_operator"
