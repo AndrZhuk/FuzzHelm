@@ -90,7 +90,6 @@ class CandleOut(_Out):
     is_closed: bool
     is_synthetic: bool
     src: int = Field(description="1 = WebSocket, 2 = REST, 3 = replay.")
-    anomaly_score: DecimalStr | None
 
 
 class CandlePageOut(_Out):
@@ -108,7 +107,6 @@ class DqRowOut(_Out):
     expected_buckets: int | None
     observed_buckets: int | None
     invalid_count: int | None
-    anomaly_count: int | None
     gap_seconds: float | None
     lag_p95_ms: float | None
     completeness: float | None
@@ -121,7 +119,7 @@ class DqRowOut(_Out):
 class DqScoreOut(_Out):
     symbol: str
     instrument_id: int
-    weights: dict[str, float] = Field(description="AHP weights of the 4 components (Q = Σ w_i·component_i).")
+    weights: dict[str, float] = Field(description="Weights of the 4 components (Q = Σ w_i·component_i).")
     items: list[DqRowOut]
 
 

@@ -57,7 +57,6 @@ def candle_out(r: CandleRow) -> dict[str, Any]:
         "is_closed": r.is_closed,
         "is_synthetic": r.is_synthetic,
         "src": r.src,
-        "anomaly_score": dstr(r.anomaly_score),
     }
 
 
@@ -67,7 +66,6 @@ def dq_out(r: DqRow) -> dict[str, Any]:
         "expected_buckets": r.expected_buckets,
         "observed_buckets": r.observed_buckets,
         "invalid_count": r.invalid_count,
-        "anomaly_count": r.anomaly_count,
         "gap_seconds": fnum(r.gap_seconds),
         "lag_p95_ms": fnum(r.lag_p95_ms),
         "completeness": fnum(r.completeness),

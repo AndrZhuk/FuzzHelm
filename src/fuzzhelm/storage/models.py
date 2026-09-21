@@ -116,7 +116,6 @@ class CandleModel(Base):
     is_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     is_synthetic: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     src: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    anomaly_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     ingested_at: Mapped[datetime | None] = mapped_column(TSTZ, server_default=text("now()"))
 
 
@@ -171,7 +170,6 @@ class DqScoreModel(Base):
     expected_buckets: Mapped[int | None] = mapped_column(Integer)
     observed_buckets: Mapped[int | None] = mapped_column(Integer)
     invalid_count: Mapped[int | None] = mapped_column(Integer)
-    anomaly_count: Mapped[int | None] = mapped_column(Integer)
     gap_seconds: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     lag_p95_ms: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     completeness: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))

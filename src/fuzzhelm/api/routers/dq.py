@@ -1,8 +1,8 @@
-"""Маршрут якості даних: GET /dq/score — погодинний Q з розкладкою чотирьох компонент і вагами AHP.
+"""Маршрут якості даних: GET /dq/score — погодинний Q з розкладкою чотирьох компонент і їх вагами.
 
 Найменування: api/routers/dq.py
-Призначення: DqPanel веб-панелі показує Q = Σ wᵢ·компонентаᵢ; ваги (головний власний вектор матриці
-AHP, config/dq_weights.yaml) віддаються разом із рядками, щоб розкладку можна було перевірити.
+Призначення: DqPanel веб-панелі показує Q = Σ wᵢ·компонентаᵢ; ваги (config/dq_weights.yaml)
+віддаються разом із рядками, щоб розкладку можна було перевірити.
 Автор: Андрій Жук, 2026.
 """
 
@@ -17,8 +17,7 @@ from fuzzhelm.api.deps import ServicesDep, require
 from fuzzhelm.api.schemas import INT32_MAX, INT64_MAX, DqScoreOut, ErrorResponse
 from fuzzhelm.api.services import resolve_instrument
 from fuzzhelm.api.views import dq_out
-from fuzzhelm.quality.ahp import CRITERIA
-from fuzzhelm.quality.dq_score import load_dq_weights
+from fuzzhelm.quality.dq_score import CRITERIA, load_dq_weights
 
 router = APIRouter(prefix="/dq", tags=["data quality"])
 
@@ -31,7 +30,7 @@ DEFAULT_WINDOW_HOURS = 48
     response_model=DqScoreOut,
     summary="Hourly data-quality score Q",
     description="Hourly Q ∈ [0, 1] with completeness, validity, timeliness and continuity for one "
-    "instrument. Without bounds the last 48 hours are returned. `weights` are the AHP weights used for Q.",
+    "instrument. Without bounds the last 48 hours are returned. `weights` are the weights used for Q.",
     responses={404: {"model": ErrorResponse}},
 )
 async def score(

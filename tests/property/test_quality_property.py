@@ -3,7 +3,7 @@
 Найменування: tests/property/test_quality_property.py
 Призначення: Q — опукла комбінація чотирьох компонент, кожна обрізана до [0, 1]; перевірка на
 довільних (у т.ч. «неможливих»: N_obs > N_exp, N_invalid > N_total, прогалина > години) входах і
-довільних допустимих вагах (невід'ємні, Σ = 1), а також на фактичних AHP-вагах з конфігурації.
+довільних допустимих вагах (невід'ємні, Σ = 1), а також на фактичних вагах з конфігурації.
 Автор: Андрій Жук, 2026.
 """
 
@@ -37,7 +37,7 @@ def simplex_weights(draw: st.DrawFn) -> tuple[float, float, float, float]:
 def dq_inputs(draw: st.DrawFn) -> DqInputs:
     return DqInputs(
         expected_buckets=draw(counts), observed_buckets=draw(counts), total_count=draw(counts),
-        invalid_count=draw(counts), anomaly_count=draw(counts), gap_seconds=draw(seconds),
+        invalid_count=draw(counts), gap_seconds=draw(seconds),
         lag_p95_ms=draw(lag_ms),
     )
 
@@ -58,5 +58,5 @@ def test_dq_score_monotone_in_invalid_count(inp: DqInputs, extra: int) -> None:
     """Більше невалідних подій за тих самих інших умов ніколи не підвищує Q."""
     w = load_dq_weights()
     worse = DqInputs(inp.expected_buckets, inp.observed_buckets, inp.total_count, inp.invalid_count + extra,
-                     inp.anomaly_count, inp.gap_seconds, inp.lag_p95_ms)
+                     inp.gap_seconds, inp.lag_p95_ms)
     assert dq_score(worse, w).score <= dq_score(inp, w).score + 1e-15

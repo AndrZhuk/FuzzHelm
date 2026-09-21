@@ -26,7 +26,7 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from sqlalchemy import BigInteger, Boolean, and_, bindparam, cast, column, func, literal_column, select, table
+from sqlalchemy import BigInteger, Boolean, and_, cast, column, func, literal_column, select, table
 from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,7 +46,6 @@ from fuzzhelm.storage.repositories.common import (
     ns_to_dt,
     split_unique_rounds,
     supports_copy,
-    to_numeric,
     trim_decimal,
 )
 
@@ -57,13 +56,13 @@ KEY_COLUMNS: tuple[str, ...] = ("instrument_id", "tf", "open_time")
 # колонки, які пише upsert (ingested_at ставить DEFAULT now() / SET now())
 WRITE_COLUMNS: tuple[str, ...] = (
     "instrument_id", "tf", "open_time", "close_time", "o", "h", "l", "c", "volume", "quote_volume",
-    "trades_count", "vwap", "is_closed", "is_synthetic", "src", "anomaly_score",
+    "trades_count", "vwap", "is_closed", "is_synthetic", "src",
 )
 _UPDATE_COLUMNS: tuple[str, ...] = tuple(
-    c for c in WRITE_COLUMNS if c not in KEY_COLUMNS and c != "anomaly_score")
+    c for c in WRITE_COLUMNS if c not in KEY_COLUMNS)
 
 COPY_THRESHOLD = 500          # від скількох рядків у раунді вигідніший COPY
-VALUES_CHUNK = 1_000          # 16 колонок × 1000 рядків < 32767 параметрів asyncpg
+VALUES_CHUNK = 1_000          # 15 колонок × 1000 рядків < 32767 параметрів asyncpg
 _STAGE = "fh_candle_stage"
 
 
@@ -86,7 +85,6 @@ class CandleRow:
     is_closed: bool
     is_synthetic: bool
     src: int
-    anomaly_score: Decimal | None
     ingested_at_ns: int | None
 
     def to_dto(self, symbol_canon: str, venue: Venue, *, tick_size: Decimal | None = None) -> Candle:
@@ -164,12 +162,12 @@ class CandleArrays:
         ]
 
 
-def candle_record(c: Candle, instrument_id: int, anomaly_score: Decimal | None = None) -> tuple[Any, ...]:
+def candle_record(c: Candle, instrument_id: int) -> tuple[Any, ...]:
     """DTO → кортеж у порядку WRITE_COLUMNS (для COPY і VALUES)."""
     return (
         instrument_id, c.tf, ns_to_dt(c.open_time_ns), ns_to_dt(c.close_time_ns),
         c.o, c.h, c.l, c.c, c.volume, c.quote_volume, c.trades_count, c.vwap,
-        c.is_closed, c.is_synthetic, int(c.src), anomaly_score,
+        c.is_closed, c.is_synthetic, int(c.src),
     )
 
 
@@ -178,8 +176,6 @@ def _upsert_stmt(source: Select[Any] | None = None, rows: Sequence[dict[str, Any
     ins = ins.from_select(list(WRITE_COLUMNS), source) if source is not None else ins.values(list(rows or ()))
     ex = ins.excluded
     set_: dict[str, Any] = {name: ex[name] for name in _UPDATE_COLUMNS}
-    # скор аномалії ставить quality пізніше: повторний добір без скору не стирає вже порахований
-    set_["anomaly_score"] = func.coalesce(ex.anomaly_score, _T.c.anomaly_score)
     set_["ingested_at"] = func.now()
     ins = ins.on_conflict_do_update(
         index_elements=list(KEY_COLUMNS),
@@ -242,22 +238,6 @@ class CandleRepo:
         flags = list(res.scalars().all())
         await self.s.execute(sql_text(f"DROP TABLE pg_temp.{_STAGE}"))
         return flags
-
-    async def set_anomaly_scores(self, instrument_id: int, tf: str,
-                                 scores: Sequence[tuple[int, Decimal | float]]) -> int:
-        """Записати скор аномалії (quality/MLP) для свічок за open_time_ns; повертає к-сть оновлених."""
-        if not scores:
-            return 0
-        stmt = (
-            _T.update()
-            .where(_T.c.instrument_id == bindparam("iid"), _T.c.tf == bindparam("tf_"),
-                   _T.c.open_time == bindparam("ot"))
-            .values(anomaly_score=bindparam("score"))
-        )
-        params = [{"iid": instrument_id, "tf_": tf, "ot": ns_to_dt(t), "score": to_numeric(v)}
-                  for t, v in scores]
-        res = await self.s.execute(stmt, params)
-        return int(res.rowcount or 0)  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------ читання
 

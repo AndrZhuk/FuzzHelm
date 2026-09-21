@@ -56,7 +56,6 @@ UPGRADE: tuple[str, ...] = (
       is_closed     BOOLEAN NOT NULL DEFAULT FALSE,
       is_synthetic  BOOLEAN NOT NULL DEFAULT FALSE,
       src           SMALLINT NOT NULL CHECK (src IN (1,2,3)),
-      anomaly_score NUMERIC(10,6),
       ingested_at   TIMESTAMPTZ DEFAULT now(),
       PRIMARY KEY (instrument_id, tf, open_time),
       CONSTRAINT ck_hl   CHECK (h >= l),
@@ -106,7 +105,7 @@ UPGRADE: tuple[str, ...] = (
     CREATE TABLE dq_score (
       instrument_id INT, hour_start TIMESTAMPTZ,
       expected_buckets INT, observed_buckets INT, invalid_count INT,
-      anomaly_count INT, gap_seconds NUMERIC(10,2), lag_p95_ms NUMERIC(12,2),
+      gap_seconds NUMERIC(10,2), lag_p95_ms NUMERIC(12,2),
       completeness NUMERIC(6,4), validity NUMERIC(6,4),
       timeliness NUMERIC(6,4), continuity NUMERIC(6,4),
       score NUMERIC(6,4) CHECK (score BETWEEN 0 AND 1),

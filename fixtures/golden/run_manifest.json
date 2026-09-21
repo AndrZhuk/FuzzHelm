@@ -1,6 +1,5 @@
 {
   "_comment": "Еталон паспорта офлайн-реплею; run_id і journal_head свідомо виключені (залежать від контексту запуску) — див. scripts/make_golden_replay.py",
-  "anomalies": 0,
   "bars": 45,
   "candles_released": 45,
   "closed_trades": 1,

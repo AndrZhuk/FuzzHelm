@@ -25,7 +25,6 @@ import httpx
 import orjson
 import pytest
 import respx
-from tests.helpers.quality_models import fixture_bars, trained_autoencoder
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.frames import Close as WsClose
@@ -37,12 +36,10 @@ from fuzzhelm.core.dto import Candle, MarketEvent, Trade
 from fuzzhelm.core.enums import GapDetectorKind, GapStatus, Src, Stream, Venue
 from fuzzhelm.core.errors import MainnetHostRejected, NormalizationError
 from fuzzhelm.core.journal import EventJournal, verify_chain
-from fuzzhelm.core.money import quantize_price
 from fuzzhelm.core.ports import MarketFeed
-from fuzzhelm.features.convert import bar_from_candle
 from fuzzhelm.ingest.candles import CandleAggregator
 from fuzzhelm.ingest.gap_detector import GapDetector, GapRecord, transition
-from fuzzhelm.ingest.normalize import normalize_binance, normalize_exchange_info, normalize_rest_klines
+from fuzzhelm.ingest.normalize import normalize_binance, normalize_exchange_info
 from fuzzhelm.ingest.pipeline import (
     IngestPipeline,
     PipelineSinks,
@@ -79,11 +76,6 @@ from fuzzhelm.ingest.rest_client import BinanceRestClient
 from fuzzhelm.ingest.retry import RetryPolicy
 from fuzzhelm.ingest.symbols import BTC_USDT_PERP
 from fuzzhelm.ingest.ws_client import BinanceWsClient, WsFatalError, classify_exception
-from fuzzhelm.quality.anomaly_mlp import (
-    AnomalyFeatureExtractor,
-    AnomalyScorer,
-    AnomalyVerdict,
-)
 
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLE = ROOT / "fixtures" / "ws" / "sample_btcusdt_4m.jsonl.gz"
@@ -710,34 +702,6 @@ async def test_late_close_after_skip_does_not_mark_gap_filled(delay_s: int, rele
         assert [x.status for x in cap.gaps] == [GapStatus.OPEN]       # жодного хибного FILLED у ingest_gap
     else:
         assert rep.gaps == ()
-
-
-async def test_pipeline_scores_released_candles_and_reports_anomaly_verdicts() -> None:
-    """QualityGate §4.1: кожна випущена свічка після прогріву отримує скор автокодувальника (стік
-    on_anomaly → candle.anomaly_score); аномалії потрапляють у лічильники здоров'я і N_invalid години Q."""
-    rows = orjson.loads(gzip.decompress((REST / "binance_klines.json.gz").read_bytes()))
-    now_ms = rows[-1][6] + 1_000
-    candles = normalize_rest_klines(rows, INSTR, now_ms * 1_000_000, server_time_ms=now_ms)
-    assert tuple(bar_from_candle(c) for c in candles[:1500]) == fixture_bars()[:1500]
-    model = trained_autoencoder()                  # AnomalyAutoencoder(seed=20260918) на цих 1500 барах, кеш
-    feed = list(candles[1700:2001])
-    spike = quantize_price(feed[-2].c * Decimal("1.01"), INSTR.tick_size)          # +1 % за хвилину
-    feed[-1] = feed[-1].model_copy(update={"c": spike, "h": max(feed[-1].h, spike)})
-    verdicts: list[AnomalyVerdict] = []
-    cap = SessionCapture()
-    sinks = cap.sinks()
-    sinks.on_anomaly = verdicts.append
-    pipe = IngestPipeline(INSTR, sinks=sinks, anomaly=AnomalyScorer(model))
-    for c in feed:
-        await pipe.process_event(c)
-    rep = await pipe.finish()
-    assert [c.open_time_ns for c in cap.candles] == [c.open_time_ns for c in feed] and rep.health.invalid == 0
-    assert len(verdicts) == len(feed) - (AnomalyFeatureExtractor().warmup - 1)
-    assert [v.t_ns for v in verdicts] == [c.open_time_ns for c in feed[-len(verdicts):]]
-    assert verdicts[-1].anomaly and verdicts[-1].score > verdicts[-1].threshold
-    n_anomalies = sum(v.anomaly for v in verdicts)
-    assert rep.health.anomalies == n_anomalies
-    assert sum(h.score.inputs.anomaly_count for h in rep.dq) == n_anomalies
 
 
 def test_rest_agg_trade_row_normalizes_to_same_event_as_ws() -> None:

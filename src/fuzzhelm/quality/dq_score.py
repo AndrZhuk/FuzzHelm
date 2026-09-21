@@ -1,13 +1,14 @@
 """Скор якості даних Q ∈ [0, 1] за годину (брифінг §5.17).
 
 Найменування: quality/dq_score.py
-Призначення: чотири компоненти якості потоку і їх AHP-зважена сума; накопичувач статистики вікна,
+Призначення: чотири компоненти якості потоку і їх зважена сума (ваги — config/dq_weights.yaml);
+накопичувач статистики вікна,
 з якого конвеєр інжесту формує рядок таблиці dq_score.
 Автор: Андрій Жук, 2026.
 
 Формули (§5.17):
   completeness = N_obs / N_exp                    (частка очікуваних 1m-кошиків, що є)
-  validity     = 1 − N_invalid / N_total          (N_invalid включає аномалії автокодувальника)
+  validity     = 1 − N_invalid / N_total          (частка подій без порушень інваріантів)
   timeliness   = exp(−lag_p95 / τ₀),  τ₀ = 1000 мс
   continuity   = 1 − gap_sec / 3600
   Q = w₁·completeness + w₂·validity + w₃·timeliness + w₄·continuity
@@ -32,9 +33,10 @@ from typing import Final
 import numpy as np
 
 from fuzzhelm.config import load_yaml
-from fuzzhelm.quality.ahp import ahp_weights
 
 TAU0_MS: Final = 1000.0
+# порядок компонент у вагах config/dq_weights.yaml
+CRITERIA: Final = ("completeness", "validity", "timeliness", "continuity")
 HOUR_S: Final = 3600.0
 WEIGHT_SUM_TOL: Final = 1e-6
 
@@ -45,7 +47,6 @@ class DqInputs:
     observed_buckets: int            # N_obs
     total_count: int                 # N_total (усі перевірені події/свічки вікна)
     invalid_count: int = 0           # порушення інваріантів / нормалізації
-    anomaly_count: int = 0           # аномалії MLP серед ВАЛІДНИХ (множини не перетинаються)
     gap_seconds: float = 0.0
     lag_p95_ms: float = 0.0
     window_s: float = HOUR_S         # знаменник continuity (година за §5.17)
@@ -66,7 +67,7 @@ class DqScore:
         i = self.inputs
         return {
             "expected_buckets": i.expected_buckets, "observed_buckets": i.observed_buckets,
-            "invalid_count": i.invalid_count, "anomaly_count": i.anomaly_count,
+            "invalid_count": i.invalid_count,
             "gap_seconds": round(i.gap_seconds, 2), "lag_p95_ms": round(i.lag_p95_ms, 2),
             "completeness": round(self.completeness, 4), "validity": round(self.validity, 4),
             "timeliness": round(self.timeliness, 4), "continuity": round(self.continuity, 4),
@@ -84,8 +85,8 @@ def completeness(observed: int, expected: int) -> float:
     return 1.0 if expected <= 0 else _clip01(observed / expected)
 
 
-def validity(invalid: int, anomalies: int, total: int) -> float:
-    return 1.0 if total <= 0 else _clip01(1.0 - (invalid + anomalies) / total)
+def validity(invalid: int, total: int) -> float:
+    return 1.0 if total <= 0 else _clip01(1.0 - invalid / total)
 
 
 def _not_nan(x: float, name: str) -> float:
@@ -122,7 +123,7 @@ def dq_score(inputs: DqInputs, weights: Sequence[float], tau0_ms: float = TAU0_M
     w = check_weights(weights)
     comp = (
         completeness(inputs.observed_buckets, inputs.expected_buckets),
-        validity(inputs.invalid_count, inputs.anomaly_count, inputs.total_count),
+        validity(inputs.invalid_count, inputs.total_count),
         timeliness(inputs.lag_p95_ms, tau0_ms),
         continuity(inputs.gap_seconds, inputs.window_s),
     )
@@ -132,13 +133,10 @@ def dq_score(inputs: DqInputs, weights: Sequence[float], tau0_ms: float = TAU0_M
 
 
 def load_dq_weights(config_dir: Path | None = None) -> tuple[float, float, float, float]:
-    """Ваги з config/dq_weights.yaml; якщо `weights` ще не вписані — рахуються з ahp_matrix."""
-    cfg = load_yaml("dq_weights", config_dir)
-    w = cfg.get("weights")
-    if isinstance(w, list) and len(w) == 4:
-        s = sum(float(x) for x in w)
-        return check_weights([float(x) / s for x in w])   # 6 знаків у YAML → ренормування
-    return check_weights(ahp_weights(cfg["ahp_matrix"]).weights)
+    """Ваги з config/dq_weights.yaml (порядок: повнота, коректність, своєчасність, безперервність)."""
+    w = [float(x) for x in load_yaml("dq_weights", config_dir)["weights"]]
+    s = sum(w)
+    return check_weights([x / s for x in w])   # 6 знаків у YAML → ренормування до Σ = 1
 
 
 def load_tau0_ms(config_dir: Path | None = None) -> float:
@@ -177,17 +175,15 @@ class DqAccumulator:
     buckets: set[int] = field(default_factory=set)          # open_time закритих свічок
     total: int = 0
     invalid: int = 0
-    anomalies: int = 0
     lags_ms: list[float] = field(default_factory=list)
     gaps: list[tuple[int, int]] = field(default_factory=list)
 
     def add_bucket(self, open_time_ns: int) -> None:
         self.buckets.add(open_time_ns)
 
-    def add_checked(self, *, invalid: bool = False, anomaly: bool = False) -> None:
+    def add_checked(self, *, invalid: bool = False) -> None:
         self.total += 1
         self.invalid += int(invalid)
-        self.anomalies += int(anomaly and not invalid)
 
     def add_lag_ms(self, lag_ms: float) -> None:
         self.lags_ms.append(lag_ms)
@@ -202,7 +198,7 @@ class DqAccumulator:
     def inputs(self, expected_buckets: int) -> DqInputs:
         return DqInputs(
             expected_buckets=expected_buckets, observed_buckets=len(self.buckets),
-            total_count=self.total, invalid_count=self.invalid, anomaly_count=self.anomalies,
+            total_count=self.total, invalid_count=self.invalid,
             gap_seconds=merged_length_ns(self.gaps) / 1e9, lag_p95_ms=p95(self.lags_ms),
             window_s=self.window_ns / 1e9,
         )

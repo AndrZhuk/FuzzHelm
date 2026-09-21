@@ -64,7 +64,7 @@ ROUTER_MODULES = (auth, market, dq, strategies, backtests, runs, decisions, risk
 TAGS: list[dict[str, str]] = [
     {"name": "auth", "description": "JWT (HS256, 8 h) login and the caller's identity."},
     {"name": "market", "description": "Stored candles and pipeline health."},
-    {"name": "data quality", "description": "Hourly data-quality score Q (AHP-weighted components)."},
+    {"name": "data quality", "description": "Hourly data-quality score Q (weighted sum of 4 components)."},
     {"name": "strategies", "description": "Rules as data: validated, versioned Mamdani rule bases and MFs."},
     {"name": "backtests", "description": "Asynchronous backtest submission."},
     {"name": "runs", "description": "Run passports, metrics and equity curves."},

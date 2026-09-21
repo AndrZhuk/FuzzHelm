@@ -20,7 +20,7 @@ from fuzzhelm.storage.repositories.common import from_mapping, ns_to_dt, to_nume
 
 _T = table_of(DqScoreModel)
 _METRICS: tuple[str, ...] = (
-    "expected_buckets", "observed_buckets", "invalid_count", "anomaly_count", "gap_seconds", "lag_p95_ms",
+    "expected_buckets", "observed_buckets", "invalid_count", "gap_seconds", "lag_p95_ms",
     "completeness", "validity", "timeliness", "continuity", "score",
 )
 _NUMERIC: frozenset[str] = frozenset({
@@ -35,7 +35,6 @@ class DqRow:
     expected_buckets: int | None = None
     observed_buckets: int | None = None
     invalid_count: int | None = None
-    anomaly_count: int | None = None
     gap_seconds: Decimal | float | None = None
     lag_p95_ms: Decimal | float | None = None
     completeness: Decimal | float | None = None

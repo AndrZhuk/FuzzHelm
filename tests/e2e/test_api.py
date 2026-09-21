@@ -756,7 +756,6 @@ async def test_candles_keyset_pagination_and_decimal_strings(env: Env) -> None:
             is_closed=True,
             is_synthetic=False,
             src=1,
-            anomaly_score=None,
             ingested_at_ns=None,
         )
         for i in range(5)
@@ -800,7 +799,6 @@ async def test_health_reports_lag_gaps_and_pipeline_snapshot(env: Env) -> None:
                 is_closed=True,
                 is_synthetic=False,
                 src=1,
-                anomaly_score=None,
                 ingested_at_ns=None,
             )
         ]

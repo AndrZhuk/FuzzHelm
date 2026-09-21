@@ -254,7 +254,7 @@ def test_candle_record_matches_write_columns() -> None:
     c = candle(3, src=Src.WS, closed=False)
     rec = dict(zip(WRITE_COLUMNS, candle_record(c, 42), strict=True))
     assert rec["instrument_id"] == 42 and rec["src"] == 1 and rec["is_closed"] is False
-    assert dt_to_ns(rec["open_time"]) == c.open_time_ns and rec["o"] == c.o and rec["anomaly_score"] is None
+    assert dt_to_ns(rec["open_time"]) == c.open_time_ns and rec["o"] == c.o
 
 
 def test_candle_arrays_columns_and_bars() -> None:

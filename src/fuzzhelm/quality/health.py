@@ -36,7 +36,6 @@ class HealthSnapshot:
     gaps_open: int
     gaps_by_status: dict[str, int]
     candles_closed: int
-    anomalies: int
     lag_p95_ms: float | None
     lag_max_ms: float | None
     last_ingest_ns: int | None
@@ -63,7 +62,6 @@ class PipelineHealth:
     gaps_opened: int = 0
     gap_status: dict[int, str] = field(default_factory=dict)      # gap_id → поточний статус
     candles_closed: int = 0
-    anomalies: int = 0
     q: float | None = None
     last_ingest_ns: int | None = None
     last_event_ns: int | None = None
@@ -112,9 +110,8 @@ class PipelineHealth:
             self.gaps_opened += 1
         self.gap_status[gap_id] = status
 
-    def on_candle_closed(self, *, anomaly: bool = False) -> None:
+    def on_candle_closed(self) -> None:
         self.candles_closed += 1
-        self.anomalies += int(anomaly)
 
     # ------------------------------------------------------------ читання
 
@@ -134,7 +131,7 @@ class PipelineHealth:
             reconnects=self.reconnects, watchdog_fires=self.watchdog_fires,
             disconnects_by_class=dict(self.disconnects_by_class), gaps_opened=self.gaps_opened,
             gaps_open=self.open_gaps, gaps_by_status=dict(Counter(self.gap_status.values())),
-            candles_closed=self.candles_closed, anomalies=self.anomalies, lag_p95_ms=self.lag_p95_ms,
+            candles_closed=self.candles_closed, lag_p95_ms=self.lag_p95_ms,
             lag_max_ms=self.lag_max_ms, last_ingest_ns=self.last_ingest_ns,
             last_event_ns=self.last_event_ns, q=self.q,
         )
