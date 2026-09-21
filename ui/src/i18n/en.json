@@ -80,8 +80,8 @@
     "norejections": "No rejected orders."
   },
   "backtest": {
-    "title": "Backtest and experiment",
-    "lead": "Rule editor, run launcher and results: equity curve with drawdown and risk-mode bands, 17 metrics, reproducibility passport.",
+    "title": "Backtest",
+    "lead": "Run the strategy on historical data and review the results: equity curve with drawdown and risk-mode bands, metrics, reproducibility passport. A separate tab holds the rule editor.",
     "runs": "Runs",
     "editor": "Rule editor",
     "launch": "Launch run",
