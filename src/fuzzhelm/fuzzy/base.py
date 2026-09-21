@@ -1,4 +1,4 @@
-"""Контракт рушіїв виведення (MamdaniEngine, LinearVoteEngine).
+"""Контракт рушія виведення (MamdaniEngine).
 
 Найменування: fuzzy/base.py
 Автор: Андрій Жук, 2026.

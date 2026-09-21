@@ -111,8 +111,6 @@ def equity_out(r: EquityRow) -> dict[str, Any]:
         "drawdown": fnum(r.drawdown),
         "risk_state": r.risk_state,
         "kappa": fnum(r.kappa),
-        "var95": dstr(r.var95),
-        "cvar95": dstr(r.cvar95),
     }
 
 

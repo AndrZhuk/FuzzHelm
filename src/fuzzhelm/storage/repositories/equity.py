@@ -33,7 +33,7 @@ from fuzzhelm.storage.repositories.common import (
 _T = table_of(EquityPointModel)
 COLUMNS: tuple[str, ...] = (
     "run_id", "ts", "equity", "cash", "unrealized", "gross_exposure", "leverage", "drawdown",
-    "risk_state", "kappa", "var95", "cvar95",
+    "risk_state", "kappa",
 )
 COPY_THRESHOLD = 500
 INSERT_CHUNK = 2_000
@@ -54,8 +54,6 @@ class EquityPoint:
     drawdown: Num = None
     risk_state: Any = None
     kappa: Num = None
-    var95: Decimal | None = None
-    cvar95: Decimal | None = None
 
     def record(self, run_id: UUID) -> tuple[Any, ...]:
         # гроші NUMERIC(38,18) квантуються HALF_EVEN тут, а не округленням СУБД («половина від нуля»):
@@ -64,7 +62,6 @@ class EquityPoint:
             run_id, ns_to_dt(self.ts_ns), to_money18(self.equity), to_money18(self.cash),
             to_money18(self.unrealized), to_money18(self.gross_exposure), to_numeric(self.leverage),
             to_numeric(self.drawdown), enum_value(self.risk_state), to_numeric(self.kappa),
-            to_money18(self.var95), to_money18(self.cvar95),
         )
 
 
@@ -80,8 +77,6 @@ class EquityRow:
     drawdown: Decimal | None
     risk_state: str | None
     kappa: Decimal | None
-    var95: Decimal | None
-    cvar95: Decimal | None
 
 
 class EquityRepo:

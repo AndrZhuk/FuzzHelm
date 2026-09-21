@@ -119,7 +119,7 @@ def test_take_profit_fill_gets_a_sim_order_row_bound_to_the_opening_decision() -
         assert o.avg_fill_price == pos.exit_price
 
 
-@pytest.mark.parametrize("engine", ["mamdani", "linear"])
+@pytest.mark.parametrize("engine", ["mamdani"])
 def test_fast_intent_path_equals_traced_decision(engine: str) -> None:
     # бектест без трасування йде через DecisionCore.intent (infer_u); числа мусять бути ТІ САМІ
     loop = TradingLoop(fixture().instrument, base_config().with_params(engine=engine, record_traces="none",

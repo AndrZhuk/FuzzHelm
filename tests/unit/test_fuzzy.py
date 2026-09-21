@@ -29,7 +29,6 @@ from fuzzhelm.fuzzy.defuzz import (
     nodes_for_delta,
     quadrature_weights,
 )
-from fuzzhelm.fuzzy.linear import LinearVoteEngine
 from fuzzhelm.fuzzy.mamdani import MamdaniEngine, default_engine
 from fuzzhelm.fuzzy.membership import (
     LinguisticVariable,
@@ -42,7 +41,7 @@ from fuzzhelm.fuzzy.membership import (
     tri,
 )
 from fuzzhelm.fuzzy.rules import Rule, RuleBase, format_rule_table_md, load_rulebase, rule_table
-from fuzzhelm.fuzzy.surface import control_surface, monotonicity_scan
+from fuzzhelm.fuzzy.surface import control_surface
 
 ROOT = Path(__file__).resolve().parents[2]
 RULES_YAML = ROOT / "config" / "rules_mamdani.yaml"
@@ -532,48 +531,6 @@ def test_rule_ids_in_trace_are_sorted_ties_by_id(engine: MamdaniEngine) -> None:
 # ================================================================== лінійна базова лінія і поверхня
 
 
-def test_linear_vote_engine_contract_and_formula() -> None:
-    eng = LinearVoteEngine({"T": 0.6, "R": 0.4})
-    assert isinstance(eng, InferenceEngine) and eng.name == "linear"
-    res = eng.infer(0.5, -0.25, 0.9)
-    assert res.fired == () and res.engine == "linear"
-    assert math.isclose(res.u_raw, 0.6 * 0.5 - 0.4 * 0.25, rel_tol=1e-15)
-    assert eng.infer_u(0.5, -0.25, 0.1) == res.u_raw             # V не впливає за побудовою
-    assert LinearVoteEngine().infer_u(1.0, 1.0, 0.5) == 1.0
-    assert LinearVoteEngine({"T": 1.0}).infer_u(0.3, -1.0, 0.5) == 0.3
-    with pytest.raises(ValueError):
-        LinearVoteEngine({"T": 0.0, "R": 0.0})
-    with pytest.raises(ValueError):
-        LinearVoteEngine({"V": 1.0})
-
-
-def test_control_surface_shape_orientation_and_symmetry(engine: MamdaniEngine) -> None:
-    T, R, U = control_surface(engine, V=0.5, n=21)
-    assert T.shape == R.shape == U.shape == (21, 21)
-    assert np.all(np.diff(T[0]) > 0) and np.all(np.diff(R[:, 0]) > 0)
-    assert U[5, 7] == pytest.approx(engine.infer_u(T[5, 7], R[5, 7], 0.5), abs=1e-12)
-    assert np.max(np.abs(U + U[::-1, ::-1])) <= 1e-12             # u(−T,−R) = −u(T,R)
-    _, _, UL = control_surface(LinearVoteEngine(), V=0.5, n=5)
-    assert UL[0, 0] == -1.0 and UL[-1, -1] == 1.0
-
-
-def test_monotonicity_scan_detects_local_reversals(engine: MamdaniEngine) -> None:
-    # числові межі для зафіксованих МФ — у tests/property/test_fuzzy_property.py; тут — лише те, що
-    # не залежить від калібрування V: локальні реверси є (провал висоти на перетині термів T)
-    rep = monotonicity_scan(engine, n_T=201, n_R=21, n_V=6)
-    assert rep.decreasing_steps > 0 and rep.max_reversal > 0.0
-    t1, t2, r, v, u1, u2 = rep.reversal_at
-    assert t1 < t2 and u1 - u2 == pytest.approx(rep.max_reversal, abs=1e-15)
-    assert engine.infer_u(t2, r, v) < engine.infer_u(t1, r, v)
-    # точка найменшого запасу «грубої» монотонності: T₂ — фактичний argmin на [T₁ + gap; 1]
-    g1, g2, gr, gv = rep.gap_slack_at
-    assert g2 - g1 >= rep.gap - 1e-12
-    slack = engine.infer_u(g2, gr, gv) - engine.infer_u(g1, gr, gv)
-    assert slack == pytest.approx(rep.min_gap_slack, abs=1e-11)
-    lin = monotonicity_scan(LinearVoteEngine(), n_T=101, n_R=11, n_V=3)
-    assert lin.decreasing_steps == 0 and lin.max_reversal == 0.0
-
-
 # ================================================================== допоміжні API і межові випадки
 
 
@@ -632,18 +589,6 @@ def test_mf_constructors_reject_invalid_parameters(membership: MembershipConfig)
             bad()
     assert tri(-0.35, 0.0, 0.35).to_dict() == {"type": "tri", "points": [-0.35, 0.0, 0.35]}
     assert load_membership(MEMBERSHIP_YAML.read_text(encoding="utf-8")).T.terms == membership.T.terms
-
-
-def test_linear_engine_batch_and_non_finite() -> None:
-    eng = LinearVoteEngine()
-    out = eng.infer_batch(np.array([1.0, -0.2]), np.array([1.0, 0.6]), 0.5)
-    assert np.allclose(out, [1.0, 0.2]) and eng.weights == {"T": 0.5, "R": 0.5}
-    with pytest.raises(ValueError):
-        eng.infer_u(float("nan"), 0.0, 0.5)
-    with pytest.raises(ValueError):
-        eng.infer_batch(np.array([np.inf]), 0.0, 0.5)
-    with pytest.raises(ValueError):
-        LinearVoteEngine({"T": float("inf")})
 
 
 def test_surface_falls_back_to_infer_for_engines_without_batch(engine: MamdaniEngine) -> None:

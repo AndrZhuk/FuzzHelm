@@ -822,7 +822,7 @@ async def test_health_reports_lag_gaps_and_pipeline_snapshot(env: Env) -> None:
 
 async def test_runs_metrics_and_equity_decimation(env: Env) -> None:
     run_id = add_run(env.db)
-    env.db.state.metrics[run_id] = {"sharpe": 1.25, "psr": float("nan"), "n_trades": 7.0}
+    env.db.state.metrics[run_id] = {"sharpe": 1.25, "exposure": float("nan"), "n_trades": 7.0}
     env.db.state.equity[run_id] = [
         EquityRow(
             run_id=run_id,
@@ -835,8 +835,6 @@ async def test_runs_metrics_and_equity_decimation(env: Env) -> None:
             drawdown=Decimal("0.001"),
             risk_state="NORMAL",
             kappa=Decimal("1"),
-            var95=None,
-            cvar95=None,
         )
         for i in range(10)
     ]
@@ -847,7 +845,7 @@ async def test_runs_metrics_and_equity_decimation(env: Env) -> None:
         and run["dataset_hash"] == bytes(range(32)).hex()
     )
     m = (await env.client.get(f"/runs/{run_id}/metrics", headers=env.h(Role.ANALYST))).json()
-    assert m["metrics"] == {"n_trades": 7.0, "psr": None, "sharpe": 1.25}  # NaN → null (JSON без NaN)
+    assert m["metrics"] == {"n_trades": 7.0, "exposure": None, "sharpe": 1.25}  # NaN → null (JSON без NaN)
     eq = (
         await env.client.get(f"/runs/{run_id}/equity", params={"max_points": 4}, headers=env.h(Role.ANALYST))
     ).json()

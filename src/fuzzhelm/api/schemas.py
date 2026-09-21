@@ -229,7 +229,7 @@ class BacktestIn(_Model):
     tf: Literal["1m"] = "1m"
     ts_from_ns: int = Field(ge=0, le=INT64_MAX, description="Start of the window, ns UTC (inclusive).")
     ts_to_ns: int = Field(ge=0, le=INT64_MAX, description="End of the window, ns UTC (exclusive).")
-    engine: Literal["mamdani", "linear"] = "mamdani"
+    engine: Literal["mamdani"] = "mamdani"
     strategy_id: int | None = Field(
         default=None,
         ge=1,
@@ -291,8 +291,6 @@ class EquityPointOut(_Out):
     drawdown: float | None
     risk_state: str | None
     kappa: float | None
-    var95: DecimalStr | None
-    cvar95: DecimalStr | None
 
 
 class EquityOut(_Out):

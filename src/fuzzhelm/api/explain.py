@@ -38,7 +38,6 @@ from fuzzhelm.decision.trace import DecisionTrace, json_safe, rule_order
 from fuzzhelm.detectors.base import DetectorGroup, DetectorOutput
 from fuzzhelm.features.convert import to_float
 from fuzzhelm.fuzzy.base import FiredRule, FuzzyResult, InferenceEngine
-from fuzzhelm.fuzzy.linear import LinearVoteEngine
 from fuzzhelm.fuzzy.mamdani import MamdaniEngine, default_engine
 from fuzzhelm.fuzzy.membership import LinguisticVariable, MembershipConfig, load_membership
 from fuzzhelm.fuzzy.rules import load_rulebase
@@ -58,7 +57,7 @@ class StrategyRef:
     id: int | None
     name: str | None
     version: int | None
-    source: str  # "run_config" | "strategy" | "default_config" | "linear"
+    source: str  # "run_config" | "strategy" | "default_config"
 
 
 @lru_cache(maxsize=16)
@@ -113,15 +112,6 @@ def mamdani_for(strategy: Any | None, run: Any | None = None) -> tuple[MamdaniEn
     except Exception as e:  # збережена версія мала пройти валідацію під час POST/PUT
         raise ExplainError(f"stored strategy {strategy.id} is not loadable: {e}") from e
     return engine, StrategyRef(strategy.id, strategy.name, strategy.version, "strategy")
-
-
-def linear_for(run: Any | None) -> LinearVoteEngine:
-    """Базова лінія з вагами прогону (run.config.linear_weights) або типовими."""
-    cfg = getattr(run, "config", None)
-    weights = cfg.get("linear_weights") if isinstance(cfg, Mapping) else None
-    if isinstance(weights, Mapping) and weights:
-        return LinearVoteEngine({str(k): float(v) for k, v in weights.items()})
-    return LinearVoteEngine()
 
 
 def _f(x: Decimal | float | int | None) -> float | None:
@@ -271,7 +261,6 @@ def explain_decision(
     mf_points: int = 101,
 ) -> dict[str, Any]:
     """Повне пояснення рішення (dict, JSON-сумісний). `row` — storage DecisionRow."""
-    engine_kind = (getattr(run, "engine", None) or "mamdani") if run is not None else "mamdani"
     stored = {
         "T": _f(row.t_in),
         "R": _f(row.r_in),
@@ -302,11 +291,8 @@ def explain_decision(
 
     engine: InferenceEngine
     membership: MembershipConfig | None
-    if engine_kind == "linear":
-        engine, strategy_ref, membership = linear_for(run), StrategyRef(None, None, None, "linear"), None
-    else:
-        mengine, strategy_ref = mamdani_for(strategy, run)
-        engine, membership = mengine, mengine.membership
+    mengine, strategy_ref = mamdani_for(strategy, run)
+    engine, membership = mengine, mengine.membership
     fz = engine.infer(T, R, V)
 
     agr: Agreement | None = agreement(outputs, params.kappa_min, params.nu) if outputs else None

@@ -82,7 +82,7 @@ def test_different_seed_changes_equity() -> None:
     assert q1.equity_hash == q2.equity_hash
 
 
-@pytest.mark.parametrize("engine", ["mamdani", "linear"])
+@pytest.mark.parametrize("engine", ["mamdani"])
 def test_zero_signal_yields_flat_equity(engine: str) -> None:
     # усі ω_k = 0 ⇒ T = R = 0 ⇒ |u| < порогу входу: жодної заявки, капітал рівно початковий на кожному барі
     ds = fixture().slice(0, 900)

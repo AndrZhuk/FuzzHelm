@@ -51,10 +51,8 @@ from fuzzhelm.fuzzy.membership import (
 from fuzzhelm.fuzzy.rules import load_rulebase
 from fuzzhelm.risk.config import load_risk_config
 from fuzzhelm.risk.context import EquitySnapshot, EquityTracker
-from fuzzhelm.risk.kupiec import acceptance_region, kupiec_pof
 from fuzzhelm.risk.margin import side_liq_price
 from fuzzhelm.risk.state import RiskEvent, RiskStateMachine
-from fuzzhelm.risk.var import RollingVarCvar
 from fuzzhelm.sizing.convert import to_decimal
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -343,14 +341,6 @@ def test_day_return_is_zero_when_day_open_equity_is_not_positive() -> None:
     assert EquityTracker().rebase() is None                # перебазувати нічого, поки немає спостережень
 
 
-def test_kupiec_acceptance_region_collapses_to_expected_count_at_zero_critical() -> None:
-    # LR = 0 рівно тоді, коли x = W·p; з критичним значенням 0 приймається лише ця кількість пробоїв
-    assert kupiec_pof(1, 20, 0.05).lr == 0.0
-    assert acceptance_region(20, 0.05, critical=0.0) == (1, 1)
-    with pytest.raises(ValueError, match="empty acceptance region"):
-        acceptance_region(10, 0.05, critical=0.0)          # W·p = 0.5 — жодна ціла кількість не має LR = 0
-
-
 def test_flat_position_has_no_liquidation_price() -> None:
     with pytest.raises(ValueError, match="FLAT"):
         side_liq_price(Side.FLAT, Decimal(1), Decimal(100), Decimal(10), Decimal("0.005"))
@@ -363,13 +353,6 @@ def test_halted_never_recovers_by_classification_alone() -> None:
     assert sm.classify(calm, None, state=RiskState.HALTED, dwell=10**6) is RiskEvent.STEADY
     assert sm.classify(calm, None, state=RiskState.COOLDOWN, dwell=10**6) is RiskEvent.RECOVERY
     assert sm.cooldown_policy is sm.cfg.cooldown_policy
-
-
-def test_rolling_var_refuses_non_positive_equity() -> None:
-    rv = RollingVarCvar(window=3)
-    rv.update(Decimal(0))                                  # перше спостереження — лише запам'ятовується
-    with pytest.raises(ValueError, match="non-positive equity"):
-        rv.update(Decimal(1))
 
 
 def test_risk_config_loads_from_a_path(tmp_path: Path) -> None:

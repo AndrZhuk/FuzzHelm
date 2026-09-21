@@ -21,9 +21,8 @@ from fuzzhelm.config import CONFIG_DIR
 from fuzzhelm.core.enums import RunKind
 from fuzzhelm.core.errors import ConfigValidationError
 from fuzzhelm.core.journal import JournalEntry, verify_chain
-from fuzzhelm.risk.var import historical_var_cvar, returns_from_equity
 from fuzzhelm.workers.ingest_worker import pump
-from fuzzhelm.workers.persist import RollingVar, plan_backtest, var_cvar_money
+from fuzzhelm.workers.persist import plan_backtest
 from fuzzhelm.workers.trading_worker import (
     TradingSession,
     WorkerError,
@@ -45,29 +44,6 @@ def _curve(n: int, seed: int = 7) -> list[Decimal]:
     return out
 
 
-def test_equity_point_var_cvar_is_rolling_historical_estimate_in_money() -> None:
-    """VaR₉₅/CVaR₉₅ точки t = E_t · оцінка risk.var на останніх min(t, W) дохідностях; пакетний
-    (векторизований) і покроковий (live) шляхи дають ті самі числа; CVaR ≥ VaR; NULL до 20 дохідностей."""
-    eq = _curve(560)
-    w, min_obs = 500, 20
-    var, cvar = var_cvar_money(eq, window=w, min_obs=min_obs)
-    rv = RollingVar(window=w, min_obs=min_obs)
-    live = [rv.update(e) for e in eq]
-    r = returns_from_equity(eq)
-    for t, e in enumerate(eq):
-        if t < min_obs:
-            assert var[t] is None and cvar[t] is None and live[t] == (None, None)
-            continue
-        ref = historical_var_cvar(r[max(0, t - w):t], 0.05, window=None)
-        v, c = var[t], cvar[t]
-        assert v is not None and c is not None
-        assert abs(float(v / e) - ref.var) < 1e-12 and abs(float(c / e) - ref.cvar) < 1e-12
-        lv, lc = live[t]
-        assert lv is not None and lc is not None
-        assert abs(lv - v) <= abs(e) * Decimal("1e-12") and abs(lc - c) <= abs(e) * Decimal("1e-12")
-        assert c >= v                                     # тотожність CVaR ≥ VaR (risk.var)
-
-
 def test_plan_backtest_maps_engine_result_and_journal_chain() -> None:
     ds = load_fixture_dataset().slice(0, 1500)
     cfg = BacktestConfig.from_profile("backtest")
@@ -82,12 +58,9 @@ def test_plan_backtest_maps_engine_result_and_journal_chain() -> None:
     assert plan.orders and plan.orders_skipped == 0
     assert {k for _, k in plan.orders} <= set(plan.decision_keys)
     assert all(d.fired_rules and d.narrative for d in plan.decisions)
-    # крива: точка на бар; VaR/CVaR лише з повного вікна W = 500 (§5.13, RF-03)
+    # крива: точка на бар
     assert len(plan.equity) == len(ds) > 500
-    assert all(p.var95 is None for p in plan.equity[:500])
-    assert all(p.var95 is not None for p in plan.equity[500:])
-    assert all(p.cvar95 >= p.var95 >= 0 for p in plan.equity[500:])  # type: ignore[operator]
-    assert set(res.metrics) | set(res.extras) == set(plan.metrics) and "psr" in plan.metrics
+    assert set(res.metrics) | set(res.extras) == set(plan.metrics) and "n_fills" in plan.metrics
 
 
 def _risk_tree(**sm: float) -> dict[str, object]:

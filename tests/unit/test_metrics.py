@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import math
 from decimal import Decimal
-from statistics import NormalDist
 
 import numpy as np
 import pytest
@@ -14,12 +13,8 @@ from fuzzhelm.backtest.metrics import (
     METRIC_NAMES,
     compute_metrics,
     drawdown_series,
-    dsr,
-    expected_max_sr,
     max_drawdown,
     moments,
-    psr,
-    psr_from_returns,
     returns_from_equity,
     sharpe_ratio,
     sortino_ratio,
@@ -85,55 +80,7 @@ def test_ulcer_zero_on_monotone_curve() -> None:
     assert ulcer_index([100, 120, 90, 110, 80, 130, 120]) == pytest.approx(expected, rel=1e-12)
 
 
-def test_psr_below_threshold_on_short_sample() -> None:
-    # двоточковий ряд μ ± s (μ = 0.001, s = 0.01): γ₃ = 0, γ₄ = 1 ⇒ знаменник PSR = 1,
-    # ŜR = μ/(s·√(n/(n−1))) ⇒ z = ŜR·√(n−1) = (μ/s)·(n−1)/√n.  n = 20: z = 0.1·19/√20
-    short = [0.011, -0.009] * 10
-    g3, g4 = moments(np.asarray(short))
-    assert g3 == pytest.approx(0.0, abs=1e-9) and g4 == pytest.approx(1.0, rel=1e-9)
-    p_short = psr_from_returns(short)
-    assert p_short == pytest.approx(NormalDist().cdf(0.1 * 19 / math.sqrt(20)), rel=1e-9)   # ≈ 0.6645
-    assert p_short < 0.95                        # перевага статистично НЕ встановлена
-    # той самий процес на довгій вибірці — PSR > 0.95: винна саме довжина вибірки
-    p_long = psr_from_returns([0.011, -0.009] * 1000)
-    assert p_long == pytest.approx(NormalDist().cdf(0.1 * 1999 / math.sqrt(2000)), rel=1e-9)
-    assert p_long > 0.95
-
-
 # ============================================================ PSR/DSR: опублікований приклад
-
-
-def test_dsr_reproduces_bailey_lopez_de_prado_example() -> None:
-    # Bailey & López de Prado (2014), «The Deflated Sharpe Ratio», числовий приклад:
-    # N = 100 спроб, V[SR_n] = 1/2 (річна), найкращий SR = 2.5 (річний), T = 1250 днів,
-    # γ₃ = −3, γ₄ = 10. Опубліковано: SR₀ ≈ 0.1132 (денний), DSR ≈ 0.9004.
-    days = 250
-    var_daily = 0.5 / days
-    a = math.sqrt(var_daily * 99 / 100)   # 50 спроб +a і 50 спроб −a ⇒ вибіркова дисперсія = var_daily
-    trials = [a] * 50 + [-a] * 50
-    assert np.var(trials, ddof=1) == pytest.approx(var_daily, rel=1e-12)
-    sr0 = expected_max_sr(trials)
-    assert sr0 == pytest.approx(0.1132, abs=1e-4)
-    value = dsr(2.5 / math.sqrt(days), 1250, -3.0, 10.0, trials)
-    assert value == pytest.approx(0.9004, abs=1e-4)
-    # з ненульовим SR* DSR строго менший за PSR(SR* = 0)
-    assert value < psr(2.5 / math.sqrt(days), 1250, -3.0, 10.0)
-
-
-def test_expected_max_sr_zero_without_multiple_testing() -> None:
-    assert expected_max_sr([0.3]) == 0.0
-    assert dsr(0.1, 100, 0.0, 3.0, [0.1]) == psr(0.1, 100, 0.0, 3.0)
-    with pytest.raises(ValueError):
-        psr(0.1, 1)
-
-
-def test_psr_undefined_for_zero_variance_returns() -> None:
-    # стала додатна доходність: ŜR = +inf — PSR не визначений; раніше тихо повертався NaN
-    with pytest.raises(ValueError):
-        psr_from_returns([0.5] * 8)
-    with pytest.raises(ValueError):
-        psr(math.inf, 10)
-    assert psr_from_returns([0.0] * 8) == 0.5             # 0/0 := 0 ⇒ Φ(0)
 
 
 def test_non_finite_equity_rejected() -> None:
@@ -206,9 +153,3 @@ def test_turnover_is_nan_when_trades_carry_no_notional() -> None:
     assert m["n_trades"] == 2 and math.isnan(m["turnover"])
 
 
-def test_psr_rejects_non_positive_variance_term() -> None:
-    # 1 − γ₃·SR + (γ₄−1)/4·SR² ≤ 0 можливе лише для неможливих моментів (γ₄ < 1) — помилка, а не число
-    with pytest.raises(ValueError, match="non-positive PSR variance"):
-        psr(1.0, 100, skew=2.0, kurt=1.0)
-    with pytest.raises(ValueError, match="at least 2"):
-        psr(0.1, 1)

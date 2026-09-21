@@ -54,7 +54,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fuzzhelm.backtest.dataset import BARS_PER_YEAR, TF_NS, Dataset, dec_bar_of, instrument_spec
 from fuzzhelm.backtest.manifest import RunManifest, build_manifest, canonicalize_config, config_hash
-from fuzzhelm.backtest.metrics import compute_metrics, moments, psr, returns_from_equity, sharpe_ratio
+from fuzzhelm.backtest.metrics import compute_metrics
 from fuzzhelm.config import load_yaml
 from fuzzhelm.core.clock import NS_PER_MIN, ManualClock, SeededIdGenerator
 from fuzzhelm.core.digest import canonical_json
@@ -75,7 +75,6 @@ from fuzzhelm.features.convert import Bar, bar_from_candle, to_float
 from fuzzhelm.features.pipeline import FeatureParams, FeaturePipeline
 from fuzzhelm.features.window import BarWindow
 from fuzzhelm.fuzzy.base import InferenceEngine
-from fuzzhelm.fuzzy.linear import LinearVoteEngine
 from fuzzhelm.fuzzy.mamdani import MamdaniEngine
 from fuzzhelm.fuzzy.membership import load_membership
 from fuzzhelm.fuzzy.rules import load_rulebase
@@ -85,14 +84,13 @@ from fuzzhelm.risk.guard import GuardResult, RiskGuard
 from fuzzhelm.risk.journal import AuditSink, RiskEventRecord, RiskJournal
 from fuzzhelm.risk.margin import liq_price, side_liq_price
 from fuzzhelm.risk.state import RiskObservation, RiskStateMachine, Transition
-from fuzzhelm.risk.var import var_cvar_money
 from fuzzhelm.sizing.convert import float_to_decimal_exact, to_decimal
 from fuzzhelm.sizing.hysteresis import HysteresisGate
 from fuzzhelm.sizing.sizer import PositionSizer, SizingInput, SizingParams, SizingResult
 from fuzzhelm.sizing.vol_target import VolTarget
 
 RECORD_MODES: tuple[str, ...] = ("all", "trades", "none")
-ENGINE_KINDS: tuple[str, ...] = ("mamdani", "linear")
+ENGINE_KINDS: tuple[str, ...] = ("mamdani",)
 COST_MODES: tuple[str, ...] = ("zero", "sqrt_impact", "full")
 COOLDOWN_POLICIES: tuple[str, ...] = tuple(p.value for p in CooldownPolicy)
 GRID_KEYS: tuple[str, ...] = ("n_atr", "chi", "u_enter", "rho_base", "lam")
@@ -150,22 +148,17 @@ class _FundingCfg(_Strict):
     match_window_s: float = Field(60, gt=0)
 
 
-class _LinearCfg(_Strict):
-    weights: dict[str, float]
-
-
 class EngineTreeCfg(_Strict):
     """Схема config/engine.yaml (невідомий ключ або значення поза доменом → ConfigValidationError)."""
 
     version: int = 1
-    engine: Literal["mamdani", "linear"] = "mamdani"
+    engine: Literal["mamdani"] = "mamdani"
     cost_mode: Literal["zero", "sqrt_impact", "full"] | None = None
     initial_equity: float | str = "10000"
     take_profit: _TakeProfitCfg = _TakeProfitCfg()
     sigma_base: _SigmaBaseCfg = _SigmaBaseCfg()
     warmup: _WarmupCfg = _WarmupCfg()
     funding: _FundingCfg = _FundingCfg()
-    linear: _LinearCfg | None = None
     record_traces: Literal["all", "trades", "none"] = "trades"
     check_invariants: bool = False
     invariant_tolerance: float | str = "1E-9"
@@ -205,7 +198,6 @@ class BacktestConfig:
     cooldown_policy: str | None = None
     detectors: tuple[str, ...] | None = None
     detector_weights: tuple[tuple[str, float], ...] = ()
-    linear_weights: tuple[tuple[str, float], ...] | None = None
     warmup_bars: int | None = None
     funding_fallback_rate: Decimal | None = None
     funding_match_ns: int | None = None
@@ -244,8 +236,6 @@ class BacktestConfig:
         pick("tp_multiple", _f((eng.get("take_profit") or {}).get("multiple_of_stop", 2.0)))
         sm = risk.get("state_machine") or {}
         pick("cooldown_policy", str(sm.get("cooldown_policy", CooldownPolicy.SCALED_ENTRIES.value)))
-        lw = (eng.get("linear") or {}).get("weights", {"T": 0.5, "R": 0.5})
-        pick("linear_weights", tuple(sorted((str(k), _f(v)) for k, v in lw.items())))
         warm = (eng.get("warmup") or {}).get("bars")
         if self.warmup_bars is None and warm is not None:
             s(self, "warmup_bars", int(warm))
@@ -305,9 +295,8 @@ class BacktestConfig:
                 kw[k] = dec(str(kw[k]))
         if kw.get("detectors") is not None:
             kw["detectors"] = tuple(kw["detectors"])
-        for k in ("detector_weights", "linear_weights"):
-            if isinstance(kw.get(k), Mapping):
-                kw[k] = tuple(sorted((str(a), _f(b)) for a, b in kw[k].items()))
+        if isinstance(kw.get("detector_weights"), Mapping):
+            kw["detector_weights"] = tuple(sorted((str(a), _f(b)) for a, b in kw["detector_weights"].items()))
         return cls(**kw)
 
     def with_params(self, **params: Any) -> BacktestConfig:
@@ -321,7 +310,6 @@ class BacktestConfig:
             out[k] = str(out[k])
         out["detectors"] = None if self.detectors is None else list(self.detectors)
         out["detector_weights"] = dict(self.detector_weights)
-        out["linear_weights"] = dict(self.linear_weights or ())
         out["trees"] = copy.deepcopy(dict(self.trees))
         return out
 
@@ -362,8 +350,6 @@ class BacktestConfig:
         return FeatureParams.from_config(self.resolved_trees()["detectors"])
 
     def build_engine(self) -> InferenceEngine:
-        if self.engine == "linear":
-            return LinearVoteEngine(dict(self.linear_weights or ()))
         return _mamdani(canonical_json(canonicalize_config([self.trees["membership"], self.trees["rules"]])),
                         self.trees["membership"], self.trees["rules"])
 
@@ -467,13 +453,7 @@ class PositionRecord:
 
 @dataclass(frozen=True, slots=True)
 class EquityPointRecord:
-    """Рядок `equity_point` (kappa = κ_mode автомата).
-
-    var95/cvar95 — звітна метрика §5.13 у ГРОШАХ: E_t · (історичний VaR₉₅/CVaR₉₅ одно-барових дохідностей
-    кривої на вікні W = 500, що закінчується на t включно), risk.var.var_cvar_money; None, поки дохідностей
-    < 500. run_backtest заповнює їх векторизовано після прогону; покроковий StepResult.equity_point (live)
-    має None — там їх рахує workers.persist.LivePersister (risk.var.RollingVarCvar, ті самі числа).
-    """
+    """Рядок `equity_point` (kappa = κ_mode автомата)."""
 
     ts_ns: int
     equity: Decimal
@@ -485,8 +465,6 @@ class EquityPointRecord:
     risk_state: RiskState
     kappa: Decimal
     position_qty: Decimal
-    var95: Decimal | None = None
-    cvar95: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1205,7 +1183,7 @@ class BacktestResult:
     seed: int
     manifest: RunManifest
     metrics: dict[str, float]            # 17 метрик backtest.metrics.METRIC_NAMES (вікно оцінки)
-    extras: dict[str, float]             # PSR, Шарп за період, моменти, лічильники
+    extras: dict[str, float]             # лічильники: виконання, оборот, аварійний стоп
     equity: list[Decimal]                # капітал на закритті кожного бару
     equity_ts: list[int]
     position_series: list[Decimal]
@@ -1238,15 +1216,7 @@ def _metrics(equity: Sequence[Decimal], trades: Sequence[ClosedTrade], positions
              fills: Sequence[Fill], periods: int) -> tuple[dict[str, float], dict[str, float]]:
     notional = sum((f.qty * f.price for f in fills), D0)
     m = compute_metrics(equity, trades, periods, positions=positions, traded_notional=notional)
-    r = returns_from_equity(equity)
-    g3, g4 = moments(r)
-    sr = sharpe_ratio(r, 1.0)
-    try:
-        p = psr(sr, int(r.size), g3, g4) if r.size >= 2 else math.nan
-    except ValueError:
-        p = math.nan              # ŜR = ±inf або невизначений підкореневий вираз — PSR не визначений
-    extras = {"sr_period": sr, "skew": g3, "kurt": g4, "psr": p, "n_obs": r.size + 0.0,
-              "n_fills": len(fills) + 0.0, "traded_notional": to_float(notional)}
+    extras = {"n_fills": len(fills) + 0.0, "traded_notional": to_float(notional)}
     return m, extras
 
 
@@ -1309,7 +1279,7 @@ def run_backtest(dataset: Dataset, cfg: BacktestConfig | None = None, seed: int 
     positions = list(loop.positions)
     if loop.open_position is not None:
         positions.append(loop.open_position)
-    points = _with_var(loop.equity_points)
+    points = list(loop.equity_points)
     return BacktestResult(
         config=cfg, seed=seed, manifest=manifest, metrics=metrics, extras=extras, equity=loop.equity,
         equity_ts=loop.equity_ts, position_series=loop.position_series, equity_points=points,
@@ -1322,10 +1292,3 @@ def run_backtest(dataset: Dataset, cfg: BacktestConfig | None = None, seed: int 
     )
 
 
-def _with_var(points: Sequence[EquityPointRecord]) -> list[EquityPointRecord]:
-    """Точки кривої з VaR₉₅/CVaR₉₅ у грошах (W = 500, лише повні вікна) — один векторизований прохід."""
-    if not points:
-        return []
-    var, cvar = var_cvar_money([p.equity for p in points])
-    return [dataclasses.replace(p, var95=v, cvar95=c) if v is not None else p
-            for p, v, c in zip(points, var, cvar, strict=True)]

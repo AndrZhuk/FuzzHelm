@@ -58,7 +58,6 @@ def test_build_config_applies_overrides_and_strategy_trees() -> None:
     over = build_config(mod, {"engine": "mamdani", "params": {"chi": 3.0, "initial_equity": "5000"}})
     assert (over.chi, over.initial_equity) == (3.0, Decimal("5000"))
     assert over.config_hash != base.config_hash  # перекриття входить у паспорт прогону
-    assert build_config(mod, {"engine": "linear"}).engine == "linear"
     # тексти стратегії = файли config/ → ті самі дерева → той самий config_hash
     rules, membership = (CONFIG / "rules_mamdani.yaml").read_text(), (CONFIG / "membership.yaml").read_text()
     same = build_config(mod, {"engine": "mamdani"}, strategy_trees(rules, membership))
@@ -98,7 +97,7 @@ def test_plan_maps_engine_result_to_decision_order_and_equity_rows(engine_result
     assert all(key in set(plan.decision_keys) for _, key in plan.orders)
     assert sum(len(v) for v in plan.fills.values()) == len(result.fills)
     assert len(plan.equity) == len(ds) and plan.equity[-1].equity == result.equity[-1]
-    assert set(METRIC_NAMES) <= set(plan.metrics) and "psr" in plan.metrics
+    assert set(METRIC_NAMES) <= set(plan.metrics) and "n_fills" in plan.metrics
     assert len(plan.risk_events) == len(result.risk_events) and len(plan.positions) == len(result.positions)
 
 

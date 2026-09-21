@@ -7,20 +7,12 @@
       * паспорт `run` (config_hash, dataset_hash, git_sha, seed, engine → journal_head_hash, equity_hash);
       * `decision` з повним трасуванням (+ колонки ревізії 0004: sizing, risk, narrative);
       * `sim_order` (decision_id NOT NULL: жоден ордер без рішення ядра), `position`, `risk_event`
-        (точний множник у payload.factor_exact пише RiskEventRepo), `equity_point` з ковзними
-        VaR₉₅/CVaR₉₅, `run_metric`, `event_journal` (хеш-ланцюг; голова = run.journal_head_hash).
+        (точний множник у payload.factor_exact пише RiskEventRepo), `equity_point`,
+        `run_metric`, `event_journal` (хеш-ланцюг; голова = run.journal_head_hash).
     Два режими: пакетний (готовий BacktestResult — executemany/COPY однією транзакцією) і покроковий
     (live/replay-воркер: LivePersister пише кожен бар у транзакції воркера разом із NOTIFY).
 Автор: Андрій Жук, 2026.
 
-VaR/CVaR у equity_point (§5.13 — звітна метрика, ордери не блокує; RF-03). Колонки NUMERIC(38,18) стоять
-поруч із капіталом, тож вони в ГРОШАХ (USDT): VaR_t = E_t · VaR̂₉₅(r), де VaR̂ — історична оцінка
-risk.var (нижній емпіричний квантиль r_(m), m = ⌊0.05·W⌋ = 25) на вікні останніх W = 500 бар-дохідностей
-r_τ = ΔE_τ/E_{τ−1}, τ ≤ t (вікно закінчується на t включно: це «ризик кривої станом на t», а не прогноз для
-тесту Купця — той робить risk.var.rolling_var_breaches строго на минулому). Поки дохідностей менше за
-W = 500 (VAR_MIN_OBS = VAR_WINDOW: лише повні вікна §5.13), колонки NULL. Пакетний шлях бере числа, які вже
-порахував рушій (BacktestResult.equity_points, risk.var.var_cvar_money), покроковий — risk.var.RollingVarCvar
-(те саме ядро — ті самі числа). Значення не обрізаються до 0 (R-04: VaR < 0 на вікні майже з самих виграшів).
 """
 
 from __future__ import annotations
@@ -28,7 +20,6 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -42,8 +33,6 @@ from fuzzhelm.core.enums import OrderStatus, RunKind, RunStatus
 from fuzzhelm.core.journal import JournalEntry
 from fuzzhelm.decision.narrative_uk import narrate
 from fuzzhelm.risk.journal import AuditRecord, RiskEventRecord
-from fuzzhelm.risk.var import RollingVarCvar, rolling_var_cvar
-from fuzzhelm.risk.var import var_cvar_money as _var_cvar_money
 from fuzzhelm.storage.repositories import (
     AuditRepo,
     CandleRepo,
@@ -61,37 +50,9 @@ from fuzzhelm.storage.repositories import (
 from fuzzhelm.storage.repositories.order import order_values
 from fuzzhelm.storage.repositories.position import position_values
 
-VAR_WINDOW = 500
-VAR_ALPHA = 0.05
-VAR_MIN_OBS = VAR_WINDOW                # §5.13: лише повні вікна W = 500 (до того — NULL)
 GIT_DIRTY_METRIC = "git_dirty"          # 1.0 — прогін зроблено з незакоміченого дерева (sha — лише HEAD)
 
 FloatArray = npt.NDArray[np.float64]
-
-
-# ====================================================================== VaR / CVaR (звітна метрика)
-
-
-def var_cvar_fractions(returns: Sequence[float] | FloatArray, *, window: int = VAR_WINDOW,
-                       alpha: float = VAR_ALPHA, min_obs: int = VAR_MIN_OBS,
-                       chunk: int = 4096) -> tuple[FloatArray, FloatArray]:
-    """VaR/CVaR (частки капіталу) для кожної точки кривої: N = len(returns) + 1 точок, NaN до min_obs
-    дохідностей. Обгортка risk.var.rolling_var_cvar (векторизовано блоками, без матриці N×W у пам'яті)."""
-    return rolling_var_cvar(returns, window, alpha, min_obs=min_obs, chunk=chunk)
-
-
-def var_cvar_money(equity: Sequence[Decimal], *, window: int = VAR_WINDOW, alpha: float = VAR_ALPHA,
-                   min_obs: int = VAR_MIN_OBS) -> tuple[list[Decimal | None], list[Decimal | None]]:
-    """VaR₉₅/CVaR₉₅ у грошах (E_t · частка) для кожної точки кривої капіталу (risk.var.var_cvar_money)."""
-    return _var_cvar_money(equity, window, alpha, min_obs=min_obs)
-
-
-class RollingVar(RollingVarCvar):
-    """Покрокова версія var_cvar_money для live-воркера (ті самі числа на тій самій кривій)."""
-
-    def __init__(self, window: int = VAR_WINDOW, alpha: float = VAR_ALPHA,
-                 min_obs: int = VAR_MIN_OBS) -> None:
-        super().__init__(window, alpha, min_obs=min_obs)
 
 
 # ====================================================================== паспорт прогону
@@ -177,10 +138,10 @@ def position_row(p: Any, *, run_id: UUID, instrument_id: int) -> dict[str, Any]:
     )
 
 
-def equity_point(p: Any, var95: Decimal | None, cvar95: Decimal | None) -> EquityPoint:
+def equity_point(p: Any) -> EquityPoint:
     return EquityPoint(ts_ns=p.ts_ns, equity=p.equity, cash=p.cash, unrealized=p.unrealized,
                        gross_exposure=p.gross_exposure, leverage=p.leverage, drawdown=p.drawdown,
-                       risk_state=p.risk_state, kappa=p.kappa, var95=var95, cvar95=cvar95)
+                       risk_state=p.risk_state, kappa=p.kappa)
 
 
 # ====================================================================== пакетний запис (бектест)
@@ -202,8 +163,7 @@ class BacktestPlan:
     metrics: dict[str, float | None] = field(default_factory=dict)
 
 
-def plan_backtest(result: Any, *, run_id: UUID, instrument_id: int, var_window: int = VAR_WINDOW,
-                  var_min_obs: int = VAR_MIN_OBS) -> BacktestPlan:
+def plan_backtest(result: Any, *, run_id: UUID, instrument_id: int) -> BacktestPlan:
     plan = BacktestPlan()
     for d in result.decisions:
         if d.trace is None:
@@ -219,25 +179,10 @@ def plan_backtest(result: Any, *, run_id: UUID, instrument_id: int, var_window: 
         plan.orders.append((o, int(o.decision_ns)))
     plan.fills = len(result.fills)
     plan.positions = list(result.positions)
-    points = list(result.equity_points)
-    if (var_window, var_min_obs) == (VAR_WINDOW, VAR_MIN_OBS) and _engine_filled_var(points, var_min_obs):
-        # рушій уже порахував ту саму оцінку (run_backtest → risk.var.var_cvar_money з тими самими W, α)
-        plan.equity = [equity_point(p, p.var95, p.cvar95) for p in points]
-    else:
-        var, cvar = var_cvar_money([p.equity for p in points], window=var_window, min_obs=var_min_obs)
-        plan.equity = [equity_point(p, v, c) for p, v, c in zip(points, var, cvar, strict=True)]
+    plan.equity = [equity_point(p) for p in result.equity_points]
     plan.risk_events = list(result.risk_events)
     plan.metrics = {**dict(result.metrics), **dict(result.extras)}
     return plan
-
-
-def _engine_filled_var(points: Sequence[Any], min_obs: int) -> bool:
-    """Чи несуть точки VaR/CVaR рушія: крива коротша за min_obs + 1 точок (усі NULL — і так, і так) або
-    точка min_obs має значення (рушій заповнює всі точки від min_obs)."""
-    if len(points) <= min_obs:
-        return True
-    p = points[min_obs]
-    return getattr(p, "var95", None) is not None and getattr(p, "cvar95", None) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,20 +257,16 @@ class StepWrite:
     equity_points: int = 0
     journal_entries: int = 0
     candles: int = 0
-    var95: Decimal | None = None
-    cvar95: Decimal | None = None
 
 
 class LivePersister:
     """Покроковий запис прогону live/replay. Стан між кроками: id рішень (FK ордерів, зокрема синтетичних
     TP/ліквідації, що посилаються на рішення-відкриття), створені ордери, id відкритих позицій."""
 
-    def __init__(self, run_id: UUID, instrument_id: int, symbol: str, *,
-                 var: RollingVar | None = None) -> None:
+    def __init__(self, run_id: UUID, instrument_id: int, symbol: str) -> None:
         self.run_id = run_id
         self.instrument_id = instrument_id
         self.symbol = symbol
-        self.var = var or RollingVar()
         self._decision_ids: dict[int, int] = {}
         self._orders: set[UUID] = set()
         self._positions: dict[int, int] = {}          # opened_at_ns → position.id (одна позиція за раз)
@@ -395,9 +336,7 @@ class LivePersister:
             out.risk_events = await RiskEventRepo(session).insert_many(
                 risk, run_id=run_id, instrument_ids={self.symbol: iid})
         if sr.equity_point is not None:
-            out.var95, out.cvar95 = self.var.update(sr.equity_point.equity)
-            out.equity_points = await EquityRepo(session).insert_many(
-                run_id, [equity_point(sr.equity_point, out.var95, out.cvar95)])
+            out.equity_points = await EquityRepo(session).insert_many(run_id, [equity_point(sr.equity_point)])
         if journal:
             out.journal_entries = await JournalRepo(session).append_many(list(journal))
         for k in ("orders", "fills", "positions_opened", "positions_closed", "risk_events", "equity_points",
@@ -441,14 +380,10 @@ def _ack(o: Any) -> Any:
 
 __all__: Sequence[str] = (
     "GIT_DIRTY_METRIC",
-    "VAR_ALPHA",
-    "VAR_MIN_OBS",
-    "VAR_WINDOW",
     "BacktestPlan",
     "LivePersister",
     "Passport",
     "PersistCounts",
-    "RollingVar",
     "StepWrite",
     "create_run",
     "decision_record",
@@ -459,7 +394,5 @@ __all__: Sequence[str] = (
     "pg_notify",
     "plan_backtest",
     "position_row",
-    "var_cvar_fractions",
-    "var_cvar_money",
     "write_plan",
 )

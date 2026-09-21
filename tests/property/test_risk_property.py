@@ -9,7 +9,6 @@ from __future__ import annotations
 from decimal import Decimal
 from fractions import Fraction
 
-import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -29,7 +28,6 @@ from fuzzhelm.risk.margin import (
     signed_dtl_atr,
 )
 from fuzzhelm.risk.rules.liquidation_buffer import LiquidationBufferGuard
-from fuzzhelm.risk.var import historical_var_cvar, tail_count
 from fuzzhelm.risk.verdict import ALLOW, VETO, Verdict, compose, exposure, shrink
 from fuzzhelm.sizing.convert import float_to_decimal_exact, to_decimal
 from fuzzhelm.sizing.sizer import PositionSizer, SizingInput, SizingParams
@@ -76,23 +74,6 @@ def test_veto_absorbs_everything(chain: list[Verdict], pos: int, req: Decimal) -
     v = compose(with_veto)
     assert v is VETO or (v.kind is VerdictKind.VETO and v.factor == 0)
     assert exposure(v, req) == 0
-
-
-@settings(max_examples=200)
-@given(st.lists(st.floats(min_value=-1.0, max_value=1.0, allow_nan=False, width=64),
-                min_size=1, max_size=600),
-       st.sampled_from([None, 500, 20]),
-       st.sampled_from([0.05, 0.01, 0.1]))
-def test_cvar_ge_var_always(returns: list[float], window: int | None, alpha: float) -> None:
-    res = historical_var_cvar(returns, alpha, window)
-    assert res.cvar >= res.var                                  # у float, без допуску
-    w = np.asarray(returns[-window:] if window else returns)
-    m = tail_count(w.size, alpha)
-    srt = np.sort(w)
-    assert res.m == m and res.n == w.size
-    assert res.var == -srt[m - 1]                               # незалежний шлях: повне сортування
-    scale = max(1.0, float(np.max(np.abs(srt[:m]))))
-    assert abs(res.cvar - (-srt[:m].mean())) <= 1e-12 * scale
 
 
 # ---------------------------------------------------------------- ланцюг лімітів як ціле

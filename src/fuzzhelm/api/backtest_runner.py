@@ -257,8 +257,6 @@ def plan_persistence(result: Any, *, run_id: UUID, instrument_id: int) -> Persis
             drawdown=p.drawdown,
             risk_state=p.risk_state,
             kappa=p.kappa,
-            var95=p.var95,
-            cvar95=p.cvar95,
         )
         for p in result.equity_points
     ]

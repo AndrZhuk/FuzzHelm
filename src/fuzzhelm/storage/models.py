@@ -361,8 +361,6 @@ class EquityPointModel(Base):
     drawdown: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     risk_state: Mapped[str | None] = mapped_column(Text)
     kappa: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
-    var95: Mapped[Decimal | None] = mapped_column(_money())
-    cvar95: Mapped[Decimal | None] = mapped_column(_money())
 
 
 class RunMetricModel(Base):

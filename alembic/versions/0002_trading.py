@@ -113,7 +113,7 @@ UPGRADE: tuple[str, ...] = (
       run_id UUID, ts TIMESTAMPTZ, equity NUMERIC(38,18), cash NUMERIC(38,18),
       unrealized NUMERIC(38,18), gross_exposure NUMERIC(38,18),
       leverage NUMERIC(8,4), drawdown NUMERIC(10,6), risk_state TEXT,
-      kappa NUMERIC(6,4), var95 NUMERIC(38,18), cvar95 NUMERIC(38,18),
+      kappa NUMERIC(6,4),
       PRIMARY KEY (run_id, ts)
     )
     """,
