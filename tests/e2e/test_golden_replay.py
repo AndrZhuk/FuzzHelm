@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import math
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -55,13 +56,18 @@ def test_golden_replay_manifest_is_unchanged() -> None:
             continue
         got = summary.get(key)
         got_cmp = str(got) if not isinstance(got, (int, float, list, dict, type(None))) else got
+        # float-діагностика (напр. max_abs_u_final) на різних процесорах різниться в останніх знаках
+        # (FMA, порядок підсумовування); гроші й хеші порівнюються точно
+        if isinstance(got_cmp, float) and isinstance(want, float) and math.isclose(
+                got_cmp, want, rel_tol=1e-12, abs_tol=1e-15):
+            continue
         if got_cmp != want:
             mismatched.append(f"{key}: {got_cmp!r} замість {want!r}")
     assert mismatched == [], f"паспорт прогону змінився ({HINT}): " + "; ".join(mismatched)
 
 
 def test_golden_equity_hash_matches_documented_value() -> None:
-    """`equity_hash` — те саме число, що названо в README і docs/results.md як офлайн-еталон."""
+    """`equity_hash` офлайн-еталона — те саме число, що зафіксовано в тесті."""
     assert _load("run_manifest.json")["equity_hash"] == (
         "d0f45aa3cd5ea81e60c96780ad988e2143f0c77a83eb43a89028af3a00909f1e"
-    ), f"офлайн-еталон розійшовся з документацією ({HINT})"
+    ), f"офлайн-еталон змінився ({HINT})"
