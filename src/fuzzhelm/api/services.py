@@ -42,7 +42,6 @@ from fuzzhelm.config import Settings, get_settings
 from fuzzhelm.core.enums import Role, RunKind, RunStatus, VerdictKind
 from fuzzhelm.core.ports import Clock, IdGenerator
 from fuzzhelm.infra.wallclock import RandomIdGenerator, SystemClock
-from fuzzhelm.notify.telegram import TelegramNotifier
 from fuzzhelm.storage.repositories import (
     AuditRepo,
     AuditRow,
@@ -308,7 +307,6 @@ class ApiServices:
     detectors_cfg: Mapping[str, Any] | None = None
     live_source: PgLiveSource | None = None
     engine: AsyncEngine | None = None
-    notifier: TelegramNotifier | None = None  # no-op без токена/чату (Settings); див. notify/telegram.py
     extras: dict[str, Any] = field(default_factory=dict)
     _background: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
 
@@ -318,7 +316,7 @@ class ApiServices:
             self.live_source.ensure_started()
 
     def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
-        """Фонова best-effort задача після відповіді (нотифікація): посилання тримаємо до завершення,
+        """Фонова best-effort задача після відповіді: посилання тримаємо до завершення,
         щоб задачу не зібрав GC; помилка лише в журнал."""
         task = asyncio.get_running_loop().create_task(coro)
         self._background.add(task)
@@ -332,8 +330,6 @@ class ApiServices:
 
     async def aclose(self) -> None:
         await self.drain()
-        if self.notifier is not None:
-            await self.notifier.aclose()
         self.live.close()
         if self.live_source is not None:
             await self.live_source.stop()
@@ -379,7 +375,6 @@ def build_db_services(
         login_limiter=LoginRateLimiter(),
         live_source=source,
         engine=eng if own_engine else None,
-        notifier=TelegramNotifier.from_settings(s),
     )
 
 

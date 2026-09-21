@@ -32,35 +32,32 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.helpers.api_fakes import FakeBacktests
 from tests.helpers.api_traces import make_trace
-from tests.integration._data import BTC, IDS, T0_NS, add_instrument, candle
+from tests.integration._data import BTC, IDS, T0_NS, add_instrument
 
 from fuzzhelm.api.backtest_runner import DbBacktestRunner, prepare_backtest
 from fuzzhelm.api.backtests import EngineBacktestService, load_engine_module
 from fuzzhelm.api.deps import get_services
 from fuzzhelm.api.live import CONTROL_CHANNEL, LIVE_CHANNEL, asyncpg_dsn, encode_notify_payload
 from fuzzhelm.api.main import create_app
-from fuzzhelm.api.services import ApiServices, DbUnitOfWork, build_db_services
+from fuzzhelm.api.services import ApiServices, build_db_services
 from fuzzhelm.backtest.dataset import Dataset, load_exchange_instrument
 from fuzzhelm.backtest.manifest import equity_hash
 from fuzzhelm.backtest.metrics import METRIC_NAMES
 from fuzzhelm.config import Settings
 from fuzzhelm.core.clock import NS_PER_MIN, ManualClock
-from fuzzhelm.core.enums import EngineKind, GapStatus, Role, RunKind, Src, VerdictKind
+from fuzzhelm.core.enums import EngineKind, Role, RunKind, VerdictKind
 from fuzzhelm.fuzzy.defuzz import centroid
 from fuzzhelm.ingest.funding import COLUMNS as FUNDING_COLUMNS
 from fuzzhelm.ingest.funding import load_funding_json, rows_digest, write_funding_json
 from fuzzhelm.ingest.normalize import normalize_rest_klines
 from fuzzhelm.risk.journal import RiskEventRecord
-from fuzzhelm.scheduler.jobs import JobContext, hourly_dq
 from fuzzhelm.storage.models import APP_ROLE
 from fuzzhelm.storage.repositories import (
     AuditRepo,
     CandleRepo,
     DecisionRecord,
     DecisionRepo,
-    DqRepo,
     EquityRepo,
-    GapRepo,
     InstrumentRepo,
     OrderRepo,
     RiskEventRepo,
@@ -351,42 +348,6 @@ async def test_killswitch_release_notifies_control_channel(api: Api, db_url: str
     msg = orjson.loads(received[0])
     assert msg["kind"] == "killswitch.release" and msg["data"]["audit_id"] == r.json()["audit_id"]
     assert msg["data"]["actor"] == "admin"
-
-
-async def test_scheduler_queries_and_hourly_dq_on_real_db(factory: async_sessionmaker[AsyncSession]) -> None:
-    h0 = (T0_NS // (60 * NS_PER_MIN) + 1) * 60 * NS_PER_MIN            # перша повна година після T0
-    first = (h0 - T0_NS) // NS_PER_MIN
-    async with session_scope(factory) as s:
-        iid = await add_instrument(s)
-        # quote_volume = volume·vwap ∈ [v·l, v·h]: свічки валідні і за інваріантом qv (helper _data.candle
-        # тримає qv сталим, тож для більших обсягів він виходить за межі — це інша перевірка)
-        rows = [candle(first + i, src=Src.REST) for i in range(60) if i not in (5, 6)]
-        rows = [c.model_copy(update={"quote_volume": c.volume * c.vwap}) for c in rows]  # type: ignore[operator]
-        await CandleRepo(s).upsert(rows, iid)
-        gaps = GapRepo(s)
-        g_partial = await gaps.open(iid, "klines", h0 + 5 * NS_PER_MIN, h0 + 7 * NS_PER_MIN, expected_count=2)
-        await gaps.update_status(g_partial, GapStatus.PARTIAL, filled_rows=0)
-        g_spent = await gaps.open(iid, "klines", h0 - 3 * NS_PER_MIN, h0 - NS_PER_MIN, expected_count=2)
-        for _ in range(5):
-            await gaps.update_status(g_spent, GapStatus.UNFILLABLE)
-    async with session_scope(factory) as s:
-        gaps = GapRepo(s)
-        assert [g.id for g in await gaps.list_by_status([GapStatus.PARTIAL, GapStatus.UNFILLABLE])] == [
-            g_partial, g_spent]
-        spent_excluded = await gaps.list_by_status(["PARTIAL", "UNFILLABLE"], max_attempts=5)
-        assert [g.id for g in spent_excluded] == [g_partial]
-        assert [g.id for g in await gaps.list_overlapping(iid, h0, h0 + 60 * NS_PER_MIN)] == [g_partial]
-        assert [g.id for g in await gaps.list_overlapping(iid, h0 - 2 * NS_PER_MIN, h0)] == [g_spent]
-    weights = (0.455446, 0.262850, 0.140852, 0.140852)
-    ctx = JobContext(uow=DbUnitOfWork(factory), clock=ManualClock(h0 + 65 * NS_PER_MIN), weights=weights)
-    (row,) = await hourly_dq(ctx)
-    async with session_scope(factory) as s:
-        stored = await DqRepo(s).latest(iid)
-    assert stored is not None and stored.hour_start_ns == h0 == row.hour_start_ns
-    assert (stored.observed_buckets, stored.invalid_count) == (58, 0)
-    assert stored.gap_seconds == Decimal("120.00") and stored.completeness == Decimal("0.9667")
-    assert stored.score == Decimal(str(row.score))
-    assert await hourly_dq(ctx) == []                        # година вже має рядок — не перезаписуємо
 
 
 async def test_default_services_do_not_touch_db_until_first_request(db_url: str) -> None:

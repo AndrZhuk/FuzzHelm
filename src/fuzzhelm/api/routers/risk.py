@@ -4,7 +4,7 @@
 Призначення: GET /risk/state, GET /risk/events (keyset-сторінки за (ts, id)), GET /risk/limits — читання;
 PUT /risk/limits — зміна config/risk_limits.yaml (валідація risk.config, атомарний запис,
 audit_log before/after); POST /risk/killswitch/release — команда воркеру зняти HALTED (audit_log +
-NOTIFY fuzzhelm_control + Telegram-нотифікація, якщо налаштовано).
+NOTIFY fuzzhelm_control).
 Автор: Андрій Жук, 2026.
 
 Зняття HALTED робить власник автомата — торговий воркер (RiskStateMachine.release(Role.ADMIN)), а не API:
@@ -325,13 +325,6 @@ async def release_killswitch(
             LIVE_CHANNEL,
             "audit",
             {"action": RELEASE_ACTION, "audit_id": audit_id, "run_id": run_ref, "actor": principal.login},
-        )
-    if services.notifier is not None and services.notifier.enabled:
-        # оператору на телефон — після COMMIT, у фоні: Telegram не затримує відповідь і не валить її
-        services.spawn(
-            services.notifier.killswitch(
-                action="release_requested", reason=body.reason, actor=principal.login, run_id=run_ref
-            )
         )
     return {
         "audit_id": audit_id,

@@ -97,8 +97,7 @@ def test_parser_backfill_defaults_and_symbol_parsing() -> None:
     ["backfill", "--days", "0"], ["backfill", "--days", "x"], ["backfill", "--symbols", ","],
     ["backfill", "--symbols", "BTC/USDT"], ["backfill", "--end-date", "18.09.2026"],
     ["backfill", "--limit", "1"], ["backfill", "--limit", "1501"],
-    ["crosscheck", "--threshold-bps", "-1"], ["crosscheck", "--threshold-bps", "NaN"],
-    ["verify-journal", "--run-id", "not-a-uuid"], ["calibrate", "--is-days", "0"], [], ["nope"],
+    ["verify-journal", "--run-id", "not-a-uuid"], [], ["nope"],
     ["user"], ["user", "add", "--login", "a"], ["user", "add", "--role", "admin"],
     ["user", "add", "--login", "bad login", "--role", "admin"],
     ["user", "add", "--login", "a", "--role", "root"],
@@ -121,8 +120,7 @@ def test_every_subcommand_has_a_handler_and_parses() -> None:
     p = cli.build_parser()
     sub = next(a for a in p._actions if isinstance(a, argparse._SubParsersAction))
     assert set(sub.choices) == set(cli.HANDLERS) == {
-        "backfill", "crosscheck", "fetch-funding", "calibrate", "replay-gap", "verify-journal", "db-stats",
-        "user"}
+        "backfill", "fetch-funding", "replay-gap", "verify-journal", "db-stats", "user"}
     for name in set(cli.HANDLERS) - {"user"}:
         assert p.parse_args([name]).command == name
     a = p.parse_args(["user", "add", "--login", "olena", "--role", "Operator", "--password-stdin"])
@@ -133,14 +131,6 @@ def test_every_subcommand_has_a_handler_and_parses() -> None:
     rid = "7d441046-5916-59d6-9ba7-3971dc3b1caa"
     assert str(p.parse_args(["verify-journal", "--run-id", rid]).run_id) == rid
     assert p.parse_args(["--database-url", "postgresql+asyncpg://x@h/db", "db-stats", "--json"]).json is True
-    assert p.parse_args(["crosscheck"]).threshold_bps == Decimal(50)
-
-
-def test_calibrate_is_days_default_comes_from_backtest_profile() -> None:
-    from fuzzhelm.config import load_yaml  # noqa: PLC0415
-
-    assert cli.build_parser().parse_args(["calibrate"]).is_days == \
-        load_yaml("profiles/backtest")["walkforward"]["is_days"]
 
 
 # ================================================================== вікно і план
@@ -208,20 +198,16 @@ def test_backfill_dry_run_prints_plan_without_network_or_db(offline: None,
 def test_other_dry_runs_touch_neither_network_nor_db(offline: None, tmp_path: Path,
                                                      capsys: pytest.CaptureFixture[str]) -> None:
     win = _window_json(tmp_path)
-    assert cli.main(["crosscheck", "--dry-run"]) == 0
-    assert "pair=XBTUSD" in capsys.readouterr().out
     assert cli.main(["fetch-funding", "--dry-run", "--window-json", str(win), "--symbols", "BTCUSDT"]) == 0
     out = capsys.readouterr().out
     assert "fundingRate symbol=BTCUSDT startTime=1785801600000 endTime=1789689599999" in out
-    assert cli.main(["calibrate", "--dry-run", "--window-json", str(win)]) == 0
-    assert "[2026-08-04T00:00:00Z, 2026-08-19T00:00:00Z) = 21600 bars (days 1–15)" in capsys.readouterr().out
     assert cli.main(["replay-gap", "--dry-run"]) == 0
     assert "journal run_id=" in capsys.readouterr().out
 
 
 def test_missing_window_file_is_a_clean_cli_error(offline: None, tmp_path: Path,
                                                   capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main(["calibrate", "--dry-run", "--window-json", str(tmp_path / "none.json")]) == 2
+    assert cli.main(["fetch-funding", "--dry-run", "--window-json", str(tmp_path / "none.json")]) == 2
     assert "run `fuzzhelm backfill` first" in capsys.readouterr().err
 
 
@@ -248,63 +234,6 @@ def _raw_from_fixtures() -> dict[str, Any]:
                        "result": kraken["result"]},
             "binance": {"symbol": "BTCUSDT", "interval": "1m", "ts_ingest_ns": server_ms * 1_000_000,
                         "server_time_ms": server_ms, "rows": rows}}
-
-
-def test_crosscheck_analysis_on_recorded_real_data_is_consistent_and_reproducible() -> None:
-    raw = _raw_from_fixtures()
-    a = cli.analyze_crosscheck(raw)
-    s = a.stats
-    assert s["matched"] == len(a.report.rows) > 700 and s["missing_in_binance"] == s["missing_in_kraken"] == 0
-    d = sorted(r.diff_bps for r in a.report.rows)
-    ad = sorted(abs(x) for x in d)
-    assert s["mean_bps"] == a.report.mean_bps and s["max_abs_bps"] == ad[-1] == a.report.max_abs_bps
-    assert s["p95_abs_bps"] == ad[int(np.ceil(0.95 * len(ad))) - 1]           # найближчий ранг
-    assert s["median_abs_bps"] <= s["p95_abs_bps"] <= s["max_abs_bps"]
-    assert s["count_above_threshold"] == len(a.report.flagged) == 0     # справжні дані: жодної > 50 б.п.
-    assert a.decomposition["n"] == 0                                    # без індексу/USDT — без розкладу
-    again = cli.analyze_crosscheck(orjson.loads(orjson.dumps(raw)))
-    assert again.stats == s                                             # той самий вхід → той самий звіт
-
-
-def test_crosscheck_analysis_flags_injected_divergence_and_decomposes_exactly() -> None:
-    raw = _raw_from_fixtures()
-    key = next(k for k in raw["kraken"]["result"] if k != "last")
-    rows = raw["kraken"]["result"][key]
-    victim = rows[100]
-    victim[4] = str((Decimal(victim[4]) * Decimal("0.99")).quantize(Decimal("0.1")))   # застиглий тик −1 %
-    victim[3] = min(victim[3], victim[4], key=Decimal)                                   # OHLC узгоджений
-    # індекс і USDT/USD для розкладу: синтетичні, але з точно відомою відповіддю
-    closes = {int(r[0]): r[4] for r in raw["binance"]["rows"]}
-    raw["binance_index"] = {"rows": [[t, "0", "0", "0", str(Decimal(c) * Decimal("0.9995")), "0", 0, "0", 0,
-                                      "0", "0", "0"] for t, c in closes.items()]}
-    raw["kraken_usdtusd"] = {"result": {"USDTZUSD": [[int(r[0]), "1", "1", "1", "0.9990", "1", "1", 1]
-                                                     for r in rows], "last": raw["kraken"]["result"]["last"]}}
-    a = cli.analyze_crosscheck(raw)
-    assert a.stats["count_above_threshold"] == 1 == len(a.report.flagged)
-    assert a.report.flagged[0].open_time_ns == int(victim[0]) * 1_000_000_000
-    dc = a.decomposition
-    assert dc["n"] == a.stats["matched"] and dc["identity_max_err"] < 1e-9
-    assert dc["perp_premium_bps"]["median"] == pytest.approx(-1e4 * np.log(0.9995), abs=1e-9)
-    assert dc["usdt_discount_bps"]["median"] == pytest.approx(-1e4 * np.log(0.9990), abs=1e-9)
-
-
-def test_committed_crosscheck_input_reproduces_its_report_invariants() -> None:
-    path = ROOT / "data" / "crosscheck_input.json.gz"
-    if not path.exists():
-        pytest.skip("data/crosscheck_input.json.gz is produced by `fuzzhelm crosscheck`")
-    raw = cli._load_raw(path)
-    a = cli.analyze_crosscheck(raw)
-    assert a.stats["matched"] == a.stats["kraken_closed"] == len(a.series["d_bps"])
-    assert a.decomposition["n"] == a.stats["matched"] and a.decomposition["identity_max_err"] < 1e-9
-    md = cli.crosscheck_report_md(a, raw, input_path="data/crosscheck_input.json.gz", command="x")
-    assert f"| звірено хвилин (спільний open_time) | {a.stats['matched']} |" in md
-
-
-def test_order_statistics_helpers() -> None:
-    xs = [Decimal(x) for x in (1, 2, 3, 4)]
-    assert cli._median(xs) == Decimal("2.5") and cli._median(xs[:3]) == 2
-    assert cli._order_stat(xs, Decimal("0.95")) == 4 and cli._order_stat(xs, Decimal("0.5")) == 2
-    assert cli._order_stat(xs, Decimal("0.01")) == 1
 
 
 # ================================================================== funding: нормалізація, файл, хеш
@@ -609,19 +538,6 @@ def test_replay_report_marks_gap_timestamps_as_replay_time() -> None:
     md = cli.replay_report_md(res)
     assert "| виявлено (відтвор. час) | закрито (відтвор. час) | статус |" in md
     assert "віртуальний час кадрів реплею" in md and "(2026-09-18T21:16:48Z)" in md
-
-
-def test_calibrate_trim_end_bars_shrinks_the_is_window(offline: None, tmp_path: Path,
-                                                       capsys: pytest.CaptureFixture[str]) -> None:
-    win = _window_json(tmp_path)
-    assert cli.main(["calibrate", "--dry-run", "--window-json", str(win), "--trim-end-bars", "1046"]) == 0
-    out = capsys.readouterr().out
-    assert f"= {21600 - 1046} bars" in out and "2026-08-18T06:34:00Z" in out
-    assert cli.main(["calibrate", "--dry-run", "--window-json", str(win), "--trim-end-bars", "21600"]) == 2
-    assert "leaves no bars" in capsys.readouterr().err
-    with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(["calibrate", "--trim-end-bars", "-1"])
-    capsys.readouterr()
 
 
 def test_funding_columns_enter_the_backtest_dataset_hash() -> None:

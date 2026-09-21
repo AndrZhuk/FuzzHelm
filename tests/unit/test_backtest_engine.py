@@ -28,11 +28,7 @@ from fuzzhelm.backtest.dataset import (
     load_klines_json,
 )
 from fuzzhelm.backtest.engine import BacktestResult, run_backtest
-from fuzzhelm.backtest.grid import make_grid
 from fuzzhelm.backtest.manifest import dataset_hash, equity_hash
-from fuzzhelm.backtest.metrics import METRIC_NAMES
-from fuzzhelm.backtest.runner import run_grid, run_walkforward
-from fuzzhelm.backtest.walkforward import make_folds
 from fuzzhelm.core.enums import ExitReason, RiskState, Side
 from fuzzhelm.core.errors import LookaheadError
 from fuzzhelm.detectors.registry import DETECTOR_NAMES
@@ -329,42 +325,3 @@ def test_flash_crash_drives_fsm_to_halted_and_killswitch_stays_latched() -> None
 # ---------------------------------------------------------------- сітка і walk-forward
 
 
-def test_grid_results_independent_of_worker_count() -> None:
-    ds = fixture().slice(0, 400)
-    cfg = base_config().with_params(warmup_bars=60)       # коротший прогрів: 340 торгових барів на клітинку
-    cells = make_grid()[:4]
-    ref = run_grid(ds, cells, seed=SEED, workers=1, config=cfg, equity_hash=True)
-    assert len({r["equity_hash"] for r in ref}) == len(cells), "cells must differ, else the check is vacuous"
-    assert all(r["n_trades"] > 0 for r in ref)
-    for workers in (2, 4):
-        pooled = run_grid(ds, cells, seed=SEED, workers=workers, config=cfg, equity_hash=True)
-        assert _canon(pooled) == _canon(ref), workers
-    # порядок задач і послідовний прогін у цьому ж процесі не впливають на результат клітинки
-    rev = run_grid(ds, cells[::-1], seed=SEED, workers=0, config=cfg, equity_hash=True)
-    assert _canon(rev[::-1]) == _canon(ref)
-    for r in ref:
-        assert set(METRIC_NAMES) <= set(r)
-
-
-def test_walkforward_runner_uses_embargo_and_reports_is_oos() -> None:
-    ds = fixture().slice(0, 1200)
-    cfg = base_config().with_params(warmup_bars=100)
-    folds = make_folds(len(ds), is_bars=600, oos_bars=200, step_bars=200, embargo_bars=200, k=2)
-    cells = make_grid()[:3]
-    wf = run_walkforward(ds, folds, cells, seed=SEED, workers=0, config=cfg, oos_all_cells=True)
-    assert wf.warmup_bars == 100 and len(wf.folds) == 2
-    for rep in wf.folds:
-        f = rep.fold
-        assert f.oos_start - wf.warmup_bars >= f.is_end            # прогрів OOS — лише в embargo
-        assert len(rep.is_metrics) == len(rep.oos_metrics or []) == len(cells)
-
-        def key(i: int, m: list[dict[str, Any]] = rep.is_metrics) -> tuple[float, float, int]:
-            return (-m[i]["sharpe"], m[i]["turnover"], i)
-        best = min(range(len(cells)), key=key)
-        assert rep.selected == best and rep.params == cells[best]
-        assert rep.oos_selected == (rep.oos_metrics or [])[rep.selected]
-        assert rep.selected in rep.is_pareto
-        assert rep.oos_selected["n_obs"] == f.oos_end - f.oos_start - 1
-    assert set(wf.summary()) >= {"is_sharpe_mean", "oos_sharpe_mean"}
-    with pytest.raises(ValueError, match="embargo"):
-        run_walkforward(ds, make_folds(len(ds), 600, 200, 200, 99, 2), cells[:1], seed=SEED, config=cfg)

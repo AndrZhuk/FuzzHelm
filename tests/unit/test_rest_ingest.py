@@ -25,10 +25,8 @@ import respx
 
 from fuzzhelm.core.clock import ManualClock
 from fuzzhelm.core.enums import GapDetectorKind, GapStatus, Src
-from fuzzhelm.core.errors import MainnetHostRejected
 from fuzzhelm.ingest.backfill import SeamStatus, backfill_klines, detect_gaps, fill_gaps
 from fuzzhelm.ingest.dedup import Deduplicator
-from fuzzhelm.ingest.kraken_client import KrakenApiError, KrakenRestClient
 from fuzzhelm.ingest.normalize import normalize_exchange_info, normalize_premium_index, normalize_rest_klines
 from fuzzhelm.ingest.ratelimit import TokenBucket, binance_request_bucket, klines_weight, request_weight
 from fuzzhelm.ingest.rest_client import BinanceApiError, BinanceRestClient
@@ -350,16 +348,6 @@ async def test_binance_api_error_is_not_retried() -> None:
     assert route.call_count == 1
 
 
-async def test_client_rejects_non_allowlisted_hosts() -> None:
-    clock = ManualClock(0)
-    async with httpx.AsyncClient() as http:
-        for url in ("https://api.binance.com", "https://fapi.binance.com.evil.example", "http://localhost:9"):
-            with pytest.raises(MainnetHostRejected):
-                BinanceRestClient(url, http, TokenBucket(10, 1, clock), RetryPolicy(), clock=clock)
-            with pytest.raises(MainnetHostRejected):
-                KrakenRestClient(url, http, RetryPolicy())
-
-
 async def test_reference_endpoints_and_clock_offset() -> None:
     class SteppingClock:
         """Показники годинника до/після кожного /time: RTT 40, 10 і 80 мс."""
@@ -394,27 +382,6 @@ async def test_reference_endpoints_and_clock_offset() -> None:
     assert normalize_exchange_info(info, ["BTCUSDT"])["BTCUSDT"].tick_size == Decimal("0.10")
     mark = normalize_premium_index(prem, BTC_USDT_PERP, NOW_NS)
     assert mark.funding_rate == Decimal(prem["lastFundingRate"])
-
-
-async def test_kraken_client_retries_rate_limit_error_in_200_body() -> None:
-    clock = ManualClock(NOW_NS)
-    s = Sleeper(clock)
-    real = (REST / "kraken_ohlc.json").read_bytes()
-    async with respx.mock(assert_all_called=True) as router:
-        route = router.route(method="GET", host="api.kraken.com", path="/0/public/OHLC").mock(side_effect=[
-            httpx.Response(200, content=b'{"error":["EAPI:Rate limit exceeded"]}'),
-            httpx.Response(200, content=real),
-        ])
-        router.route(method="GET", host="api.kraken.com", path="/0/public/AssetPairs").mock(
-            return_value=httpx.Response(200, content=b'{"error":["EQuery:Unknown asset pair"]}'))
-        async with httpx.AsyncClient() as http:
-            k = KrakenRestClient(KRAKEN, http, RetryPolicy(rng_seed=3), sleep=s)
-            res = await k.ohlc("XBTUSD", 1)
-            with pytest.raises(KrakenApiError) as ei:
-                await k.asset_pairs("NOPE")
-    assert route.call_count == 2 and len(s.calls) == 1
-    assert res == orjson.loads(real)["result"]
-    assert ei.value.errors == ["EQuery:Unknown asset pair"]
 
 
 # ---------------------------------------------------------------- C13

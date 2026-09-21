@@ -24,9 +24,7 @@ import httpx
 import jwt
 import numpy as np
 import pytest
-import respx
 import yaml
-from pydantic import SecretStr
 from sqlalchemy.exc import DBAPIError
 from tests.helpers.api_fakes import JWT_SECRET, NS_PER_MIN, T0_NS, MemoryDb, memory_services
 from tests.helpers.api_traces import make_trace
@@ -53,7 +51,6 @@ from fuzzhelm.core.errors import ConfigValidationError
 from fuzzhelm.decision.trace import DecisionTrace
 from fuzzhelm.detectors.base import DetectorGroup
 from fuzzhelm.fuzzy.defuzz import centroid
-from fuzzhelm.notify.telegram import TelegramNotifier
 from fuzzhelm.risk.config import load_risk_config
 from fuzzhelm.storage.repositories import CandleRow, DecisionRecord, EquityRow, InstrumentRow, RunRow
 
@@ -908,29 +905,6 @@ async def test_killswitch_release_admin_only_writes_audit_and_command(env: Env) 
     state = (await env.client.get("/risk/state", headers=env.h(Role.ANALYST))).json()
     assert state["state"] == "HALTED" and state["kappa_mode"] == 0.0
     assert state["last_release_request"]["audit_id"] == row.id
-
-
-async def test_killswitch_release_sends_ukrainian_telegram_in_background(env: Env) -> None:
-    """Запит на зняття kill-switch → Telegram оператору (respx, без мережі); без токена — не шлеться."""
-    token = "123456789:AAH-e2e_token_value_0123456789abcdef"
-    body = {"reason": "drawdown investigated, manual restart"}
-    with respx.mock(assert_all_called=True) as mock:
-        route = mock.post(f"https://api.telegram.org/bot{token}/sendMessage").mock(
-            return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
-        )
-        async with httpx.AsyncClient() as http:
-            env.services.notifier = TelegramNotifier(SecretStr(token), "-100200300", http=http)
-            r = await env.client.post("/risk/killswitch/release", json=body, headers=env.h(Role.ADMIN))
-            assert r.status_code == 202, r.text
-            await env.services.drain()
-    sent = json.loads(route.calls[0].request.content)
-    assert sent["chat_id"] == "-100200300" and "parse_mode" not in sent
-    assert sent["text"].startswith("Запит на зняття kill-switch; адміністратор admin")
-    assert body["reason"] in sent["text"] and token not in sent["text"]
-    # без токена нотифікатор вимкнений: запит проходить, фонових задач немає
-    env.services.notifier = TelegramNotifier(None, None)
-    r2 = await env.client.post("/risk/killswitch/release", json=body, headers=env.h(Role.ADMIN))
-    assert r2.status_code == 202 and not env.services._background
 
 
 async def test_risk_events_keep_exact_shrink_factor(env: Env) -> None:

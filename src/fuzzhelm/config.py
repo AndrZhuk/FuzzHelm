@@ -78,8 +78,6 @@ class Settings(BaseSettings):
     kraken_rest_base: str = "https://api.kraken.com"
 
     # --- нотифікації
-    telegram_bot_token: SecretStr | None = Field(default=None, validation_alias="TELEGRAM_BOT_TOKEN")
-    telegram_chat_id: str | None = Field(default=None, validation_alias="TELEGRAM_CHAT_ID")
 
     # --- API/безпека
     jwt_secret: SecretStr = SecretStr("dev-only-change-me")
